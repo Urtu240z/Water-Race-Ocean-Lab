@@ -7,6 +7,7 @@ signal seed_changed(seed: int)
 signal time_scale_changed(scale: float)
 
 var simulation_time: float = 0.0
+var _previous_simulation_time: float = 0.0
 var simulation_seed: int = 20260820
 var time_scale: float = 1.0:
 	set(value):
@@ -18,6 +19,7 @@ var _is_paused := false
 
 func _physics_process(_delta: float) -> void:
 	if not _is_paused:
+		_previous_simulation_time = simulation_time
 		advance_deterministic(1.0 / float(Engine.physics_ticks_per_second))
 
 
@@ -50,10 +52,19 @@ func is_paused() -> bool:
 	return _is_paused
 
 
+func get_render_time() -> float:
+	## Godot interpola visualmente entre el estado físico anterior y el actual.
+	## Pausado devuelve el estado físico actual; el módulo conserva su último mapa.
+	if _is_paused:
+		return simulation_time
+	return lerpf(_previous_simulation_time, simulation_time, Engine.get_physics_interpolation_fraction())
+
+
 func reset_simulation(preserve_seed := true, next_seed := simulation_seed) -> void:
 	if not preserve_seed:
 		set_seed(next_seed)
 	simulation_time = 0.0
+	_previous_simulation_time = 0.0
 	reset_completed.emit(simulation_seed)
 
 

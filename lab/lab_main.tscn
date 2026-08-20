@@ -1,10 +1,11 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://lab/lab_main.gd" id="1_main"]
 [ext_resource type="Script" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
 [ext_resource type="Script" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
 [ext_resource type="Script" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
+[ext_resource type="PackedScene" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
 sky_top_color = Color(0.035, 0.065, 0.12, 1)
@@ -54,7 +55,8 @@ target_path = NodePath("../../RaceReferenceTarget")
 script = ExtResource("4_metrics")
 
 [node name="OceanV3Mount" type="Node3D" parent="."]
-metadata/_future_scene = "res://ocean_v3/ocean_v3.tscn"
+
+[node name="OceanV3" parent="OceanV3Mount" instance=ExtResource("6_ocean")]
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="."]
 unique_name_in_owner = true

@@ -8,8 +8,18 @@ func _process(_delta: float) -> void:
 	var fps := Engine.get_frames_per_second()
 	var frame_time_ms := 1000.0 / maxf(float(fps), 1.0)
 	var viewport_size := get_viewport().get_visible_rect().size
+	var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
+	var fft_line := "FFT: unavailable"
+	if fft_module:
+		fft_line = "FFT: %s | %d² | %.0f m | %d passes | %s" % [
+			"ON" if fft_module.is_fft_enabled() else "OFF",
+			fft_module.config.resolution,
+			fft_module.config.domain_size_m,
+			fft_module.dispatches_per_update if fft_module.is_fft_enabled() else 0,
+			fft_module.debug_mode_name(),
+		]
 	metrics_label.text = "\n".join([
-		"OCEAN LAB — BASELINE SIN OCÉANO",
+		"OCEAN LAB — FASE 1A / NÚCLEO ESPECTRAL",
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -32,6 +42,7 @@ func _process(_delta: float) -> void:
 			OceanQualitySettings.profile_name(),
 			OceanModuleRegistry.active_module_count(),
 		],
+		fft_line,
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
 

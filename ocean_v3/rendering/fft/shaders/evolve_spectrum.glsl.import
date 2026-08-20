@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bx4rgb5lydl8b"
+path="res://.godot/imported/evolve_spectrum.glsl-d7ebb27672a6e4f9d35bf700f8bed740.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/fft/shaders/evolve_spectrum.glsl"
+dest_files=["res://.godot/imported/evolve_spectrum.glsl-d7ebb27672a6e4f9d35bf700f8bed740.res"]
+
+[params]
+
