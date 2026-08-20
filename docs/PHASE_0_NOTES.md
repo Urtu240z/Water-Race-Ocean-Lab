@@ -17,3 +17,20 @@ No se copian Input Map, autoloads de juego, importadores, iluminación global, l
 El HUD usa FPS, frame time aproximado, monitores de CPU de Godot, ticks físicos, resolución, draw calls, primitivas, memoria estática y estados propios. El frame time de GPU no se expone de forma fiable como métrica de runtime portable; se deja explícitamente para el profiler externo.
 
 Una única ejecución sólo constituye un dato de baseline, nunca una conclusión de rendimiento.
+
+## Baseline oficial Fase 0
+
+- Escena: lab_main.tscn
+- Perfil: STANDARD
+- Output: 1920x1080
+- 3D scale: 0.7
+- FPS: ~165
+- Frame: ~6.06 ms
+- CPU process: ~6.56 ms
+- Physics: ~0.06 ms
+- Draw calls: 48
+- Primitives: 1538
+- Static memory: ~105 MiB
+- Ocean modules: 0
+- Disturbance tiles: 0
+- GPU frame time: no disponible en runtime, usar profiler externo
