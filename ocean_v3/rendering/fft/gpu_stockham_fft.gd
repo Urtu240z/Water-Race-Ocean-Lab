@@ -24,7 +24,7 @@ var _fft_sets: Array[RID] = [RID(), RID()]
 var _assemble_set := RID()
 
 
-func initialize(config: Resource, h0_data: PackedByteArray) -> void:
+func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "Ocean1B") -> void:
 	free_resources()
 	_config = config
 	_rd = RenderingServer.get_rendering_device()
@@ -32,19 +32,19 @@ func initialize(config: Resource, h0_data: PackedByteArray) -> void:
 		last_error = "RenderingDevice global no disponible."
 		return
 
-	var evolve_pipeline := _create_pipeline(EVOLVE_SHADER, "Ocean1A.Evolve")
-	var fft_pipeline := _create_pipeline(STOCKHAM_SHADER, "Ocean1A.StockhamIFFT")
-	var assemble_pipeline := _create_pipeline(ASSEMBLE_SHADER, "Ocean1A.Assemble")
+	var evolve_pipeline := _create_pipeline(EVOLVE_SHADER, resource_prefix + ".Evolve")
+	var fft_pipeline := _create_pipeline(STOCKHAM_SHADER, resource_prefix + ".StockhamIFFT")
+	var assemble_pipeline := _create_pipeline(ASSEMBLE_SHADER, resource_prefix + ".Assemble")
 	if not evolve_pipeline.is_valid() or not fft_pipeline.is_valid() or not assemble_pipeline.is_valid():
 		free_resources()
 		return
 
-	_h0 = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, "Ocean1A.H0", h0_data, true)
+	_h0 = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".H0", h0_data, true)
 	for index in 2:
-		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, "Ocean1A.PingA%d" % index)
-		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, "Ocean1A.PingB%d" % index)
-	displacement_rid = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, "Ocean1A.Displacement")
-	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, "Ocean1A.Normal")
+		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingA%d" % index)
+		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingB%d" % index)
+	displacement_rid = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".Displacement")
+	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, resource_prefix + ".Normal")
 
 	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0]])
 	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]])
@@ -52,7 +52,7 @@ func initialize(config: Resource, h0_data: PackedByteArray) -> void:
 	_assemble_set = _create_image_set(_shaders[2], [_ping_a[0], _ping_b[0], displacement_rid, normal_rid])
 	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid()
 	if not ready:
-		last_error = "No se pudieron crear los uniform sets de Ocean 1A."
+		last_error = "No se pudieron crear los uniform sets de %s." % resource_prefix
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:

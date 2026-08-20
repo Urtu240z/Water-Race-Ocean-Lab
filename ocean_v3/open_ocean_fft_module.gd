@@ -1,63 +1,87 @@
 class_name OpenOceanFFTModule
 extends Node3D
-## Orquesta una sola cascada FFT de Fase 1A y publica sus texturas al renderer.
+## Orquesta LONG/MID/SHORT como detalles internos del único módulo open_ocean_fft.
 
 const MODULE_ID := &"open_ocean_fft"
 const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 
+enum BandDebug {
+	ALL,
+	LONG,
+	MID,
+	SHORT,
+}
+
 @export var enabled_on_start := true
 
 @onready var surface: MeshInstance3D = $OceanTestSurface
 
-var config := FFTConfigScript.new()
-var displacement_texture := Texture2DRD.new()
-var normal_texture := Texture2DRD.new()
-var solver := SolverScript.new()
+var configs: Array[OpenOceanFFTConfig] = []
 var dispatches_per_update := 0
 
+var _cascades: Array[Dictionary] = []
 var _enabled := true
 var _textures_published := false
 var _dispatch_requested := true
+var _band_debug := BandDebug.ALL
 
 
 func _ready() -> void:
 	add_to_group(&"ocean_fft")
-	if not config.is_valid():
-		push_error("Configuración FFT inválida.")
-		return
+	configs = FFTConfigScript.reference_cascades()
+	for config in configs:
+		if not config.is_valid():
+			push_error("Configuración FFT inválida para %s." % config.id)
+			return
+		var displacement := Texture2DRD.new()
+		var normal := Texture2DRD.new()
+		var solver := SolverScript.new()
+		var h0_data := _build_h0(config, SimulationClock.simulation_seed)
+		_cascades.append({
+			"config": config,
+			"solver": solver,
+			"displacement": displacement,
+			"normal": normal,
+		})
+		RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, "Ocean1B.%s" % config.id))
+
 	_enabled = enabled_on_start
-	dispatches_per_update = config.compute_pass_count()
-	surface.configure(config, displacement_texture, normal_texture)
+	dispatches_per_update = 0
+	for config in configs:
+		dispatches_per_update += config.compute_pass_count()
+	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
 	surface.set_module_enabled(_enabled)
+	surface.set_band_debug(_band_debug)
 	OceanModuleRegistry.register_module(MODULE_ID, _enabled)
 	OceanModuleRegistry.module_state_changed.connect(_on_module_state_changed)
 	SimulationClock.seed_changed.connect(_on_seed_changed)
 	SimulationClock.reset_completed.connect(_on_reset_completed)
-	var h0_data: PackedByteArray = SpectrumScript.build_h0_rgba32f(config, SimulationClock.simulation_seed)
-	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data))
 
 
 func _exit_tree() -> void:
 	if OceanModuleRegistry.module_state_changed.is_connected(_on_module_state_changed):
 		OceanModuleRegistry.module_state_changed.disconnect(_on_module_state_changed)
 	OceanModuleRegistry.unregister_module(MODULE_ID)
-	displacement_texture.texture_rd_rid = RID()
-	normal_texture.texture_rd_rid = RID()
-	RenderingServer.call_on_render_thread(solver.free_resources)
+	for cascade in _cascades:
+		cascade.displacement.texture_rd_rid = RID()
+		cascade.normal.texture_rd_rid = RID()
+		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
+	_cascades.clear()
 
 
 func _process(_delta: float) -> void:
-	if not _textures_published and solver.ready:
-		displacement_texture.texture_rd_rid = solver.displacement_rid
-		normal_texture.texture_rd_rid = solver.normal_rid
-		_textures_published = true
-	if not solver.ready:
+	_publish_ready_textures()
+	if not _enabled:
 		return
-	if _enabled and (not SimulationClock.is_paused() or _dispatch_requested):
-		_dispatch_requested = false
-		RenderingServer.call_on_render_thread(solver.dispatch.bind(SimulationClock.get_render_time()))
+	for cascade in _cascades:
+		var is_visible_band: bool = _band_debug == BandDebug.ALL or _band_index(cascade.config.id) == _band_debug
+		if not is_visible_band:
+			continue
+		if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time()))
+	_dispatch_requested = false
 
 
 func toggle_enabled() -> void:
@@ -65,7 +89,14 @@ func toggle_enabled() -> void:
 
 
 func cycle_debug_mode() -> void:
+	# V conserva la inspección de displacement/height/normals/wireframe de Fase 1A.
 	surface.cycle_debug_mode()
+
+
+func cycle_band_debug() -> void:
+	_band_debug = (_band_debug + 1) % (BandDebug.SHORT + 1)
+	surface.set_band_debug(_band_debug)
+	_dispatch_requested = true
 
 
 func is_fft_enabled() -> bool:
@@ -76,8 +107,52 @@ func debug_mode_name() -> String:
 	return surface.debug_mode_name()
 
 
+func band_debug_name() -> String:
+	return BandDebug.keys()[_band_debug]
+
+
 func gpu_memory_bytes() -> int:
-	return config.approximate_gpu_bytes()
+	var total := 0
+	for config in configs:
+		total += config.approximate_gpu_bytes()
+	return total
+
+
+func combined_hs_m() -> float:
+	var variance := 0.0
+	for config in configs:
+		variance += config.measured_hs_m * config.measured_hs_m
+	return sqrt(variance)
+
+
+func _build_h0(config: Resource, simulation_seed: int) -> PackedByteArray:
+	return SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id))
+
+
+func _textures_for(key: StringName) -> Array[Texture2DRD]:
+	var textures: Array[Texture2DRD] = []
+	for cascade in _cascades:
+		textures.append(cascade[key])
+	return textures
+
+
+func _publish_ready_textures() -> void:
+	if _textures_published:
+		return
+	for cascade in _cascades:
+		if not cascade.solver.ready:
+			return
+		cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
+		cascade.normal.texture_rd_rid = cascade.solver.normal_rid
+	_textures_published = true
+
+
+func _band_index(cascade_id: StringName) -> int:
+	match cascade_id:
+		&"LONG": return BandDebug.LONG
+		&"MID": return BandDebug.MID
+		&"SHORT": return BandDebug.SHORT
+	return BandDebug.ALL
 
 
 func _on_module_state_changed(module_id: StringName, enabled: bool) -> void:
@@ -89,8 +164,9 @@ func _on_module_state_changed(module_id: StringName, enabled: bool) -> void:
 
 
 func _on_seed_changed(seed: int) -> void:
-	var h0_data: PackedByteArray = SpectrumScript.build_h0_rgba32f(config, seed)
-	RenderingServer.call_on_render_thread(solver.upload_h0.bind(h0_data))
+	for cascade in _cascades:
+		var h0_data := _build_h0(cascade.config, seed)
+		RenderingServer.call_on_render_thread(cascade.solver.upload_h0.bind(h0_data))
 	_dispatch_requested = true
 
 

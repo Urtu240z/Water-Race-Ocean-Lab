@@ -11,15 +11,15 @@ func _process(_delta: float) -> void:
 	var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 	var fft_line := "FFT: unavailable"
 	if fft_module:
-		fft_line = "FFT: %s | %d² | %.0f m | %d passes | %s" % [
+		fft_line = "FFT bands: %s | %s | %d cascades | %d dispatches | Hs %.3f m" % [
+			fft_module.band_debug_name(),
 			"ON" if fft_module.is_fft_enabled() else "OFF",
-			fft_module.config.resolution,
-			fft_module.config.domain_size_m,
+			fft_module.configs.size(),
 			fft_module.dispatches_per_update if fft_module.is_fft_enabled() else 0,
-			fft_module.debug_mode_name(),
+			fft_module.combined_hs_m(),
 		]
 	metrics_label.text = "\n".join([
-		"OCEAN LAB — FASE 1A / NÚCLEO ESPECTRAL",
+		"OCEAN LAB — FASE 1B / OCÉANO ESPECTRAL MULTIBANDA",
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -43,6 +43,7 @@ func _process(_delta: float) -> void:
 			OceanModuleRegistry.active_module_count(),
 		],
 		fft_line,
+		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
 
