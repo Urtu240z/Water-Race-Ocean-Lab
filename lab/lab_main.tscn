@@ -1,0 +1,85 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://lab/lab_main.gd" id="1_main"]
+[ext_resource type="Script" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
+[ext_resource type="Script" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
+[ext_resource type="Script" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
+[ext_resource type="Script" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
+sky_top_color = Color(0.035, 0.065, 0.12, 1)
+sky_horizon_color = Color(0.22, 0.32, 0.42, 1)
+ground_bottom_color = Color(0.035, 0.04, 0.05, 1)
+ground_horizon_color = Color(0.14, 0.17, 0.2, 1)
+
+[sub_resource type="Sky" id="Sky_lab"]
+sky_material = SubResource("ProceduralSkyMaterial_lab")
+
+[sub_resource type="Environment" id="Environment_lab"]
+background_mode = 2
+sky = SubResource("Sky_lab")
+ambient_light_source = 3
+ambient_light_color = Color(0.55, 0.65, 0.8, 1)
+ambient_light_energy = 0.65
+
+[node name="LabMain" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_lab")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-48, -32, 0)
+light_energy = 1.1
+shadow_enabled = true
+
+[node name="RaceReferenceTarget" type="Node3D" parent="."]
+position = Vector3(0, 4, -12)
+
+[node name="Cameras" type="Node3D" parent="."]
+
+[node name="FreeCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
+unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 12, 28)
+script = ExtResource("2_free_camera")
+
+[node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
+unique_name_in_owner = true
+position = Vector3(0, 2.1, 7.5)
+fov = 78.0
+script = ExtResource("3_race_camera")
+target_path = NodePath("../../RaceReferenceTarget")
+
+[node name="MetricReferences" type="Node3D" parent="."]
+script = ExtResource("4_metrics")
+
+[node name="OceanV3Mount" type="Node3D" parent="."]
+metadata/_future_scene = "res://ocean_v3/ocean_v3.tscn"
+
+[node name="BenchmarkHUD" type="CanvasLayer" parent="."]
+unique_name_in_owner = true
+script = ExtResource("5_hud")
+
+[node name="Margin" type="MarginContainer" parent="BenchmarkHUD"]
+offset_right = 475.0
+offset_bottom = 285.0
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Panel" type="PanelContainer" parent="BenchmarkHUD/Margin"]
+
+[node name="Metrics" type="Label" parent="BenchmarkHUD/Margin/Panel"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.95, 1, 1)
+theme_override_font_sizes/font_size = 15
+
+[node name="Controls" type="Label" parent="BenchmarkHUD"]
+unique_name_in_owner = true
+offset_left = 16.0
+offset_top = 302.0
+offset_right = 665.0
+offset_bottom = 408.0
+theme_override_colors/font_color = Color(0.82, 0.9, 0.95, 1)
+theme_override_font_sizes/font_size = 14
