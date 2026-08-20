@@ -144,7 +144,7 @@ func _create_pipeline(path: String, resource_name: String) -> RID:
 
 func _create_texture(format: int, resource_name: String, data := PackedByteArray(), allow_update := false) -> RID:
 	var texture_format := RDTextureFormat.new()
-	texture_format.format = format
+	texture_format.format = format as RenderingDevice.DataFormat
 	texture_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
 	texture_format.width = _config.resolution
 	texture_format.height = _config.resolution

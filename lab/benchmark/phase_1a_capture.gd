@@ -28,7 +28,7 @@ func _process(_delta: float) -> bool:
 		_physics_ms_sum += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 	if _frame == WARMUP_FRAMES + SAMPLE_FRAMES:
 		var divisor := float(SAMPLE_FRAMES)
-		print("PHASE_1B_BENCHMARK mode=%s fps=%.2f cpu_process_ms=%.3f physics_ms=%.3f draw_calls=%d primitives=%d static_memory_mib=%.2f" % [
+		print("PHASE_1C_BENCHMARK mode=%s fps=%.2f cpu_process_ms=%.3f physics_ms=%.3f draw_calls=%d primitives=%d static_memory_mib=%.2f" % [
 			"FFT_OFF" if _fft_off else "FFT_ON",
 			_fps_sum / divisor,
 			_process_ms_sum / divisor,

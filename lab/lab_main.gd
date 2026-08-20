@@ -10,7 +10,7 @@ var _using_race_camera := false
 
 func _ready() -> void:
 	_set_active_camera(false)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista displacement/height/normals/wireframe\n1/2/3: DECK/STANDARD/DEV_HIGH | -/=: escala de tiempo | F1: HUD"
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad\n1/2/3: DECK/STANDARD/DEV_HIGH | -/=: escala de tiempo | F1: HUD"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -38,6 +38,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module:
 				fft_module.cycle_band_debug()
+		KEY_L:
+			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
+			if fft_module:
+				fft_module.toggle_clipmap_lod_debug()
+		KEY_T:
+			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
+			if fft_module:
+				fft_module.toggle_periodicity_debug()
 		KEY_1:
 			OceanQualitySettings.set_profile(0) # DECK
 		KEY_2:

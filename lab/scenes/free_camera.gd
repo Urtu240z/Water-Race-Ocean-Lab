@@ -7,6 +7,11 @@ extends Camera3D
 var _is_active := false
 
 
+func _ready() -> void:
+	# Herramienta visual movida desde _process(); no participa en física.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+
+
 func set_active(value: bool) -> void:
 	_is_active = value
 	current = value

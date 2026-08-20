@@ -16,7 +16,7 @@ enum BandDebug {
 
 @export var enabled_on_start := true
 
-@onready var surface: MeshInstance3D = $OceanTestSurface
+@onready var surface: Node3D = $OceanClipmapSurface
 
 var configs: Array[OpenOceanFFTConfig] = []
 var dispatches_per_update := 0
@@ -25,7 +25,7 @@ var _cascades: Array[Dictionary] = []
 var _enabled := true
 var _textures_published := false
 var _dispatch_requested := true
-var _band_debug := BandDebug.ALL
+var _band_debug: int = BandDebug.ALL
 
 
 func _ready() -> void:
@@ -99,6 +99,14 @@ func cycle_band_debug() -> void:
 	_dispatch_requested = true
 
 
+func toggle_clipmap_lod_debug() -> void:
+	surface.toggle_lod_debug()
+
+
+func toggle_periodicity_debug() -> void:
+	surface.toggle_periodicity_debug()
+
+
 func is_fft_enabled() -> bool:
 	return _enabled
 
@@ -109,6 +117,30 @@ func debug_mode_name() -> String:
 
 func band_debug_name() -> String:
 	return BandDebug.keys()[_band_debug]
+
+
+func clipmap_lod_debug_name() -> String:
+	return surface.lod_debug_name()
+
+
+func periodicity_debug_name() -> String:
+	return surface.periodicity_debug_name()
+
+
+func clipmap_level_count() -> int:
+	return surface.level_count()
+
+
+func clipmap_near_spacing_m() -> float:
+	return surface.clipmap_config.base_spacing_m
+
+
+func clipmap_extent_m() -> float:
+	return surface.final_half_extent_m()
+
+
+func clipmap_triangle_count() -> int:
+	return surface.triangle_count()
 
 
 func gpu_memory_bytes() -> int:
@@ -163,9 +195,9 @@ func _on_module_state_changed(module_id: StringName, enabled: bool) -> void:
 	_dispatch_requested = enabled
 
 
-func _on_seed_changed(seed: int) -> void:
+func _on_seed_changed(simulation_seed: int) -> void:
 	for cascade in _cascades:
-		var h0_data := _build_h0(cascade.config, seed)
+		var h0_data := _build_h0(cascade.config, simulation_seed)
 		RenderingServer.call_on_render_thread(cascade.solver.upload_h0.bind(h0_data))
 	_dispatch_requested = true
 

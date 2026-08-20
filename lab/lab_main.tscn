@@ -43,11 +43,13 @@ position = Vector3(0, 4, -12)
 unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 12, 28)
 script = ExtResource("2_free_camera")
+far = 7000.0
 
 [node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
 unique_name_in_owner = true
 position = Vector3(0, 2.1, 7.5)
 fov = 78.0
+far = 7000.0
 script = ExtResource("3_race_camera")
 target_path = NodePath("../../RaceReferenceTarget")
 

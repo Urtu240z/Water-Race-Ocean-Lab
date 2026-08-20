@@ -2,8 +2,8 @@ extends Node
 ## Fuente única de tiempo para los futuros sistemas de Ocean V3.
 
 signal paused_changed(is_paused: bool)
-signal reset_completed(seed: int)
-signal seed_changed(seed: int)
+signal reset_completed(simulation_seed: int)
+signal seed_changed(simulation_seed: int)
 signal time_scale_changed(scale: float)
 
 var simulation_time: float = 0.0

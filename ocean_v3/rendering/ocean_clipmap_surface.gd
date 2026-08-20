@@ -1,0 +1,155 @@
+class_name OceanClipmapSurface
+extends Node3D
+## Renderer geométrico centrado en cámara; no conoce ni modifica el campo FFT.
+
+const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
+const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
+
+enum DebugMode {
+	FULL_DISPLACEMENT,
+	HEIGHT_ONLY,
+	NORMALS,
+	WIREFRAME,
+}
+
+@export var clipmap_config := ClipmapConfigScript.new()
+
+var _surface_material := ShaderMaterial.new()
+var _wireframe_material := ShaderMaterial.new()
+var _levels: Array[MeshInstance3D] = []
+var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
+var _module_enabled := true
+var _lod_debug := false
+var _periodicity_debug := false
+var _tracking_camera: Camera3D
+var _triangle_count := 0
+
+
+func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
+	assert(clipmap_config.is_valid())
+	assert(configs.size() == 3 and displacements.size() == 3 and normals.size() == 3)
+	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
+	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
+	_configure_materials(configs, displacements, normals)
+	_rebuild_levels()
+	_apply_debug_mode()
+
+
+func _process(_delta: float) -> void:
+	var camera := _tracking_camera if is_instance_valid(_tracking_camera) else get_viewport().get_camera_3d()
+	if camera == null:
+		return
+	global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
+	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
+	_surface_material.set_shader_parameter(&"camera_world_xz", camera_xz)
+	_wireframe_material.set_shader_parameter(&"camera_world_xz", camera_xz)
+
+
+func set_tracking_camera(camera: Camera3D) -> void:
+	_tracking_camera = camera
+
+
+func set_band_debug(mode: int) -> void:
+	var masks := [Vector3.ONE, Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)]
+	var mask: Vector3 = masks[clampi(mode, 0, masks.size() - 1)]
+	_surface_material.set_shader_parameter(&"band_mask", mask)
+	_wireframe_material.set_shader_parameter(&"band_mask", mask)
+
+
+func set_module_enabled(enabled: bool) -> void:
+	_module_enabled = enabled
+	visible = enabled
+	_surface_material.set_shader_parameter(&"module_enabled", enabled)
+	_wireframe_material.set_shader_parameter(&"module_enabled", enabled)
+
+
+func cycle_debug_mode() -> void:
+	_debug_mode = (_debug_mode + 1) % (DebugMode.WIREFRAME + 1)
+	_apply_debug_mode()
+
+
+func toggle_lod_debug() -> void:
+	_lod_debug = not _lod_debug
+	_surface_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+	_wireframe_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+
+
+func toggle_periodicity_debug() -> void:
+	_periodicity_debug = not _periodicity_debug
+	_surface_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
+	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
+
+
+func debug_mode_name() -> String:
+	match _debug_mode:
+		DebugMode.FULL_DISPLACEMENT: return "DX + HEIGHT + DZ"
+		DebugMode.HEIGHT_ONLY: return "HEIGHT ONLY"
+		DebugMode.NORMALS: return "NORMALS"
+		DebugMode.WIREFRAME: return "WIREFRAME"
+	return "UNKNOWN"
+
+
+func lod_debug_name() -> String:
+	return "ON" if _lod_debug else "OFF"
+
+
+func periodicity_debug_name() -> String:
+	return "ON" if _periodicity_debug else "OFF"
+
+
+func triangle_count() -> int:
+	return _triangle_count
+
+
+func level_count() -> int:
+	return _levels.size()
+
+
+func final_half_extent_m() -> float:
+	return clipmap_config.final_half_extent_m()
+
+
+func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
+	var ids := ["long", "mid", "short"]
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"module_enabled", _module_enabled)
+		material.set_shader_parameter(&"short_fade_range_m", clipmap_config.short_fade_range_m)
+		material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
+		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
+		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
+		for index in 3:
+			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
+			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])
+	_surface_material.set_shader_parameter(&"normal_long", normals[0])
+	_surface_material.set_shader_parameter(&"normal_mid", normals[1])
+	_surface_material.set_shader_parameter(&"normal_short", normals[2])
+
+
+func _rebuild_levels() -> void:
+	for level in _levels:
+		level.queue_free()
+	_levels.clear()
+	_triangle_count = 0
+	for level_index in clipmap_config.level_count:
+		var geometry := MeshBuilder.build_level_geometry(clipmap_config, level_index)
+		var error := MeshBuilder.validate_geometry(geometry)
+		if not error.is_empty():
+			push_error("Clipmap L%d inválido: %s" % [level_index, error])
+			continue
+		var level_mesh := MeshBuilder.create_mesh(geometry)
+		var instance := MeshInstance3D.new()
+		instance.name = "Level%d" % level_index
+		instance.mesh = level_mesh
+		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		instance.extra_cull_margin = clipmap_config.extra_cull_margin_m
+		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
+		add_child(instance)
+		_levels.append(instance)
+		_triangle_count += int(float(geometry.indices.size()) / 3.0)
+
+
+func _apply_debug_mode() -> void:
+	for level in _levels:
+		level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material
+	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.NORMALS))

@@ -19,7 +19,7 @@ func _process(_delta: float) -> void:
 			fft_module.combined_hs_m(),
 		]
 	metrics_label.text = "\n".join([
-		"OCEAN LAB — FASE 1B / OCÉANO ESPECTRAL MULTIBANDA",
+		"OCEAN LAB — FASE 1C / CLIPMAP ESPECTRAL",
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -43,6 +43,13 @@ func _process(_delta: float) -> void:
 			OceanModuleRegistry.active_module_count(),
 		],
 		fft_line,
+		"Clipmap: ON | Levels: %d | Near spacing: %.2f m | Extent: %.0f m | Triangles: %d" % [
+			fft_module.clipmap_level_count() if fft_module else 0,
+			fft_module.clipmap_near_spacing_m() if fft_module else 0.0,
+			fft_module.clipmap_extent_m() if fft_module else 0.0,
+			fft_module.clipmap_triangle_count() if fft_module else 0,
+		],
+		"Clipmap LOD: %s | Periodicity grid: %s" % [fft_module.clipmap_lod_debug_name() if fft_module else "unavailable", fft_module.periodicity_debug_name() if fft_module else "unavailable"],
 		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])

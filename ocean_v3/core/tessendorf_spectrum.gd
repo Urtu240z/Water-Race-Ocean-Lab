@@ -7,7 +7,7 @@ const UINT_MASK := 0xffffffff
 const UINT_SCALE := 1.0 / 4294967296.0
 
 
-static func build_h0_rgba32f(config: Resource, seed: int) -> PackedByteArray:
+static func build_h0_rgba32f(config: Resource, simulation_seed: int) -> PackedByteArray:
 	assert(config.is_valid())
 	var n: int = config.resolution
 	var h0 := PackedVector2Array()
@@ -24,7 +24,8 @@ static func build_h0_rgba32f(config: Resource, seed: int) -> PackedByteArray:
 	for y in n:
 		for x in n:
 			var index := y * n + x
-			var k := Vector2(float(x - n / 2), float(y - n / 2)) * delta_k
+			var centered_index := float(n) * 0.5
+			var k := Vector2(float(x) - centered_index, float(y) - centered_index) * delta_k
 			var k_length := k.length()
 			if k_length < 0.000001 or config.energy == 0.0 or config.target_hs_m == 0.0:
 				h0[index] = Vector2.ZERO
@@ -39,7 +40,7 @@ static func build_h0_rgba32f(config: Resource, seed: int) -> PackedByteArray:
 			phillips *= exp(-k2 * config.short_wave_damping_m * config.short_wave_damping_m)
 			var wavelength := TWO_PI / k_length
 			var band_weight := _band_weight(wavelength, config)
-			var gaussian := _gaussian_pair(seed, index)
+			var gaussian := _gaussian_pair(simulation_seed, index)
 			var amplitude := sqrt(maxf(phillips, 0.0) * 0.5) * discrete_scale * band_weight
 			h0[index] = gaussian * amplitude
 			var sample_energy := h0[index].length_squared()
@@ -110,8 +111,8 @@ static func _pack_h0(h0: PackedVector2Array, n: int) -> PackedByteArray:
 	return packed.to_byte_array()
 
 
-static func _gaussian_pair(seed: int, index: int) -> Vector2:
-	var base := (seed & UINT_MASK) ^ ((index * 0x9e3779b9) & UINT_MASK)
+static func _gaussian_pair(simulation_seed: int, index: int) -> Vector2:
+	var base := (simulation_seed & UINT_MASK) ^ ((index * 0x9e3779b9) & UINT_MASK)
 	var u1 := maxf((float(_hash_u32(base ^ 0x68bc21eb)) + 0.5) * UINT_SCALE, 0.0000001)
 	var u2 := (float(_hash_u32(base ^ 0x02e5be93)) + 0.5) * UINT_SCALE
 	var radius := sqrt(-2.0 * log(u1))

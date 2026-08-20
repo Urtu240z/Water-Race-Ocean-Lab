@@ -10,10 +10,10 @@ var _failures := 0
 
 func _initialize() -> void:
 	var configs: Array[OpenOceanFFTConfig] = ConfigScript.reference_cascades()
-	var seed := 20260820
+	var simulation_seed := 20260820
 	var first_generation: Array[PackedByteArray] = []
 	for config in configs:
-		var cascade_seed := SpectrumScript.derive_cascade_seed(seed, config.id)
+		var cascade_seed := SpectrumScript.derive_cascade_seed(simulation_seed, config.id)
 		var h0 := SpectrumScript.build_h0_rgba32f(config, cascade_seed)
 		first_generation.append(h0)
 		var repeated := SpectrumScript.build_h0_rgba32f(config, cascade_seed)
@@ -31,10 +31,10 @@ func _initialize() -> void:
 	print("INFO: Hs combinada estimada: %.3f m" % combined_hs)
 	_check(combined_hs >= 0.6 and combined_hs <= 0.7, "Hs combinada dentro de 0.6–0.7 m")
 
-	_validate_zero_amplitude(configs, seed)
-	_validate_seed_order_independence(configs, seed)
+	_validate_zero_amplitude(configs, simulation_seed)
+	_validate_seed_order_independence(configs, simulation_seed)
 	_validate_clock()
-	_validate_band_isolation_is_non_mutating(configs[0], seed)
+	_validate_band_isolation_is_non_mutating(configs[0], simulation_seed)
 
 	if _failures == 0:
 		print("PHASE_1B_VALIDATION: PASS")
@@ -44,10 +44,10 @@ func _initialize() -> void:
 		quit(1)
 
 
-func _validate_zero_amplitude(configs: Array[OpenOceanFFTConfig], seed: int) -> void:
+func _validate_zero_amplitude(configs: Array[OpenOceanFFTConfig], simulation_seed: int) -> void:
 	for config in configs:
 		config.target_hs_m = 0.0
-		var h0 := SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(seed, config.id))
+		var h0 := SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id))
 		var all_zero := true
 		for value in h0.to_float32_array():
 			if value != 0.0:
@@ -56,13 +56,13 @@ func _validate_zero_amplitude(configs: Array[OpenOceanFFTConfig], seed: int) -> 
 		_check(all_zero, "%s: Hs cero produce H0 nulo" % config.id)
 
 
-func _validate_seed_order_independence(configs: Array[OpenOceanFFTConfig], seed: int) -> void:
+func _validate_seed_order_independence(configs: Array[OpenOceanFFTConfig], simulation_seed: int) -> void:
 	var by_id := {}
 	for config in configs:
-		by_id[config.id] = SpectrumScript.derive_cascade_seed(seed, config.id)
+		by_id[config.id] = SpectrumScript.derive_cascade_seed(simulation_seed, config.id)
 	configs.reverse()
 	for config in configs:
-		_check(by_id[config.id] == SpectrumScript.derive_cascade_seed(seed, config.id), "%s: seed estable al cambiar orden" % config.id)
+		_check(by_id[config.id] == SpectrumScript.derive_cascade_seed(simulation_seed, config.id), "%s: seed estable al cambiar orden" % config.id)
 
 
 func _validate_clock() -> void:
@@ -79,11 +79,11 @@ func _validate_clock() -> void:
 	clock.free()
 
 
-func _validate_band_isolation_is_non_mutating(_config: OpenOceanFFTConfig, seed: int) -> void:
+func _validate_band_isolation_is_non_mutating(_config: OpenOceanFFTConfig, simulation_seed: int) -> void:
 	# Usa una configuración nueva: las pruebas de amplitud cero anteriores no deben
 	# trivializar la comprobación de que el aislamiento no reconstituye H0.
 	var config: OpenOceanFFTConfig = ConfigScript.reference_cascades()[0]
-	var cascade_seed := SpectrumScript.derive_cascade_seed(seed, config.id)
+	var cascade_seed := SpectrumScript.derive_cascade_seed(simulation_seed, config.id)
 	var before := SpectrumScript.build_h0_rgba32f(config, cascade_seed)
 	# El modo ALL/LONG/MID/SHORT sólo enmascara la contribución de render/dispatch.
 	var after := SpectrumScript.build_h0_rgba32f(config, cascade_seed)
