@@ -5,3 +5,7 @@
 # Native GDExtension: binarios e intermedios de build (no versionar)
 native/ocean_query/bin/
 native/godot-cpp/
+# Descriptor ACTIVO generado por el build (el template sí se versiona).
+native/ocean_query/water_race_ocean_query.gdextension
+# Archivo de godot-cpp descargado para preparar el build (no versionar).
+/godot-cpp-master.zip

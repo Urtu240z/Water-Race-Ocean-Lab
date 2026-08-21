@@ -1,4 +1,4 @@
-﻿# Intermedios de build nativos (no versionar binarios grandes).
+# Intermedios de build nativos (no versionar binarios grandes).
 bin/
 .godot/
 godot-cpp/.godot/
@@ -16,3 +16,5 @@ __pycache__/
 bench/data_*.txt
 bench/out_*.txt
 bench/ref_*.txt
+# Descriptor ACTIVO generado por el build; el template sí se versiona.
+water_race_ocean_query.gdextension

@@ -9,7 +9,6 @@ const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 
-const EXTENSION_PATH := "res://native/ocean_query/water_race_ocean_query.gdextension"
 const SEED := 20260820
 const REPETITIONS := 5
 const COUNTS := [1, 4, 8, 16, 32, 64]
@@ -17,10 +16,9 @@ const COUNTS := [1, 4, 8, 16, 32, 64]
 
 func _initialize() -> void:
 	var native = null
-	if ResourceLoader.exists(EXTENSION_PATH) and FileAccess.file_exists("res://native/ocean_query/bin/water_race_ocean_query.dll"):
-		load(EXTENSION_PATH)
-		if ClassDB.class_exists(&"OceanQueryNative"):
-			native = ClassDB.instantiate(&"OceanQueryNative")
+	# Godot registra la GDExtension al arrancar si existe; aquí sólo ClassDB.
+	if ClassDB.class_exists(&"OceanQueryNative"):
+		native = ClassDB.instantiate(&"OceanQueryNative")
 	if native == null:
 		print("PHASE_2C_NATIVE_BENCHMARK: SKIP (OceanQueryNative no disponible; usar el core C++ independiente en native/ocean_query/bench)")
 		quit(0)

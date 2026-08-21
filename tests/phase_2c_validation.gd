@@ -11,7 +11,6 @@ const ConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 
 const SEED := 20260820
-const EXTENSION_PATH := "res://native/ocean_query/water_race_ocean_query.gdextension"
 # Contrato del buffer plano nativo (stride 15; ver ocean_query_native.h).
 const S_STRIDE := 15
 const S_HEIGHT := 1
@@ -39,11 +38,8 @@ func _initialize() -> void:
 
 
 func _try_load_native():
-	if not ResourceLoader.exists(EXTENSION_PATH):
-		return null
-	if not FileAccess.file_exists("res://native/ocean_query/bin/water_race_ocean_query.dll"):
-		return null
-	load(EXTENSION_PATH)
+	# Godot registra la GDExtension al arrancar si el descriptor activo y la
+	# DLL existen; aquí sólo se consulta ClassDB (sin load manual).
 	if not ClassDB.class_exists(&"OceanQueryNative"):
 		return null
 	return ClassDB.instantiate(&"OceanQueryNative")

@@ -128,10 +128,19 @@ alcanzarlo (sincos, fast-math, AVX, LUT) están **excluidas de 2C** por mandato
    `git clone -b 4.7 --depth 1 https://github.com/godotengine/godot-cpp.git native/godot-cpp`
 2. Instalar scons: `python -m pip install scons`
 3. Compilar: `cd native/ocean_query && scons platform=windows target=template_release`
-   (genera `bin/water_race_ocean_query.dll`).
+   - El SConstruct genera `bin/water_race_ocean_query.dll` y, SÓLO si el build
+     tiene éxito, copia `water_race_ocean_query.gdextension.template` →
+     `water_race_ocean_query.gdextension` (descriptor activo, gitignored).
+   - Si el build falla, NO se crea el descriptor activo y Godot no intenta
+     cargar ninguna DLL (arranque limpio con fallback REDUCED_GDSCRIPT).
 4. Re-ejecutar `tests/phase_2c_validation.gd` y
    `lab/benchmark/phase_2c_native_benchmark.gd` (pasan de SKIP a validación
    real) y comparar contra el core independiente ya medido.
+
+> **Nota para checkouts existentes:** si Godot arrancó antes con el descriptor
+> activo, `.godot/extension_list.cfg` puede conservar una referencia stale.
+> Borrarlo una vez (`.godot/` no se versiona) o dejar que el editor lo
+> regenere al abrir el proyecto tras este cambio.
 
 ## Comandos comprobados que fallaron
 

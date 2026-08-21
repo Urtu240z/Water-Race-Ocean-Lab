@@ -246,17 +246,14 @@ func query_backend_name() -> String:
 
 
 func _try_create_native_backend():
-	## Carga la GDExtension si existe; si la DLL no estÃ¡ construida, fallback
-	## GDScript silencioso (no es un error: es el estado normal sin compilar).
-	var extension_path := "res://native/ocean_query/water_race_ocean_query.gdextension"
-	var dll_path := "res://native/ocean_query/bin/water_race_ocean_query.dll"
-	if not ResourceLoader.exists(extension_path) or not FileAccess.file_exists(dll_path):
+	## Godot registra la GDExtension al arrancar si el descriptor activo y la
+	## DLL existen. Aquí sólo se consulta ClassDB: si la clase no está
+	## registrada, fallback GDScript completamente silencioso.
+	if not query_native_enabled:
 		return null
-	var extension = load(extension_path)
-	if extension == null or not ClassDB.class_exists(&"OceanQueryNative"):
-		push_warning("OceanQuery: backend nativo no disponible (%s); usando GDScript." % extension_path)
-		return null
-	return ClassDB.instantiate(&"OceanQueryNative")
+	if ClassDB.class_exists(&"OceanQueryNative"):
+		return ClassDB.instantiate(&"OceanQueryNative")
+	return null
 
 
 func _native_to_sample(out: PackedFloat64Array, batch_index := -1) -> OceanQuerySample:
