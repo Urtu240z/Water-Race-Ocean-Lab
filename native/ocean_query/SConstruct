@@ -11,7 +11,16 @@ env = SConscript("../godot-cpp/SConstruct", {"api_version": "4.7"})
 
 # Sólo nuestros includes; godot-cpp ya configura include/core y include/gen.
 env.Append(CPPPATH=["src/"])
-sources = Glob("src/*.cpp")
+
+# Binario de producción NATIVE DIRECT. Mantener la lista explícita evita que
+# prototipos standalone (p. ej. OceanQueryPatchCore de 2C.1A) entren en la DLL
+# por accidente al aparecer bajo src/. El benchmark PATCH los compila sólo con
+# bench/build_bench_patch.bat.
+sources = [
+    "src/ocean_query_core.cpp",
+    "src/ocean_query_native.cpp",
+    "src/register_types.cpp",
+]
 
 # Nombre canónico de godot-cpp: <base><suffix><SHLIBSUFFIX>, p. ej.
 # water_race_ocean_query.windows.template_release.x86_64.dll
