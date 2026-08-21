@@ -1,19 +1,25 @@
 #!/usr/bin/env python
 # SConstruct para la GDExtension OceanQuery (Fase 2C).
-# Requiere: godot-cpp clonado en native/godot-cpp (rama 4.7) y SCons.
-# Uso: scons platform=windows target=template_release
+# Requiere godot-cpp en ../godot-cpp (offline) y SCons.
+# Uso: python -m SCons platform=windows target=template_release
 #
 # El descriptor ACTIVO (water_race_ocean_query.gdextension) se genera a partir
 # del template SOLO si la librería se compila correctamente. Si el build falla,
 # no se crea el descriptor activo (Godot no intenta cargar una DLL inexistente).
-import os
 
-env = SConscript("godot-cpp/SConstruct")
+env = SConscript("../godot-cpp/SConstruct", {"api_version": "4.7"})
 
-env.Append(CPPPATH=["src/", "godot-cpp/include/core", "godot-cpp/include/gen"])
+# Sólo nuestros includes; godot-cpp ya configura include/core y include/gen.
+env.Append(CPPPATH=["src/"])
 sources = Glob("src/*.cpp")
-env.Append(LIBS=["winmm"] if os.name == "nt" else [])
-library = env.SharedLibrary("bin/water_race_ocean_query", source=sources)
+
+# Nombre canónico de godot-cpp: <base><suffix><SHLIBSUFFIX>, p. ej.
+# water_race_ocean_query.windows.template_release.x86_64.dll
+library = env.SharedLibrary(
+    "bin/water_race_ocean_query{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+env.NoCache(library)
 
 # Genera el descriptor activo sólo tras compilar la librería.
 descriptor = env.Command(

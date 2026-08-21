@@ -3,7 +3,7 @@
 > **Documento vivo y canónico del proyecto Ocean V3.**  
 > Define objetivos, decisiones cerradas, límites de arquitectura, rendimiento y plan de validación.  
 > Git debe conservar el historial: a partir de ahora se actualiza este mismo documento.  
-> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fase 2A/2A.1 completadas. Fase 2B completada (OceanQueryReduced, budget 1024/1024/1024, precisión cumple objetivos). Fase 2C: core C++ nativo portado y validado (equivalencia 1e-7, speedup 23–78× vs GDScript, 16 queries ≈ 1.9–2.4 ms / 64 ≈ 8–9.5 ms → targets de Gate 2 aún pendientes); wrapper GDExtension escrito pero NO compilado (falta godot-cpp/scons/sin red). Gate 2 pendiente. Física del jetski NO iniciada.**
+> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fase 2A/2A.1 completadas. Fase 2B completada (OceanQueryReduced, budget 1024/1024/1024, precisión cumple objetivos). Fase 2C COMPLETADA: GDExtension real compilada offline (godot-cpp + SCons 4.11.0 locales, MSVC 19.29, API 4.7) e integrada en Godot 4.7.1 (backend NATIVE activo; fallback silencioso REDUCED_GDSCRIPT si falta la DLL); equivalencia Native vs GDScript validada (RACE ~1e-7, ROUGH ~2e-6 por ruido libm real, tolerancia 1e-5 → PASS); benchmark end-to-end corregido (artefacto de medición térmica documentado y eliminado): 16 queries ≈ 2.4 ms y 64 ≈ 9.7 ms en RACE y ROUGH (~20-27× RACE / ~80-85× ROUGH vs GDScript; ≈ core standalone 16=1.9-2.3 / 64=8.2-9.1) → targets de Gate 2 (16≤1 ms / 64≤3 ms) aún NO cumplidos con matemática escalar exacta. Gate 2 pendiente de revisión del usuario. Física del jetski NO iniciada.**
 
 ---
 

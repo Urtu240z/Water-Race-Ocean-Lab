@@ -51,10 +51,10 @@ void OceanQueryNative::set_cascade_data(
     const size_t count = static_cast<size_t>(kx.size());
     core_.set_cascade_data(
         static_cast<size_t>(cascade_index), inv_n2,
-        kx.ptrw(), ky.ptrw(), omega.ptrw(),
-        a1.ptrw(), a2.ptrw(), c11.ptrw(), c12.ptrw(), c21.ptrw(), c22.ptrw(),
-        parity.ptrw(), weight.ptrw(),
-        h0_re.ptrw(), h0_im.ptrw(), h0n_re.ptrw(), h0n_im.ptrw(), count);
+        kx.ptr(), ky.ptr(), omega.ptr(),
+        a1.ptr(), a2.ptr(), c11.ptr(), c12.ptr(), c21.ptr(), c22.ptr(),
+        parity.ptr(), weight.ptr(),
+        h0_re.ptr(), h0_im.ptr(), h0n_re.ptr(), h0n_im.ptr(), count);
 }
 
 void OceanQueryNative::finalize_spectrum() {
@@ -82,7 +82,7 @@ PackedFloat64Array OceanQueryNative::sample_world(double wx, double wz, double s
 
 PackedFloat64Array OceanQueryNative::sample_prepared(double wx, double wz) {
     double out[oq::S_STRIDE];
-    core_.sample_prepared_(wx, wz, out);
+    core_.sample_prepared(wx, wz, out);
     return sample_to_packed_(out);
 }
 
