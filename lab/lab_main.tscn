@@ -35,7 +35,7 @@ light_energy = 1.1
 shadow_enabled = true
 
 [node name="RaceReferenceTarget" type="Node3D" parent="."]
-position = Vector3(0, 4, -12)
+position = Vector3(0, 1, -60)
 
 [node name="Cameras" type="Node3D" parent="."]
 
@@ -47,7 +47,7 @@ far = 7000.0
 
 [node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
 unique_name_in_owner = true
-position = Vector3(0, 2.1, 7.5)
+position = Vector3(0, 2.5, 7.5)
 fov = 78.0
 far = 7000.0
 script = ExtResource("3_race_camera")

@@ -3,7 +3,7 @@
 > **Documento vivo y canónico del proyecto Ocean V3.**  
 > Define objetivos, decisiones cerradas, límites de arquitectura, rendimiento y plan de validación.  
 > Git debe conservar el historial: a partir de ahora se actualiza este mismo documento.  
-> **Estado actual:** **Fase 0 completada y validada. Fase 1A completada. Fase 1B completada. Fase 1C completada en Ocean Lab. Siguiente: Fase 1D — estados CALM/RACE/ROUGH + Gate 1.**
+> **Estado actual:** **Fase 0 completada y validada. Fase 1A completada. Fase 1B completada. Fase 1C completada. Fase 1D completada en Ocean Lab. Gate 1 pendiente de aprobación visual del usuario.**
 
 ---
 

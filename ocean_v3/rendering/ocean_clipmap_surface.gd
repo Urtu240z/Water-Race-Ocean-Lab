@@ -9,6 +9,7 @@ enum DebugMode {
 	FULL_DISPLACEMENT,
 	HEIGHT_ONLY,
 	NORMALS,
+	SLOPE,
 	WIREFRAME,
 }
 
@@ -68,6 +69,11 @@ func cycle_debug_mode() -> void:
 	_apply_debug_mode()
 
 
+func set_debug_mode(mode: int) -> void:
+	_debug_mode = clampi(mode, 0, DebugMode.WIREFRAME)
+	_apply_debug_mode()
+
+
 func toggle_lod_debug() -> void:
 	_lod_debug = not _lod_debug
 	_surface_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
@@ -85,6 +91,7 @@ func debug_mode_name() -> String:
 		DebugMode.FULL_DISPLACEMENT: return "DX + HEIGHT + DZ"
 		DebugMode.HEIGHT_ONLY: return "HEIGHT ONLY"
 		DebugMode.NORMALS: return "NORMALS"
+		DebugMode.SLOPE: return "SLOPE / GEOMETRY"
 		DebugMode.WIREFRAME: return "WIREFRAME"
 	return "UNKNOWN"
 
@@ -152,4 +159,4 @@ func _rebuild_levels() -> void:
 func _apply_debug_mode() -> void:
 	for level in _levels:
 		level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material
-	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.NORMALS))
+	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.SLOPE))

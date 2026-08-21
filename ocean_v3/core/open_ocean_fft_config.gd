@@ -52,40 +52,6 @@ func approximate_gpu_bytes() -> int:
 
 
 static func reference_cascades() -> Array[OpenOceanFFTConfig]:
-	var long_band := OpenOceanFFTConfig.new()
-	long_band.id = &"LONG"
-	long_band.resolution = 256
-	long_band.domain_size_m = 512.0
-	long_band.min_wavelength_m = 16.0
-	long_band.max_wavelength_m = 128.0
-	long_band.transition_width_m = 4.0
-	long_band.wind_direction = Vector2(1.0, 0.15).normalized()
-	long_band.target_hs_m = 0.50
-	long_band.choppiness = 0.75
-	long_band.short_wave_damping_m = 0.35
-
-	var mid_band := OpenOceanFFTConfig.new()
-	mid_band.id = &"MID"
-	mid_band.resolution = 256
-	mid_band.domain_size_m = 128.0
-	mid_band.min_wavelength_m = 4.0
-	mid_band.max_wavelength_m = 20.0
-	mid_band.transition_width_m = 0.75
-	mid_band.wind_direction = Vector2(1.0, 0.30).normalized()
-	mid_band.target_hs_m = 0.38
-	mid_band.choppiness = 1.0
-	mid_band.short_wave_damping_m = 0.35
-
-	var short_band := OpenOceanFFTConfig.new()
-	short_band.id = &"SHORT"
-	short_band.resolution = 256
-	short_band.domain_size_m = 32.0
-	short_band.min_wavelength_m = 0.5
-	short_band.max_wavelength_m = 5.0
-	short_band.transition_width_m = 0.15
-	short_band.wind_direction = Vector2(1.0, 0.45).normalized()
-	short_band.target_hs_m = 0.15
-	short_band.choppiness = 0.90
-	short_band.short_wave_damping_m = 0.20
-
-	return [long_band, mid_band, short_band]
+	# RACE es el estado principal de Water Race y conserva la identidad de Fase 1B.
+	# La fuente única de verdad de los estados es SeaStateConfig.
+	return SeaStateConfig.build_cascades(SeaStateConfig.State.RACE)

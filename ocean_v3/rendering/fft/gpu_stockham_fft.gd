@@ -60,6 +60,13 @@ func upload_h0(h0_data: PackedByteArray) -> void:
 		_rd.texture_update(_h0, 0, h0_data)
 
 
+func update_config(config: Resource) -> void:
+	## Cambiar de sea state sólo muta parámetros físicos macro (choppiness,
+	## dirección, dispersión, viento, Hs). Resolución y dominio son invariantes,
+	## por lo que las texturas y pipelines existentes siguen siendo válidos.
+	_config = config
+
+
 func dispatch(render_time: float) -> void:
 	if not ready:
 		return

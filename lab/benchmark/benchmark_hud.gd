@@ -19,7 +19,8 @@ func _process(_delta: float) -> void:
 			fft_module.combined_hs_m(),
 		]
 	metrics_label.text = "\n".join([
-		"OCEAN LAB — FASE 1C / CLIPMAP ESPECTRAL",
+		"OCEAN LAB — FASE 1D / SEA STATES",
+		"Sea State: %s" % (fft_module.sea_state_name() if fft_module else "unavailable"),
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,

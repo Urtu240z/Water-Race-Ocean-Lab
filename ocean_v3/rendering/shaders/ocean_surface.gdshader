@@ -19,7 +19,10 @@ uniform int debug_mode = 0;
 uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
-uniform vec3 base_color : source_color = vec3(0.075, 0.20, 0.27);
+uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
+uniform vec3 slope_light_direction = vec3(0.55, 0.65, -0.55);
+uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
+uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
 
 varying vec3 derived_normal;
@@ -71,6 +74,7 @@ void vertex() {
 		displacement = vec3(0.0);
 		ocean_normal = vec3(0.0, 1.0, 0.0);
 	} else if (debug_mode == 1) {
+		// HEIGHT ONLY: sin desplazamiento horizontal, para evaluar choppiness.
 		displacement.xz = vec2(0.0);
 	}
 	VERTEX += displacement;
@@ -78,8 +82,20 @@ void vertex() {
 	derived_normal = ocean_normal;
 }
 
+
 void fragment() {
-	vec3 color = debug_mode == 2 ? derived_normal * 0.5 + 0.5 : base_color;
+	// Modo normal simple (0 y 1): agua opaca azul/gris iluminada.
+	// Modos de diagnóstico (2 NORMALS, 3 SLOPE): unlit/emission, independientes
+	// del sol del laboratorio y de la exposición, para leer pendientes.
+	vec3 color = base_color;
+	if (debug_mode == 2) {
+		color = normalize(derived_normal) * 0.5 + 0.5;
+	} else if (debug_mode == 3) {
+		float n_dot_l = dot(normalize(derived_normal), normalize(slope_light_direction));
+		float shade = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0);
+		color = mix(slope_valley_color, slope_crest_color, shade);
+	}
+
 	if (clipmap_lod_debug) {
 		color = level_color(clipmap_level);
 	}
@@ -87,7 +103,17 @@ void fragment() {
 		float lines = max(periodic_grid(ocean_world_xz, domain_long_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
-	ALBEDO = color;
-	ROUGHNESS = 0.42;
-	SPECULAR = 0.35;
+
+	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug;
+	if (unlit) {
+		ALBEDO = vec3(0.0);
+		EMISSION = color;
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+	} else {
+		ALBEDO = color;
+		EMISSION = vec3(0.0);
+		ROUGHNESS = 0.42;
+		SPECULAR = 0.35;
+	}
 }

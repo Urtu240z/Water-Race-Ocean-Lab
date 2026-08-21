@@ -6,6 +6,7 @@ const MODULE_ID := &"open_ocean_fft"
 const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
+const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 
 enum BandDebug {
 	ALL,
@@ -26,11 +27,15 @@ var _enabled := true
 var _textures_published := false
 var _dispatch_requested := true
 var _band_debug: int = BandDebug.ALL
+var _sea_state: int = SeaStateScript.State.RACE
+var _sea_state_initialized := false
 
 
 func _ready() -> void:
 	add_to_group(&"ocean_fft")
-	configs = FFTConfigScript.reference_cascades()
+	_sea_state = SeaStateScript.State.RACE
+	_sea_state_initialized = true
+	configs = SeaStateScript.build_cascades(_sea_state)
 	for config in configs:
 		if not config.is_valid():
 			push_error("Configuración FFT inválida para %s." % config.id)
@@ -88,8 +93,34 @@ func toggle_enabled() -> void:
 	OceanModuleRegistry.set_module_enabled(MODULE_ID, not _enabled)
 
 
+func set_sea_state(state: int) -> void:
+	if not SeaStateScript.is_valid_state(state):
+		push_warning("Estado de mar no válido: %s" % state)
+		return
+	if state == _sea_state and _sea_state_initialized:
+		return
+	_sea_state = state
+	_sea_state_initialized = true
+	configs = SeaStateScript.build_cascades(state)
+	for index in _cascades.size():
+		var cascade: Dictionary = _cascades[index]
+		var config := configs[index]
+		cascade["config"] = config
+		var h0_data := _build_h0(config, SimulationClock.simulation_seed)
+		RenderingServer.call_on_render_thread(cascade["solver"].update_config.bind(config))
+		RenderingServer.call_on_render_thread(cascade["solver"].upload_h0.bind(h0_data))
+	dispatches_per_update = 0
+	for config in configs:
+		dispatches_per_update += config.compute_pass_count()
+	_dispatch_requested = true
+
+
+func sea_state_name() -> String:
+	return SeaStateScript.state_name(_sea_state)
+
+
 func cycle_debug_mode() -> void:
-	# V conserva la inspección de displacement/height/normals/wireframe de Fase 1A.
+	# V recorre displacement/height/normals/slope/wireframe.
 	surface.cycle_debug_mode()
 
 
