@@ -92,7 +92,7 @@ func _ready() -> void:
 		_query_native = _try_create_native_backend()
 		if _query_native != null:
 			_query_reduced.configure_native_backend(_query_native)
-			push_warning("OceanQuery: backend nativo activo (OceanQueryNative).")
+			print("OceanQuery: backend nativo activo (OceanQueryNative).")
 	# Golden Reference: sÃ³lo cuando se pide explÃ­citamente para debug/test.
 	if enable_reference_query_debug:
 		_query_golden = QueryReferenceScript.new()
@@ -444,4 +444,3 @@ func _rebuild_h0_all(simulation_seed: int) -> void:
 	if _query_golden != null:
 		_query_golden.set_spectrum(configs, h0_datas)
 	_dispatch_requested = true
-

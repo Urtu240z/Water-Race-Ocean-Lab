@@ -32,7 +32,7 @@ var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
 var _lod_debug := false
 var _periodicity_debug := false
-var _coastal_debug_field := CoastalDebugField.OFF
+var _coastal_debug_field: int = CoastalDebugField.OFF
 var _tracking_camera: Camera3D
 var _triangle_count := 0
 

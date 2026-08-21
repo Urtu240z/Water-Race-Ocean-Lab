@@ -295,7 +295,7 @@ func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _
 	var delta_k := TAU / config.domain_size_m
 	var lambda := -config.choppiness
 	var floats := h0_bytes.to_float32_array()
-	var half := n / 2
+	var half: int = n >> 1
 	var modes: Array[_ModeData] = []
 	modes.resize(n * n)
 	for y in n:
