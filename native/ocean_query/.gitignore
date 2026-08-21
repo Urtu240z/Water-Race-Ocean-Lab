@@ -16,6 +16,9 @@ __pycache__/
 bench/data_*.txt
 bench/out_*.txt
 bench/ref_*.txt
+# Datos regenerables del benchmark PATCH (2C.1A): queries y refs golden.
+bench/queries_*.txt
+bench/ref_golden_*.txt
 # Descriptor ACTIVO generado por el build; el template sí se versiona.
 water_race_ocean_query.gdextension
 water_race_ocean_query.gdextension.uid

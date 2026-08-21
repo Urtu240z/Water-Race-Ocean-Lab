@@ -76,6 +76,18 @@ public:
     // Batch: evalúa n posiciones; out debe tener n*S_STRIDE doubles.
     void sample_batch_prepared(const double *positions_xz, size_t n, double *out);
 
+    // Exposición pública de accumulate_ para diagnósticos del PATCH (2C.1A):
+    // permite verificar que un nodo del grid reproduce EXACTAMENTE la suma del
+    // core DIRECT en ese q (recurrencia de fase vs sin/cos directos).
+    void accumulate_public(double qx, double qz, bool use_prepared, double sim_time,
+                           double &h, double &dx, double &dz,
+                           double &dhx, double &dhz,
+                           double &dxx, double &dxz, double &dzx, double &dzz,
+                           double &vh, double &vx, double &vz) {
+        accumulate_(qx, qz, use_prepared, sim_time, h, dx, dz, dhx, dhz,
+                    dxx, dxz, dzx, dzz, vh, vx, vz);
+    }
+
 private:
     void accumulate_(double qx, double qz, bool use_prepared, double sim_time,
                      double &h, double &dx, double &dz,
