@@ -12,26 +12,35 @@ const _DEBUG_FIELDS := [0, 1, 2, 5, 6] # NORMAL, depth, lambda, shoaling, phase.
 const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET"]
 
 enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
+enum CameraMode { TOP, GRAZING }
 
 @onready var _ocean = $OceanV3/OpenOceanFFT
 @onready var _seabed_actual: MeshInstance3D = $SeabedActualDebug
 @onready var _seabed_overlay: MeshInstance3D = $SeabedOverlayDebug
 @onready var _bank_crest_marker: MeshInstance3D = $BankCrestMarker
+@onready var _bank_guides: Node3D = $BankGuides
+@onready var _wavelength_ruler: MeshInstance3D = $WavelengthRuler
 @onready var _status: Label = %Status
-@onready var _camera: Camera3D = $Camera3D
+@onready var _top_camera: Camera3D = $TopCamera
+@onready var _grazing_camera: Camera3D = $GrazingCamera
 
 var _bathymetry = null
 var _debug_field_index := 0
-var _seabed_mode := SeabedMode.OVERLAY
+var _seabed_mode := SeabedMode.HIDDEN
+var _camera_mode := CameraMode.TOP
 var _coastal_enabled := true
 var _monochromatic_enabled := true
 
 
 func _ready() -> void:
-	_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
+	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
+	_grazing_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 	_bathymetry = _build_bank_bathymetry()
 	_build_seabed_debugs(_bathymetry)
+	_build_bank_guides()
+	_build_wavelength_ruler()
 	_set_seabed_mode(_seabed_mode)
+	_set_camera_mode(_camera_mode)
 	_apply_coastal_settings()
 	_update_status()
 
@@ -51,6 +60,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_H:
 			_debug_field_index = (_debug_field_index + 1) % _DEBUG_FIELDS.size()
 			_ocean.set_coastal_debug_field(_DEBUG_FIELDS[_debug_field_index])
+		KEY_V:
+			_set_camera_mode((_camera_mode + 1) % (CameraMode.GRAZING + 1))
+		KEY_P:
+			SimulationClock.toggle_paused()
 	_update_status()
 
 
@@ -60,17 +73,42 @@ func _apply_coastal_settings() -> void:
 	_ocean.coastal_incoming_direction_xz = Vector2.RIGHT
 	_ocean.coastal_reference_wavelength_m = 16.0
 	_ocean.coastal_monochromatic_debug = _monochromatic_enabled
-	_ocean.coastal_monochromatic_amplitude_m = 0.45
+	# Ganancia de un instrumento visual; no afecta CoastalPropagationData.
+	_ocean.coastal_monochromatic_amplitude_m = 0.75
 	_ocean.rebuild_coastal_propagation()
 	_ocean.set_coastal_debug_field(_DEBUG_FIELDS[_debug_field_index])
 
 
 func _update_status() -> void:
-	_status.text = "PHASE 3B — FINITE-DEPTH VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nJ  Seabed: %s\nH  Field: %s\nlambda ref = 16 m\n\nIncoming direction: +X\nDeep  ->  submerged bank  ->  deep" % ["ON" if _coastal_enabled else "OFF", "MONO" if _monochromatic_enabled else "FFT", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index]]
+	var mode_name := "MONO PHASE DEBUG" if _monochromatic_enabled else "FFT"
+	var probe_text := _probe_text()
+	_status.text = "PHASE 3B — FINITE-DEPTH VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nV  Camera: %s\nP  Paused: %s\nJ  Seabed: %s\nH  Field: %s\nlambda deep: 16.0 m | bank min depth: 0.5 m\nRuler: 16 m ticks | Incoming: +X\n\n%s" % ["ON" if _coastal_enabled else "OFF", mode_name, _camera_mode_name(), "YES" if SimulationClock.is_paused() else "NO", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index], probe_text]
+
+
+func _set_camera_mode(mode: int) -> void:
+	_camera_mode = clampi(mode, CameraMode.TOP, CameraMode.GRAZING) as CameraMode
+	if _camera_mode == CameraMode.TOP:
+		_top_camera.make_current()
+	else:
+		_grazing_camera.make_current()
+
+
+func _camera_mode_name() -> String:
+	return "TOP" if _camera_mode == CameraMode.TOP else "GRAZING"
+
+
+func _probe_text() -> String:
+	var propagation = _ocean.coastal_propagation_data()
+	if propagation == null:
+		return "Probes: esperando CoastalPropagationData"
+	var upstream = propagation.sample_propagation(Vector2(-90.0, 0.0))
+	var crest = propagation.sample_propagation(Vector2.ZERO)
+	var downstream = propagation.sample_propagation(Vector2(90.0, 0.0))
+	return "UPSTREAM   lambda %.2f m\nBANK CREST lambda %.2f m\nDOWNSTREAM lambda %.2f m | phase offset %.3f rad" % [upstream.wavelength_m, crest.wavelength_m, downstream.wavelength_m, downstream.phase_offset_rad]
 
 
 func _set_seabed_mode(mode: int) -> void:
-	_seabed_mode = clampi(mode, SeabedMode.HIDDEN, SeabedMode.OVERLAY)
+	_seabed_mode = clampi(mode, SeabedMode.HIDDEN, SeabedMode.OVERLAY) as SeabedMode
 	_seabed_actual.visible = _seabed_mode == SeabedMode.ACTUAL_DEPTH
 	_seabed_overlay.visible = _seabed_mode == SeabedMode.OVERLAY
 	_bank_crest_marker.visible = _seabed_mode == SeabedMode.OVERLAY
@@ -175,6 +213,59 @@ func _build_crest_marker() -> void:
 	material.no_depth_test = true
 	material.render_priority = 127
 	_bank_crest_marker.material_override = material
+
+
+func _build_bank_guides() -> void:
+	for guide in _bank_guides.get_children():
+		guide.queue_free()
+	_add_bank_guide("BANK START", -36.0, Color(0.3, 0.9, 1.0, 1.0))
+	_add_bank_guide("BANK CREST", 0.0, Color(1.0, 0.9, 0.15, 1.0))
+	_add_bank_guide("BANK END", 36.0, Color(0.3, 0.9, 1.0, 1.0))
+
+
+func _add_bank_guide(label_text: String, world_x: float, color: Color) -> void:
+	var guide := MeshInstance3D.new()
+	var cylinder := CylinderMesh.new()
+	cylinder.top_radius = 0.18
+	cylinder.bottom_radius = 0.18
+	cylinder.height = 8.0
+	guide.mesh = cylinder
+	guide.position = Vector3(world_x, 4.0, -62.0)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = color
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.no_depth_test = true
+	material.render_priority = 126
+	guide.material_override = material
+	_bank_guides.add_child(guide)
+	var text := Label3D.new()
+	text.text = label_text
+	text.font_size = 42
+	text.outline_size = 6
+	text.modulate = color
+	text.position = Vector3(world_x, 8.6, -62.0)
+	text.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	text.no_depth_test = true
+	_bank_guides.add_child(text)
+
+
+func _build_wavelength_ruler() -> void:
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_LINES)
+	for world_x in range(-112, 113, 16):
+		tool.set_color(Color(0.8, 0.95, 1.0, 0.9))
+		tool.add_vertex(Vector3(float(world_x), 0.14, 60.0))
+		tool.add_vertex(Vector3(float(world_x), 2.1, 60.0))
+	_wavelength_ruler.mesh = tool.commit()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.no_depth_test = true
+	material.render_priority = 126
+	_wavelength_ruler.material_override = material
 
 
 func _add_floor_triangle(tool: SurfaceTool, data, overlay: bool, ax: int, az: int, bx: int, bz: int, cx: int, cz: int) -> void:

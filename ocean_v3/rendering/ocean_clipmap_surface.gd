@@ -97,12 +97,12 @@ func toggle_periodicity_debug() -> void:
 	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 
 
-func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35) -> void:
+func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35, transform_enabled := true) -> void:
 	## Sólo LONG consume esta transformación. MID/SHORT y sus H0 quedan intactos.
 	var enabled: bool = data != null and data.is_valid()
 	var textures: Dictionary = data.build_gpu_textures() if enabled else {}
 	for material in [_surface_material, _wireframe_material]:
-		material.set_shader_parameter(&"coastal_propagation_enabled", enabled)
+		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and transform_enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_amplitude_m", monochromatic_amplitude_m)
 		if not enabled:

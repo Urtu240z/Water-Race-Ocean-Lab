@@ -306,7 +306,10 @@ func toggle_periodicity_debug() -> void:
 func rebuild_coastal_propagation() -> bool:
 	## Operación explícita/development-time; nunca se ejecuta por query ni frame.
 	_coastal_propagation = null
-	if not coastal_propagation_enabled:
+	# El mono de diagnóstico necesita k0/omega aun con la transformación OFF:
+	# así C compara la misma onda profunda contra la onda costeña. En uso normal
+	# (ambos flags false) conserva el camino abierto y no hornea nada.
+	if not coastal_propagation_enabled and not coastal_monochromatic_debug:
 		surface.set_coastal_propagation(null)
 		return false
 	if coastal_bathymetry_data == null or not coastal_bathymetry_data.is_valid():
@@ -322,8 +325,8 @@ func rebuild_coastal_propagation() -> bool:
 	if _coastal_propagation == null:
 		surface.set_coastal_propagation(null)
 		return false
-	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m)
-	return true
+	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, coastal_propagation_enabled)
+	return coastal_propagation_enabled
 
 
 func coastal_propagation_data():

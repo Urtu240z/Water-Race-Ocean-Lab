@@ -40,6 +40,8 @@ varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
 varying vec4 coastal_field;
 varying vec4 coastal_metrics;
+varying float coastal_mono_phase;
+varying float coastal_mono_active;
 
 vec2 spectrum_uv(vec2 world_xz, float domain_size_m) {
 	return fract(world_xz / domain_size_m + vec2(0.5));
@@ -74,6 +76,8 @@ bool has_coastal_data(vec2 uv, vec4 field_data) {
 void vertex() {
 	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	ocean_world_xz = world_xz;
+	coastal_mono_phase = 0.0;
+	coastal_mono_active = 0.0;
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -107,12 +111,19 @@ void vertex() {
 	slope += slope_from_normal(mid_normal) * mid_weight;
 	slope += slope_from_normal(short_normal) * short_weight;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
-	if (coastal_monochromatic_debug && coast_active) {
-		float phase = dot(world_xz, coastal_incoming_direction_xz) * coastal_k0_rad_m + phase_offset - coastal_omega_rad_s * coastal_time_s;
-		long_displacement = vec3(0.0, coastal_monochromatic_amplitude_m * shoaling * cos(phase), 0.0);
+	if (coastal_monochromatic_debug) {
+		// Con transformación OFF, coast_active es falso: esta misma expresión
+		// queda en la referencia profunda A*cos(k0*x-omega*t) en todo el plano.
+		float mono_phase_offset = coast_active ? phase_offset : 0.0;
+		float mono_shoaling = coast_active ? shoaling : 1.0;
+		float mono_k = coast_active ? coastal_field.b : coastal_k0_rad_m;
+		float phase = dot(world_xz, coastal_incoming_direction_xz) * coastal_k0_rad_m + mono_phase_offset - coastal_omega_rad_s * coastal_time_s;
+		long_displacement = vec3(0.0, coastal_monochromatic_amplitude_m * mono_shoaling * cos(phase), 0.0);
 		displacement = long_displacement * long_weight;
-		vec2 mono_gradient = -coastal_incoming_direction_xz * coastal_monochromatic_amplitude_m * shoaling * coastal_field.b * sin(phase);
+		vec2 mono_gradient = -coastal_incoming_direction_xz * coastal_monochromatic_amplitude_m * mono_shoaling * mono_k * sin(phase);
 		ocean_normal = normalize(vec3(-mono_gradient.x, 1.0, -mono_gradient.y));
+		coastal_mono_phase = phase;
+		coastal_mono_active = 1.0;
 	}
 
 	if (!module_enabled) {
@@ -146,6 +157,14 @@ void fragment() {
 
 		color = mix(slope_valley_color, slope_crest_color, shade);
 	}
+	if (coastal_mono_active > 0.5) {
+		// Bandas de fase mono: los máximos son líneas cyan/blancas estrechas,
+		// independientes de luz, normal, specular o exposición.
+		float crest = 0.5 + 0.5 * cos(coastal_mono_phase);
+		float crest_line = smoothstep(0.88, 0.985, crest);
+		color = mix(vec3(0.005, 0.025, 0.12), vec3(0.03, 0.34, 0.68), pow(crest, 1.6));
+		color = mix(color, vec3(0.78, 1.0, 1.0), crest_line);
+	}
 	if (coastal_debug_field > 0 && coastal_propagation_enabled) {
 		float value = 0.0;
 		if (coastal_debug_field == 1) value = coastal_metrics.r / 12.0;
@@ -165,7 +184,7 @@ void fragment() {
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
 
-	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0;
+	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || coastal_mono_active > 0.5;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
