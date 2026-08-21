@@ -13,6 +13,16 @@ enum DebugMode {
 	WIREFRAME,
 }
 
+enum CoastalDebugField {
+	OFF,
+	DEPTH,
+	WAVELENGTH,
+	PHASE_SPEED,
+	GROUP_VELOCITY,
+	SHOALING,
+	PHASE_OFFSET,
+}
+
 @export var clipmap_config := ClipmapConfigScript.new()
 
 var _surface_material := ShaderMaterial.new()
@@ -22,6 +32,7 @@ var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
 var _lod_debug := false
 var _periodicity_debug := false
+var _coastal_debug_field := CoastalDebugField.OFF
 var _tracking_camera: Camera3D
 var _triangle_count := 0
 
@@ -86,6 +97,37 @@ func toggle_periodicity_debug() -> void:
 	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 
 
+func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35) -> void:
+	## Sólo LONG consume esta transformación. MID/SHORT y sus H0 quedan intactos.
+	var enabled: bool = data != null and data.is_valid()
+	var textures: Dictionary = data.build_gpu_textures() if enabled else {}
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"coastal_propagation_enabled", enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_amplitude_m", monochromatic_amplitude_m)
+		if not enabled:
+			continue
+		material.set_shader_parameter(&"coastal_field_texture", textures["field"])
+		material.set_shader_parameter(&"coastal_metrics_texture", textures["metrics"])
+		material.set_shader_parameter(&"coastal_origin_xz", data.world_origin_xz)
+		material.set_shader_parameter(&"coastal_extent_m", data.world_max_xz() - data.world_origin_xz)
+		material.set_shader_parameter(&"coastal_k0_rad_m", data.k0_rad_m)
+		material.set_shader_parameter(&"coastal_omega_rad_s", data.omega_ref_rad_s)
+		material.set_shader_parameter(&"coastal_incoming_direction_xz", data.incoming_direction_xz)
+	set_coastal_debug_field(_coastal_debug_field)
+
+
+func set_coastal_time(simulation_time_s: float) -> void:
+	_surface_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
+	_wireframe_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
+
+
+func set_coastal_debug_field(field: int) -> void:
+	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.PHASE_OFFSET)
+	_surface_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
+	_wireframe_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
+
+
 func debug_mode_name() -> String:
 	match _debug_mode:
 		DebugMode.FULL_DISPLACEMENT: return "DX + HEIGHT + DZ"
@@ -125,6 +167,9 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
 		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
 		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
+		material.set_shader_parameter(&"coastal_propagation_enabled", false)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", false)
+		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
 		for index in 3:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])

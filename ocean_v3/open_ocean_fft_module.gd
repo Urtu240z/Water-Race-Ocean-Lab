@@ -10,6 +10,7 @@ const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
 const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
+const CoastalBakerScript := preload("res://ocean_v3/coastal/coastal_propagation_baker.gd")
 
 enum BandDebug {
 	ALL,
@@ -26,6 +27,14 @@ enum BandDebug {
 @export var reduced_long_pairs := 1024
 @export var reduced_mid_pairs := 1024
 @export var reduced_short_pairs := 1024
+# 3B: input horneado de 3A; sólo modula la representación visual LONG.
+@export var coastal_bathymetry_data: Resource
+@export var coastal_propagation_enabled := false
+@export var coastal_incoming_direction_xz := Vector2.RIGHT
+@export_range(4.0, 128.0, 0.5) var coastal_reference_wavelength_m := 16.0
+@export_range(0.05, 4.0, 0.05) var coastal_min_valid_depth_m := 0.25
+@export var coastal_monochromatic_debug := false
+@export_range(0.01, 2.0, 0.01) var coastal_monochromatic_amplitude_m := 0.35
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -42,6 +51,7 @@ var _dispatch_requested := true
 var _band_debug: int = BandDebug.ALL
 var _sea_state: int = SeaStateScript.State.RACE
 var _sea_state_initialized := false
+var _coastal_propagation = null
 
 
 func _ready() -> void:
@@ -89,6 +99,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
+	rebuild_coastal_propagation()
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
 	OceanModuleRegistry.register_module(MODULE_ID, _enabled)
@@ -113,6 +124,7 @@ func _exit_tree() -> void:
 
 func _process(_delta: float) -> void:
 	_publish_ready_textures()
+	surface.set_coastal_time(SimulationClock.get_render_time())
 	if not _enabled:
 		return
 	for cascade in _cascades:
@@ -291,6 +303,37 @@ func toggle_periodicity_debug() -> void:
 	surface.toggle_periodicity_debug()
 
 
+func rebuild_coastal_propagation() -> bool:
+	## Operación explícita/development-time; nunca se ejecuta por query ni frame.
+	_coastal_propagation = null
+	if not coastal_propagation_enabled:
+		surface.set_coastal_propagation(null)
+		return false
+	if coastal_bathymetry_data == null or not coastal_bathymetry_data.is_valid():
+		push_warning("3B coastal: BathymetryData no asignado o inválido; LONG queda abierto.")
+		surface.set_coastal_propagation(null)
+		return false
+	var baker = CoastalBakerScript.new()
+	baker.bathymetry_data = coastal_bathymetry_data
+	baker.incoming_direction_xz = coastal_incoming_direction_xz
+	baker.reference_wavelength_m = coastal_reference_wavelength_m
+	baker.min_valid_depth_m = coastal_min_valid_depth_m
+	_coastal_propagation = baker.bake()
+	if _coastal_propagation == null:
+		surface.set_coastal_propagation(null)
+		return false
+	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m)
+	return true
+
+
+func coastal_propagation_data():
+	return _coastal_propagation
+
+
+func set_coastal_debug_field(field: int) -> void:
+	surface.set_coastal_debug_field(field)
+
+
 func is_fft_enabled() -> bool:
 	return _enabled
 
@@ -401,5 +444,4 @@ func _rebuild_h0_all(simulation_seed: int) -> void:
 	if _query_golden != null:
 		_query_golden.set_spectrum(configs, h0_datas)
 	_dispatch_requested = true
-
 
