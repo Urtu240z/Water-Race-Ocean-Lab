@@ -36,8 +36,8 @@ void main() {
 	vec2 dz = vec2(0.0);
 	if (k_length > 0.000001) {
 		vec2 minus_i_h = vec2(height.y, -height.x);
-		dx = minus_i_h * (k.x / k_length) * params.values.z;
-		dz = minus_i_h * (k.y / k_length) * params.values.z;
+		dx = minus_i_h * (k.x / k_length) * -params.values.z;
+		dz = minus_i_h * (k.y / k_length) * -params.values.z;
 	}
 	imageStore(spectrum_a, coord, vec4(height, dx));
 	imageStore(spectrum_b, coord, vec4(dz, 0.0, 0.0));
