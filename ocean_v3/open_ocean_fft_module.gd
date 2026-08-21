@@ -7,6 +7,8 @@ const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
+const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
+const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
 
 enum BandDebug {
 	ALL,
@@ -23,6 +25,7 @@ var configs: Array[OpenOceanFFTConfig] = []
 var dispatches_per_update := 0
 
 var _cascades: Array[Dictionary] = []
+var _query_reference: RefCounted = null
 var _enabled := true
 var _textures_published := false
 var _dispatch_requested := true
@@ -36,6 +39,7 @@ func _ready() -> void:
 	_sea_state = SeaStateScript.State.RACE
 	_sea_state_initialized = true
 	configs = SeaStateScript.build_cascades(_sea_state)
+	var h0_datas: Array[PackedByteArray] = []
 	for config in configs:
 		if not config.is_valid():
 			push_error("Configuración FFT inválida para %s." % config.id)
@@ -44,6 +48,7 @@ func _ready() -> void:
 		var normal := Texture2DRD.new()
 		var solver := SolverScript.new()
 		var h0_data := _build_h0(config, SimulationClock.simulation_seed)
+		h0_datas.append(h0_data)
 		_cascades.append({
 			"config": config,
 			"solver": solver,
@@ -56,6 +61,9 @@ func _ready() -> void:
 	dispatches_per_update = 0
 	for config in configs:
 		dispatches_per_update += config.compute_pass_count()
+	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
+	_query_reference = QueryReferenceScript.new()
+	_query_reference.set_spectrum(configs, h0_datas)
 	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
@@ -69,6 +77,7 @@ func _exit_tree() -> void:
 	if OceanModuleRegistry.module_state_changed.is_connected(_on_module_state_changed):
 		OceanModuleRegistry.module_state_changed.disconnect(_on_module_state_changed)
 	OceanModuleRegistry.unregister_module(MODULE_ID)
+	_query_reference = null
 	for cascade in _cascades:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
@@ -106,17 +115,45 @@ func set_sea_state(state: int) -> void:
 		var cascade: Dictionary = _cascades[index]
 		var config := configs[index]
 		cascade["config"] = config
-		var h0_data := _build_h0(config, SimulationClock.simulation_seed)
 		RenderingServer.call_on_render_thread(cascade["solver"].update_config.bind(config))
-		RenderingServer.call_on_render_thread(cascade["solver"].upload_h0.bind(h0_data))
 	dispatches_per_update = 0
 	for config in configs:
 		dispatches_per_update += config.compute_pass_count()
-	_dispatch_requested = true
+	_rebuild_h0_all(SimulationClock.simulation_seed)
 
 
 func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
+
+
+## --- OceanQuery (Fase 2A, backend REFERENCE) --------------------------------
+## La query física evalúa SIEMPRE las tres bandas del sea state activo. El band
+## debug (B) y los fades visuales del renderer NO alteran la query. Los perfiles
+## de calidad tampoco. No hay readback GPU->CPU: la referencia es CPU pura.
+
+func sample_water(world_position: Vector3, simulation_time: float):
+	if not _enabled or _query_reference == null:
+		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+	return _query_reference.sample_water(world_position, simulation_time)
+
+
+func sample_water_physics_time(world_position: Vector3):
+	return sample_water(world_position, SimulationClock.simulation_time)
+
+
+func prepare_query_time(simulation_time: float) -> void:
+	if _query_reference != null:
+		_query_reference.prepare_time(simulation_time)
+
+
+func sample_water_prepared(world_position: Vector3):
+	if not _enabled or _query_reference == null:
+		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+	return _query_reference.sample_prepared(world_position)
+
+
+func query_backend_name() -> String:
+	return "REFERENCE"
 
 
 func cycle_debug_mode() -> void:
@@ -227,11 +264,22 @@ func _on_module_state_changed(module_id: StringName, enabled: bool) -> void:
 
 
 func _on_seed_changed(simulation_seed: int) -> void:
-	for cascade in _cascades:
-		var h0_data := _build_h0(cascade.config, simulation_seed)
-		RenderingServer.call_on_render_thread(cascade.solver.upload_h0.bind(h0_data))
-	_dispatch_requested = true
+	_rebuild_h0_all(simulation_seed)
 
 
 func _on_reset_completed(_seed: int) -> void:
+	_dispatch_requested = true
+
+
+func _rebuild_h0_all(simulation_seed: int) -> void:
+	## Regenera H0 UNA VEZ por cascada y alimenta con los MISMOS bytes a la GPU
+	## (upload_h0) y a la referencia CPU (set_spectrum).
+	var h0_datas: Array[PackedByteArray] = []
+	for index in _cascades.size():
+		var config: OpenOceanFFTConfig = configs[index]
+		var h0_data := _build_h0(config, simulation_seed)
+		h0_datas.append(h0_data)
+		RenderingServer.call_on_render_thread(_cascades[index]["solver"].upload_h0.bind(h0_data))
+	if _query_reference != null:
+		_query_reference.set_spectrum(configs, h0_datas)
 	_dispatch_requested = true

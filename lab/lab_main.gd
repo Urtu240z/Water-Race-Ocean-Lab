@@ -7,11 +7,14 @@ extends Node3D
 @onready var metric_references: Node3D = $MetricReferences
 
 var _using_race_camera := false
+var _query_probe_tool: Node3D
 
 
 func _ready() -> void:
 	_set_active_camera(false)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\n4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
+	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
+	add_child(_query_probe_tool)
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nY: query probes | 4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -49,6 +52,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module:
 				fft_module.toggle_periodicity_debug()
+		KEY_Y:
+			if _query_probe_tool:
+				_query_probe_tool.call("toggle_snapshot")
 		KEY_4:
 			var fft_module_4 := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module_4:

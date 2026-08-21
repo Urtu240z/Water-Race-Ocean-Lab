@@ -35,6 +35,9 @@ func is_valid() -> bool:
 		and wind_speed_mps >= 0.0
 		and energy >= 0.0
 		and target_hs_m >= 0.0
+		# La configuración pública es positiva; Tessendorf aplica lambda negativa
+		# internamente para comprimir crestas. No se permite choppiness negativo.
+		and choppiness >= 0.0
 	)
 
 

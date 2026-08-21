@@ -19,8 +19,12 @@ func _process(_delta: float) -> void:
 			fft_module.combined_hs_m(),
 		]
 	metrics_label.text = "\n".join([
-		"OCEAN LAB — FASE 1D / SEA STATES",
+		"OCEAN LAB — FASE 2A / QUERY REFERENCE",
 		"Sea State: %s" % (fft_module.sea_state_name() if fft_module else "unavailable"),
+		"Query probes: %s | Query backend: %s" % [
+			"ON" if _probe_tool_enabled() else "OFF",
+			fft_module.query_backend_name() if fft_module else "unavailable",
+		],
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
@@ -54,6 +58,11 @@ func _process(_delta: float) -> void:
 		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
+
+
+func _probe_tool_enabled() -> bool:
+	var probe_tool := get_tree().get_first_node_in_group(&"query_probes")
+	return probe_tool != null and probe_tool.is_enabled()
 
 
 func _format_bytes(bytes: float) -> String:
