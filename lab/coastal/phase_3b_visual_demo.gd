@@ -8,8 +8,8 @@ const _GRID_WIDTH := 257
 const _GRID_HEIGHT := 129
 const _CELL_SIZE_M := 1.0
 const _ORIGIN_XZ := Vector2(-128.0, -64.0)
-const _DEBUG_FIELDS := [0, 1, 2, 5, 6] # NORMAL, depth, lambda, shoaling, phase.
-const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET"]
+const _DEBUG_FIELDS := [0, 1, 2, 5, 6, 7, 8]
+const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET", "LOCAL_K", "VALID / SHADOW"]
 
 enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
 enum CameraMode { TOP, GRAZING }
@@ -20,6 +20,7 @@ enum CameraMode { TOP, GRAZING }
 @onready var _bank_crest_marker: MeshInstance3D = $BankCrestMarker
 @onready var _bank_guides: Node3D = $BankGuides
 @onready var _wavelength_ruler: MeshInstance3D = $WavelengthRuler
+@onready var _direction_arrows: MeshInstance3D = $DirectionArrows
 @onready var _status: Label = %Status
 @onready var _top_camera: Camera3D = $TopCamera
 @onready var _grazing_camera: Camera3D = $GrazingCamera
@@ -30,10 +31,12 @@ var _seabed_mode := SeabedMode.HIDDEN
 var _camera_mode := CameraMode.TOP
 var _coastal_enabled := true
 var _monochromatic_enabled := true
+var _refraction_enabled := false
 
 
 func _ready() -> void:
-	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
+	# TOP looks vertically down, so it needs a horizontal reference up vector.
+	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.FORWARD)
 	_grazing_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 	_bathymetry = _build_bank_bathymetry()
 	_build_seabed_debugs(_bathymetry)
@@ -64,6 +67,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_camera_mode((_camera_mode + 1) % (CameraMode.GRAZING + 1))
 		KEY_P:
 			SimulationClock.toggle_paused()
+		KEY_R:
+			_refraction_enabled = not _refraction_enabled
+			_apply_coastal_settings()
 	_update_status()
 
 
@@ -75,14 +81,16 @@ func _apply_coastal_settings() -> void:
 	_ocean.coastal_monochromatic_debug = _monochromatic_enabled
 	# Ganancia de un instrumento visual; no afecta CoastalPropagationData.
 	_ocean.coastal_monochromatic_amplitude_m = 0.75
+	_ocean.coastal_eikonal_refraction_debug = _refraction_enabled
 	_ocean.rebuild_coastal_propagation()
 	_ocean.set_coastal_debug_field(_DEBUG_FIELDS[_debug_field_index])
+	_build_direction_arrows()
 
 
 func _update_status() -> void:
 	var mode_name := "MONO PHASE DEBUG" if _monochromatic_enabled else "FFT"
 	var probe_text := _probe_text()
-	_status.text = "PHASE 3B — FINITE-DEPTH VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nV  Camera: %s\nP  Paused: %s\nJ  Seabed: %s\nH  Field: %s\nlambda deep: 16.0 m | bank min depth: 0.5 m\nRuler: 16 m ticks | Incoming: +X\n\n%s" % ["ON" if _coastal_enabled else "OFF", mode_name, _camera_mode_name(), "YES" if SimulationClock.is_paused() else "NO", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index], probe_text]
+	_status.text = "PHASE 3B / 3B.1 — COASTAL VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nR  Propagation: %s\nV  Camera: %s\nP  Paused: %s\nJ  Seabed: %s\nH  Field: %s\nlambda deep: 16.0 m | bank min depth: 0.5 m\nRuler: 16 m ticks | Incoming: +X\n\n%s" % ["ON" if _coastal_enabled else "OFF", mode_name, "REFRACTED 3B.1" if _refraction_enabled else "STRAIGHT 3B", _camera_mode_name(), "YES" if SimulationClock.is_paused() else "NO", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index], probe_text]
 
 
 func _set_camera_mode(mode: int) -> void:
@@ -266,6 +274,34 @@ func _build_wavelength_ruler() -> void:
 	material.no_depth_test = true
 	material.render_priority = 126
 	_wavelength_ruler.material_override = material
+
+
+func _build_direction_arrows() -> void:
+	var propagation = _ocean.coastal_propagation_data()
+	_direction_arrows.mesh = null
+	_direction_arrows.visible = _refraction_enabled
+	if propagation == null or not _refraction_enabled:
+		return
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_LINES)
+	for world_z in range(-42, 43, 14):
+		for world_x in range(-84, 85, 14):
+			var sample = propagation.sample_propagation(Vector2(float(world_x), float(world_z)))
+			if not sample.valid:
+				continue
+			var origin := Vector3(float(world_x), 1.35, float(world_z))
+			var tip := origin + Vector3(sample.local_direction_xz.x, 0.0, sample.local_direction_xz.y) * 4.5
+			tool.set_color(Color(0.25, 1.0, 0.92, 0.85))
+			tool.add_vertex(origin)
+			tool.add_vertex(tip)
+	_direction_arrows.mesh = tool.commit()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.no_depth_test = true
+	material.render_priority = 125
+	_direction_arrows.material_override = material
 
 
 func _add_floor_triangle(tool: SurfaceTool, data, overlay: bool, ax: int, az: int, bx: int, bz: int, cx: int, cz: int) -> void:

@@ -18,6 +18,7 @@ uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
+uniform bool coastal_transform_enabled = false;
 uniform bool coastal_monochromatic_debug = false;
 uniform int coastal_debug_field = 0;
 uniform float coastal_monochromatic_amplitude_m = 0.35;
@@ -56,7 +57,7 @@ vec2 coastal_uv(vec2 world_xz) {
 }
 
 bool has_coastal_data(vec2 uv, vec4 field_data) {
-	return coastal_propagation_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
+	return coastal_propagation_enabled && coastal_transform_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
 }
 
 void vertex() {

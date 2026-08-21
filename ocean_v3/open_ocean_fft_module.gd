@@ -11,6 +11,7 @@ const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_refere
 const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
 const CoastalBakerScript := preload("res://ocean_v3/coastal/coastal_propagation_baker.gd")
+const CoastalEikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 
 enum BandDebug {
 	ALL,
@@ -35,6 +36,8 @@ enum BandDebug {
 @export_range(0.05, 4.0, 0.05) var coastal_min_valid_depth_m := 0.25
 @export var coastal_monochromatic_debug := false
 @export_range(0.01, 2.0, 0.01) var coastal_monochromatic_amplitude_m := 0.35
+# 3B.1: sólo instrumento MONO; nunca warp definitivo del FFT direccional.
+@export var coastal_eikonal_refraction_debug := false
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -316,7 +319,7 @@ func rebuild_coastal_propagation() -> bool:
 		push_warning("3B coastal: BathymetryData no asignado o inválido; LONG queda abierto.")
 		surface.set_coastal_propagation(null)
 		return false
-	var baker = CoastalBakerScript.new()
+	var baker = CoastalEikonalBakerScript.new() if coastal_eikonal_refraction_debug else CoastalBakerScript.new()
 	baker.bathymetry_data = coastal_bathymetry_data
 	baker.incoming_direction_xz = coastal_incoming_direction_xz
 	baker.reference_wavelength_m = coastal_reference_wavelength_m
@@ -325,7 +328,9 @@ func rebuild_coastal_propagation() -> bool:
 	if _coastal_propagation == null:
 		surface.set_coastal_propagation(null)
 		return false
-	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, coastal_propagation_enabled)
+	# El campo 2D no se aplica al FFT: sólo el shader mono consume phi(x,z).
+	var fft_transform_enabled := coastal_propagation_enabled and not coastal_eikonal_refraction_debug
+	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, fft_transform_enabled, coastal_eikonal_refraction_debug and coastal_propagation_enabled)
 	return coastal_propagation_enabled
 
 

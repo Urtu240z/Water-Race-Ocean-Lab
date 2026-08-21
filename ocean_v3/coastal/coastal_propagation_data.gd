@@ -1,7 +1,7 @@
 class_name CoastalPropagationData
 extends Resource
 ## Transformación local, determinista y muestreable derivada de BathymetryData.
-## Mantiene datos CPU y dos texturas GPU del mismo grid; no hace raycasts.
+## Mantiene datos CPU y texturas GPU del mismo grid; no hace raycasts.
 
 const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample.gd")
 
@@ -13,6 +13,9 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export var k0_rad_m := 0.0
 @export var incoming_direction_xz := Vector2.RIGHT
 @export var min_valid_depth_m := 0.25
+@export var propagation_kind := 0 # 0 STRAIGHT_3B, 1 EIKONAL_2D_3B1.
+@export var eikonal_sweeps := 0
+@export var eikonal_max_residual_rad_m := 0.0
 
 @export_storage var depth_m := PackedFloat32Array()
 @export_storage var local_k := PackedFloat32Array()
@@ -22,14 +25,21 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export_storage var shoaling_scale := PackedFloat32Array()
 @export_storage var phase_offset_rad := PackedFloat32Array()
 @export_storage var valid_mask := PackedByteArray()
+@export_storage var phase_rad := PackedFloat32Array()
+@export_storage var phase_gradient_x := PackedFloat32Array()
+@export_storage var phase_gradient_z := PackedFloat32Array()
+@export_storage var local_direction_x := PackedFloat32Array()
+@export_storage var local_direction_z := PackedFloat32Array()
+@export_storage var reached_mask := PackedByteArray()
 
 var _field_texture: ImageTexture
 var _metrics_texture: ImageTexture
+var _phase_texture: ImageTexture
 
 
 func is_valid() -> bool:
 	var count := width * height
-	return width >= 2 and height >= 2 and cell_size_m > 0.0 and omega_ref_rad_s > 0.0 and k0_rad_m > 0.0 and depth_m.size() == count and local_k.size() == count and wavelength_m.size() == count and phase_speed_mps.size() == count and group_velocity_mps.size() == count and shoaling_scale.size() == count and phase_offset_rad.size() == count and valid_mask.size() == count
+	return width >= 2 and height >= 2 and cell_size_m > 0.0 and omega_ref_rad_s > 0.0 and k0_rad_m > 0.0 and depth_m.size() == count and local_k.size() == count and wavelength_m.size() == count and phase_speed_mps.size() == count and group_velocity_mps.size() == count and shoaling_scale.size() == count and phase_offset_rad.size() == count and valid_mask.size() == count and phase_rad.size() == count and phase_gradient_x.size() == count and phase_gradient_z.size() == count and local_direction_x.size() == count and local_direction_z.size() == count and reached_mask.size() == count
 
 
 func world_max_xz() -> Vector2:
@@ -37,13 +47,13 @@ func world_max_xz() -> Vector2:
 
 
 func approximate_memory_bytes() -> int:
-	# Siete float32 + máscara CPU; las texturas GPU se cuentan por separado.
-	return width * height * (7 * 4 + 1)
+	# Doce float32 + dos máscaras CPU.
+	return width * height * (12 * 4 + 2)
 
 
 func approximate_gpu_memory_bytes() -> int:
-	# Dos RGBA32F: campo (phase/shoal/k/mask) y métricas (depth/lambda/c/Cg).
-	return width * height * 2 * 4 * 4
+	# Tres RGBA32F: campo, métricas y fase/dirección/reached.
+	return width * height * 3 * 4 * 4
 
 
 func sample_propagation(world_xz: Vector2, reuse = null):
@@ -69,8 +79,13 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	result.group_velocity_mps = _bilinear(group_velocity_mps, i00, i10, i01, i11, tx, tz)
 	result.shoaling_scale = _bilinear(shoaling_scale, i00, i10, i01, i11, tx, tz)
 	result.phase_offset_rad = _bilinear(phase_offset_rad, i00, i10, i01, i11, tx, tz)
+	result.phase_rad = _bilinear(phase_rad, i00, i10, i01, i11, tx, tz)
+	result.phase_gradient_x = _bilinear(phase_gradient_x, i00, i10, i01, i11, tx, tz)
+	result.phase_gradient_z = _bilinear(phase_gradient_z, i00, i10, i01, i11, tx, tz)
+	result.local_direction_xz = Vector2(_bilinear(local_direction_x, i00, i10, i01, i11, tx, tz), _bilinear(local_direction_z, i00, i10, i01, i11, tx, tz)).normalized()
 	var nearest := clampi(int(round(grid.y)), 0, height - 1) * width + clampi(int(round(grid.x)), 0, width - 1)
-	result.valid = valid_mask[nearest] != 0
+	result.reached = reached_mask[nearest] != 0
+	result.valid = valid_mask[nearest] != 0 and result.reached
 	return result
 
 
@@ -79,8 +94,10 @@ func build_gpu_textures() -> Dictionary:
 		return {}
 	var field_values := PackedFloat32Array()
 	var metric_values := PackedFloat32Array()
+	var phase_values := PackedFloat32Array()
 	field_values.resize(width * height * 4)
 	metric_values.resize(width * height * 4)
+	phase_values.resize(width * height * 4)
 	for index in width * height:
 		var base := index * 4
 		field_values[base] = phase_offset_rad[index]
@@ -91,11 +108,17 @@ func build_gpu_textures() -> Dictionary:
 		metric_values[base + 1] = wavelength_m[index]
 		metric_values[base + 2] = phase_speed_mps[index]
 		metric_values[base + 3] = group_velocity_mps[index]
+		phase_values[base] = phase_rad[index]
+		phase_values[base + 1] = local_direction_x[index]
+		phase_values[base + 2] = local_direction_z[index]
+		phase_values[base + 3] = 1.0 if reached_mask[index] != 0 else 0.0
 	var field_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBAF, field_values.to_byte_array())
 	var metrics_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBAF, metric_values.to_byte_array())
+	var phase_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBAF, phase_values.to_byte_array())
 	_field_texture = ImageTexture.create_from_image(field_image)
 	_metrics_texture = ImageTexture.create_from_image(metrics_image)
-	return {"field": _field_texture, "metrics": _metrics_texture}
+	_phase_texture = ImageTexture.create_from_image(phase_image)
+	return {"field": _field_texture, "metrics": _metrics_texture, "phase": _phase_texture}
 
 
 func _bilinear(values: PackedFloat32Array, i00: int, i10: int, i01: int, i11: int, tx: float, tz: float) -> float:

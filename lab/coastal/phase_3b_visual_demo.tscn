@@ -48,10 +48,12 @@ shadow_enabled = true
 
 [node name="WavelengthRuler" type="MeshInstance3D" parent="."]
 
+[node name="DirectionArrows" type="MeshInstance3D" parent="."]
+
 [node name="TopCamera" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 150, 8)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 120, 0)
 current = true
-fov = 52.0
+fov = 46.0
 far = 2000.0
 
 [node name="GrazingCamera" type="Camera3D" parent="."]

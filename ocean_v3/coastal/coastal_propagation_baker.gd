@@ -38,6 +38,12 @@ func bake():
 	output.shoaling_scale.resize(count)
 	output.phase_offset_rad.resize(count)
 	output.valid_mask.resize(count)
+	output.phase_rad.resize(count)
+	output.phase_gradient_x.resize(count)
+	output.phase_gradient_z.resize(count)
+	output.local_direction_x.resize(count)
+	output.local_direction_z.resize(count)
+	output.reached_mask.resize(count)
 	var cg_deep: float = 0.5 * output.omega_ref_rad_s / output.k0_rad_m
 	for index in count:
 		var depth: float = bathymetry_data.depth_m[index]
@@ -60,7 +66,23 @@ func bake():
 		# visual marginal en profundidades intermedias y conserva deep≈1.
 		output.shoaling_scale[index] = maxf(1.0, sqrt(cg_deep / maxf(output.group_velocity_mps[index], 1.0e-6)))
 	_integrate_straight_ray_phase(output, direction)
+	_populate_straight_phase_fields(output, direction)
 	return output
+
+
+func _populate_straight_phase_fields(output, direction: Vector2) -> void:
+	## Compatibilidad 3B: un frente estrictamente longitudinal conserva k local
+	## paralelo a la dirección incidente y todos los nodos válidos son reached.
+	for z in output.height:
+		for x in output.width:
+			var index: int = z * output.width + x
+			var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
+			output.phase_rad[index] = output.k0_rad_m * point.dot(direction) + output.phase_offset_rad[index]
+			output.phase_gradient_x[index] = output.local_k[index] * direction.x
+			output.phase_gradient_z[index] = output.local_k[index] * direction.y
+			output.local_direction_x[index] = direction.x
+			output.local_direction_z[index] = direction.y
+			output.reached_mask[index] = output.valid_mask[index]
 
 
 func _integrate_straight_ray_phase(output, direction: Vector2) -> void:

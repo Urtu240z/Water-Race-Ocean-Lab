@@ -21,6 +21,8 @@ enum CoastalDebugField {
 	GROUP_VELOCITY,
 	SHOALING,
 	PHASE_OFFSET,
+	LOCAL_K,
+	REACHABILITY,
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
@@ -97,18 +99,23 @@ func toggle_periodicity_debug() -> void:
 	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 
 
-func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35, transform_enabled := true) -> void:
+func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35, transform_enabled := true, eikonal_phase_debug := false) -> void:
 	## Sólo LONG consume esta transformación. MID/SHORT y sus H0 quedan intactos.
 	var enabled: bool = data != null and data.is_valid()
 	var textures: Dictionary = data.build_gpu_textures() if enabled else {}
 	for material in [_surface_material, _wireframe_material]:
-		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and transform_enabled)
+		# data_enabled permite MONO/Eikonal y sus probes; transform_enabled sólo
+		# autoriza el warp visual de LONG (nunca para Eikonal 3B.1).
+		material.set_shader_parameter(&"coastal_propagation_enabled", enabled)
+		material.set_shader_parameter(&"coastal_transform_enabled", enabled and transform_enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", eikonal_phase_debug and monochromatic_debug and enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_amplitude_m", monochromatic_amplitude_m)
 		if not enabled:
 			continue
 		material.set_shader_parameter(&"coastal_field_texture", textures["field"])
 		material.set_shader_parameter(&"coastal_metrics_texture", textures["metrics"])
+		material.set_shader_parameter(&"coastal_phase_texture", textures["phase"])
 		material.set_shader_parameter(&"coastal_origin_xz", data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_extent_m", data.world_max_xz() - data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_k0_rad_m", data.k0_rad_m)
@@ -123,7 +130,7 @@ func set_coastal_time(simulation_time_s: float) -> void:
 
 
 func set_coastal_debug_field(field: int) -> void:
-	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.PHASE_OFFSET)
+	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.REACHABILITY)
 	_surface_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 	_wireframe_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 
@@ -168,7 +175,9 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
 		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 		material.set_shader_parameter(&"coastal_propagation_enabled", false)
+		material.set_shader_parameter(&"coastal_transform_enabled", false)
 		material.set_shader_parameter(&"coastal_monochromatic_debug", false)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", false)
 		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
 		for index in 3:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)

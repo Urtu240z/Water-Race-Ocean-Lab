@@ -92,8 +92,8 @@ func _validate_mapping_and_gpu_payload() -> void:
 	var outside = propagation.sample_propagation(Vector2(-40.0, 8.0))
 	_check(not outside.in_bounds, "mapping: bounds explícito")
 	var textures: Dictionary = propagation.build_gpu_textures()
-	_check(textures.has("field") and textures.has("metrics") and textures["field"] != null, "gpu payload: dos texturas derivadas del mismo dato")
-	_check(propagation.approximate_gpu_memory_bytes() == propagation.width * propagation.height * 32, "gpu payload: 32 B/nodo RGBA32F")
+	_check(textures.has("field") and textures.has("metrics") and textures.has("phase") and textures["field"] != null and textures["phase"] != null, "gpu payload: tres texturas derivadas del mismo dato")
+	_check(propagation.approximate_gpu_memory_bytes() == propagation.width * propagation.height * 48, "gpu payload: 48 B/nodo con fase/dirección RGBA32F")
 
 
 func _validate_determinism() -> void:

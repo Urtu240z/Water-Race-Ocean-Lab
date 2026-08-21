@@ -23,7 +23,7 @@ CoastalPropagationBaker
         ▼
 CoastalPropagationData
   ├─ CPU sample_propagation(world_xz)
-  └─ dos RGBA32F GPU (mismo grid/mapping)
+  └─ dos RGBA32F GPU en 3B (mismo grid/mapping)
         │
 OceanClipmapSurface: sólo LONG
   phase coordinate + shoaling; modo mono analítico opcional
@@ -39,7 +39,9 @@ uv = (world_xz - origin_xz) / ((width-1, height-1) * cell_size_m)
 
 Fuera de UV, la transformación se desactiva y LONG queda abierto. El payload
 es campo `(phase_offset, shoaling, local_k, valid)` y métricas
-`(depth, lambda, c, Cg)`: 32 B/nodo de VRAM, sin mipmaps ni readbacks.
+`(depth, lambda, c, Cg)`: en 3B.1 se añade un tercer RGBA32F de
+`(phase, dir_x, dir_z, reached)`, total 48 B/nodo de VRAM, sin mipmaps ni
+readbacks.
 
 ## Modelo físico
 
@@ -99,10 +101,12 @@ aproximación explícita en 3B, no una normal costeña final.
 
 `lab/benchmark/phase_3b_coastal_propagation_benchmark.gd` mide build, sample
 CPU y submit de texturas. No crea dispatches extra ni readbacks: OFF y ON
-tienen cero compute passes adicionales al FFT/clipmap; ON añade dos fetches
-RGBA32F a LONG y 32 B/nodo. El benchmark headless informa ese incremento de
-GPU estructural, no pretende ser un tiempo de GPU de Steam Deck; ese frame
-time requiere ejecutar el mismo perfil de clipmap en hardware objetivo.
+tienen cero compute passes adicionales al FFT/clipmap; 3B añade dos fetches
+RGBA32F a LONG y 32 B/nodo. 3B.1 conserva ese camino y suma una tercera
+textura (48 B/nodo) exclusivamente para su diagnóstico mono eikonal. El
+benchmark headless informa ese incremento de GPU estructural, no pretende ser
+un tiempo de GPU de Steam Deck; ese frame time requiere ejecutar el mismo
+perfil de clipmap en hardware objetivo.
 
 En Windows Godot 4.7 headless, grid 65×65 (mediana de 3): build **43.844 ms**,
 submit CPU de texturas **0.523 ms**, y sample CPU **2.500–2.781 µs/query**
