@@ -5,12 +5,15 @@ extends SceneTree
 ##   godot --path . --script res://lab/benchmark/phase_1d_capture.gd -- off|calm|race|rough
 ##
 ## Requiere VSync OFF y FPS sin límite (ya configurados en project.godot).
-## Misma resolución, cámara de referencia, seed y perfil de calidad en todos
-## los modos. El FPS se mide por tiempo de pared sobre una ventana de muestreo
-## fija; no declara GPU ms (usar el profiler externo: RenderDoc/Nsight/RGP).
+## Misma cámara de referencia, seed, resolución y perfil de calidad en todos
+## los modos. Flujo: 3 s de warmup real + 3 muestras de 5 s cada una; se
+## reporta la MEDIANA de FPS/frame_ms junto con cada muestra individual.
+## CPU process y physics se registran sólo como dato auxiliar; NO se declara
+## GPU ms (usar el profiler externo: RenderDoc/Nsight/RGP).
 
-const WARMUP_FRAMES := 120
-const SAMPLE_DURATION_SEC := 2.0
+const WARMUP_SECONDS := 3.0
+const SAMPLE_SECONDS := 5.0
+const SAMPLE_COUNT := 3
 
 const SEA_STATES := {
 	"off": -1,
@@ -20,12 +23,13 @@ const SEA_STATES := {
 }
 
 var _frame := 0
-var _sample_start_usec := 0
+var _mode := "race"
+var _phase := "init" # init -> warmup -> sampling -> done
+var _phase_start_usec := 0
 var _sample_frames := 0
 var _process_ms_sum := 0.0
 var _physics_ms_sum := 0.0
-var _sampling := false
-var _mode := "race"
+var _samples: Array[Dictionary] = []
 
 
 func _initialize() -> void:
@@ -50,33 +54,74 @@ func _process(_delta: float) -> bool:
 			module.toggle_enabled()
 		else:
 			module.set_sea_state(state)
-
-	if _frame <= WARMUP_FRAMES:
+		_phase = "warmup"
+		_phase_start_usec = Time.get_ticks_usec()
 		return false
-	if not _sampling:
-		_sampling = true
-		_sample_start_usec = Time.get_ticks_usec()
-		_sample_frames = 0
-		_process_ms_sum = 0.0
-		_physics_ms_sum = 0.0
-	_sample_frames += 1
-	_process_ms_sum += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
-	_physics_ms_sum += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
-	var elapsed_sec := float(Time.get_ticks_usec() - _sample_start_usec) / 1000000.0
-	if elapsed_sec >= SAMPLE_DURATION_SEC:
-		var fps := float(_sample_frames) / elapsed_sec
-		print("PHASE_1D_BENCHMARK mode=%s fps=%.2f frame_ms=%.3f cpu_process_ms=%.3f physics_ms=%.3f draw_calls=%d primitives=%d static_memory_mib=%.2f" % [
-			_mode,
-			fps,
-			1000.0 / maxf(fps, 1.0),
-			_process_ms_sum / float(_sample_frames),
-			_physics_ms_sum / float(_sample_frames),
-			int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
-			int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
-			Performance.get_monitor(Performance.MEMORY_STATIC) / (1024.0 * 1024.0),
-		])
-		quit(0)
+
+	match _phase:
+		"warmup":
+			if _elapsed_sec() >= WARMUP_SECONDS:
+				_start_sample()
+		"sampling":
+			_sample_frames += 1
+			_process_ms_sum += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			_physics_ms_sum += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+			if _elapsed_sec() >= SAMPLE_SECONDS:
+				_record_sample()
 	return false
+
+
+func _elapsed_sec() -> float:
+	return float(Time.get_ticks_usec() - _phase_start_usec) / 1000000.0
+
+
+func _start_sample() -> void:
+	_phase = "sampling"
+	_phase_start_usec = Time.get_ticks_usec()
+	_sample_frames = 0
+	_process_ms_sum = 0.0
+	_physics_ms_sum = 0.0
+
+
+func _record_sample() -> void:
+	var fps := float(_sample_frames) / _elapsed_sec()
+	var sample := {
+		"fps": fps,
+		"frame_ms": 1000.0 / maxf(fps, 1.0),
+		"cpu_process_ms": _process_ms_sum / float(maxi(_sample_frames, 1)),
+		"physics_ms": _physics_ms_sum / float(maxi(_sample_frames, 1)),
+		"draw_calls": int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+		"primitives": int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
+		"static_memory_mib": Performance.get_monitor(Performance.MEMORY_STATIC) / (1024.0 * 1024.0),
+	}
+	_samples.append(sample)
+	print("PHASE_1D_BENCHMARK_SAMPLE mode=%s sample=%d fps=%.2f frame_ms=%.3f cpu_process_ms=%.3f physics_ms=%.3f draw_calls=%d primitives=%d static_memory_mib=%.2f" % [
+		_mode, _samples.size(), sample.fps, sample.frame_ms, sample.cpu_process_ms, sample.physics_ms, sample.draw_calls, sample.primitives, sample.static_memory_mib,
+	])
+	if _samples.size() < SAMPLE_COUNT:
+		_start_sample()
+	else:
+		_finish()
+
+
+func _finish() -> void:
+	var median := _median_sample()
+	print("PHASE_1D_BENCHMARK mode=%s median_fps=%.2f median_frame_ms=%.3f cpu_process_ms=%.3f physics_ms=%.3f draw_calls=%d primitives=%d static_memory_mib=%.2f" % [
+		_mode, median.fps, median.frame_ms, median.cpu_process_ms, median.physics_ms, median.draw_calls, median.primitives, median.static_memory_mib,
+	])
+	quit(0)
+
+
+func _median_sample() -> Dictionary:
+	var sorted: Array[float] = []
+	for sample in _samples:
+		sorted.append(sample.fps)
+	sorted.sort()
+	var median_fps: float = sorted[sorted.size() / 2]
+	for sample in _samples:
+		if sample.fps == median_fps:
+			return sample
+	return _samples[_samples.size() - 1]
 
 
 func _use_race_camera() -> void:

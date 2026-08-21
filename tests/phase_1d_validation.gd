@@ -22,10 +22,13 @@ func _initialize() -> void:
 	_validate_identity()
 	_validate_band_parameters()
 	_validate_combined_hs()
+	_validate_domains()
+	_validate_measured_hs()
 	_validate_determinism()
 	_validate_distinct_states()
 	_validate_quality_independence()
 	_validate_module_source()
+	_validate_architecture()
 	change_scene_to_file("res://lab/lab_main.tscn")
 
 
@@ -81,6 +84,51 @@ func _validate_combined_hs() -> void:
 	_check(race_hs >= 0.4 and race_hs <= 0.8, "J: RACE dentro del rango físico 0.4–0.8 m")
 
 
+# A/B (1D.1). Dominios espectrales y ausencia de múltiplos simples.
+func _validate_domains() -> void:
+	var configs := SeaStateScript.build_cascades(SeaStateScript.State.RACE)
+	_check(configs[0].domain_size_m == 512.0, "A: LONG dominio 512 m")
+	_check(configs[1].domain_size_m == 137.0, "A: MID dominio 137 m")
+	_check(configs[2].domain_size_m == 37.0, "A: SHORT dominio 37 m")
+	_check(configs[0].resolution == 256 and configs[1].resolution == 256 and configs[2].resolution == 256, "A: resolución 256 en las tres bandas")
+	var ratio_long_mid := configs[0].domain_size_m / configs[1].domain_size_m
+	var ratio_mid_short := configs[1].domain_size_m / configs[2].domain_size_m
+	_check(not is_equal_approx(ratio_long_mid, float(int(round(ratio_long_mid)))), "B: LONG/MID no es múltiplo entero (%.4f)" % ratio_long_mid)
+	_check(not is_equal_approx(ratio_mid_short, float(int(round(ratio_mid_short)))), "B: MID/SHORT no es múltiplo entero (%.4f)" % ratio_mid_short)
+	_check(configs[0].max_wavelength_m < configs[0].domain_size_m and configs[1].max_wavelength_m < configs[1].domain_size_m and configs[2].max_wavelength_m < configs[2].domain_size_m, "A: cada banda cabe en su dominio")
+	var mid_sample_m := configs[1].domain_size_m / float(configs[1].resolution)
+	var short_sample_m := configs[2].domain_size_m / float(configs[2].resolution)
+	_check(mid_sample_m * 2.0 < configs[1].min_wavelength_m, "A: Nyquist MID (%.3f m) por debajo de λ=4 m" % (mid_sample_m * 2.0))
+	_check(short_sample_m * 2.0 < configs[2].min_wavelength_m, "A: Nyquist SHORT (%.3f m) por debajo de λ=0.5 m" % (short_sample_m * 2.0))
+
+
+# C/D (1D.1). Hs measured real tras build_h0, no sólo target.
+func _validate_measured_hs() -> void:
+	var expected_targets := {
+		SeaStateScript.State.CALM: [0.18, 0.12, 0.05],
+		SeaStateScript.State.RACE: [0.50, 0.38, 0.15],
+		SeaStateScript.State.ROUGH: [0.85, 0.65, 0.30],
+	}
+	var expected_combined := {
+		SeaStateScript.State.CALM: 0.222,
+		SeaStateScript.State.RACE: 0.646,
+		SeaStateScript.State.ROUGH: 1.111,
+	}
+	for state in [SeaStateScript.State.CALM, SeaStateScript.State.RACE, SeaStateScript.State.ROUGH]:
+		var state_name := SeaStateScript.state_name(state)
+		var configs := _build_state_with_h0(state, _SEED)
+		var measured_variance := 0.0
+		for index in 3:
+			var config := configs[index]
+			var target: float = expected_targets[state][index]
+			_check(_within(config.measured_hs_m, target, 0.005), "C: %s/%s measured Hs %.3f ≈ %.2f m" % [state_name, _BAND_IDS[index], config.measured_hs_m, target])
+			measured_variance += config.measured_hs_m * config.measured_hs_m
+		var combined_measured := sqrt(measured_variance)
+		var expected: float = expected_combined[state]
+		_check(_within(combined_measured, expected, 0.005), "D: %s Hs combinada measured %.3f ≈ %.3f m" % [state_name, combined_measured, expected])
+		print("INFO: %s Hs measured LONG %.3f | MID %.3f | SHORT %.3f | combinada %.3f m" % [state_name, configs[0].measured_hs_m, configs[1].measured_hs_m, configs[2].measured_hs_m, combined_measured])
+
+
 # D/E. Determinismo por seed y por estado.
 func _validate_determinism() -> void:
 	for state in [SeaStateScript.State.CALM, SeaStateScript.State.RACE, SeaStateScript.State.ROUGH]:
@@ -134,6 +182,14 @@ func _validate_module_source() -> void:
 		_check(forbidden not in solver_source, "M: el worker FFT no usa %s" % forbidden)
 
 
+# E (1D.1). Dirección de dependencia: SeaStateConfig -> OpenOceanFFTConfig.
+func _validate_architecture() -> void:
+	var config_source := _read_file("res://ocean_v3/core/open_ocean_fft_config.gd")
+	_check(not config_source.contains("SeaStateConfig"), "E: OpenOceanFFTConfig no depende de SeaStateConfig")
+	var sea_state_source := _read_file("res://ocean_v3/core/sea_state_config.gd")
+	_check(sea_state_source.contains("OpenOceanFFTConfig"), "E: SeaStateConfig crea OpenOceanFFTConfig")
+
+
 # L (runtime). Cambiar de preset conserva un único módulo registrado.
 func _validate_runtime_preset_switch() -> void:
 	var registry := root.get_node_or_null("OceanModuleRegistry")
@@ -160,6 +216,14 @@ func _build_state_h0(state: int, simulation_seed: int) -> Array[PackedByteArray]
 	for config in SeaStateScript.build_cascades(state):
 		result.append(SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id)))
 	return result
+
+
+func _build_state_with_h0(state: int, simulation_seed: int) -> Array[OpenOceanFFTConfig]:
+	# Devuelve las configs con measured_hs_m/out_of_band poblados por build_h0.
+	var configs: Array[OpenOceanFFTConfig] = SeaStateScript.build_cascades(state)
+	for config in configs:
+		SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id))
+	return configs
 
 
 func _configs_differ(a: Array[OpenOceanFFTConfig], b: Array[OpenOceanFFTConfig]) -> bool:

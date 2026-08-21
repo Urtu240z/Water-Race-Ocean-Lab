@@ -76,13 +76,16 @@ static func _apply_invariant(config: OpenOceanFFTConfig, band_index: int) -> voi
 			config.transition_width_m = 4.0
 			config.short_wave_damping_m = 0.35
 		1:
-			config.domain_size_m = 128.0
+			# 137 m: no múltiplo simple de 512 (137 = primo), rompe la
+			# periodicidad combinada de las tres cascadas.
+			config.domain_size_m = 137.0
 			config.min_wavelength_m = 4.0
 			config.max_wavelength_m = 20.0
 			config.transition_width_m = 0.75
 			config.short_wave_damping_m = 0.35
 		2:
-			config.domain_size_m = 32.0
+			# 37 m: no múltiplo simple de 137 ni de 512.
+			config.domain_size_m = 37.0
 			config.min_wavelength_m = 0.5
 			config.max_wavelength_m = 5.0
 			config.transition_width_m = 0.15

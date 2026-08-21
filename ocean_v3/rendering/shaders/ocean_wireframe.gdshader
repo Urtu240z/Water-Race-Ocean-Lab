@@ -5,8 +5,8 @@ uniform sampler2D displacement_long : repeat_enable, filter_linear;
 uniform sampler2D displacement_mid : repeat_enable, filter_linear;
 uniform sampler2D displacement_short : repeat_enable, filter_linear;
 uniform float domain_long_m = 512.0;
-uniform float domain_mid_m = 128.0;
-uniform float domain_short_m = 32.0;
+uniform float domain_mid_m = 137.0;
+uniform float domain_short_m = 37.0;
 uniform vec2 camera_world_xz = vec2(0.0);
 uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
 uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
@@ -34,7 +34,7 @@ vec3 level_color(float level) {
 
 float periodic_grid(vec2 world_xz, float domain_size_m) {
 	vec2 cell = abs(fract(world_xz / domain_size_m + 0.5) - 0.5);
-	return 1.0 - smoothstep(0.485, 0.5, max(cell.x, cell.y));
+	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
 }
 
 void vertex() {

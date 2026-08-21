@@ -49,9 +49,3 @@ func compute_pass_count() -> int:
 func approximate_gpu_bytes() -> int:
 	# H0 + 4 ping-pong RGBA32F + displacement RGBA32F + normal RGBA16F.
 	return resolution * resolution * (16 * 6 + 8)
-
-
-static func reference_cascades() -> Array[OpenOceanFFTConfig]:
-	# RACE es el estado principal de Water Race y conserva la identidad de Fase 1B.
-	# La fuente única de verdad de los estados es SeaStateConfig.
-	return SeaStateConfig.build_cascades(SeaStateConfig.State.RACE)

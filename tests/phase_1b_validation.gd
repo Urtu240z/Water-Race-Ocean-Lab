@@ -4,12 +4,13 @@ extends SceneTree
 const ConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const ClockScript := preload("res://ocean_v3/core/simulation_clock.gd")
+const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 
 var _failures := 0
 
 
 func _initialize() -> void:
-	var configs: Array[OpenOceanFFTConfig] = ConfigScript.reference_cascades()
+	var configs: Array[OpenOceanFFTConfig] = SeaStateScript.build_cascades(SeaStateScript.State.RACE)
 	var simulation_seed := 20260820
 	var first_generation: Array[PackedByteArray] = []
 	for config in configs:
@@ -82,7 +83,7 @@ func _validate_clock() -> void:
 func _validate_band_isolation_is_non_mutating(_config: OpenOceanFFTConfig, simulation_seed: int) -> void:
 	# Usa una configuración nueva: las pruebas de amplitud cero anteriores no deben
 	# trivializar la comprobación de que el aislamiento no reconstituye H0.
-	var config: OpenOceanFFTConfig = ConfigScript.reference_cascades()[0]
+	var config: OpenOceanFFTConfig = SeaStateScript.build_cascades(SeaStateScript.State.RACE)[0]
 	var cascade_seed := SpectrumScript.derive_cascade_seed(simulation_seed, config.id)
 	var before := SpectrumScript.build_h0_rgba32f(config, cascade_seed)
 	# El modo ALL/LONG/MID/SHORT sólo enmascara la contribución de render/dispatch.
