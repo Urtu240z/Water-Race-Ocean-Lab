@@ -1,0 +1,24 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce RTX 4070 Laptop GPU
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+OceanQuery: backend nativo activo (OceanQueryNative).
+inicio: demo instanciada (tiempo corriendo hasta primer dispatch)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:696)
+tiempo congelado tras warmup; capturando BANCO OFF...
+horneando warp (banco)...
+uniforms warp_enabled=true transform=true prop=true long_fade=(32.0, 260.0)
+warp_sample(10,0) deep=(23.782, -10.30342) detJ=7.04090452194214 valid=true
+capturando BANCO ON...
+capturando FLAT OFF...
+horneando warp flat...
+capturando FLAT ON...
+bank_off_vs_on mean_abs=0.0 max_abs=0.0 pct_changed=0.0%
+flat_off_vs_on mean_abs=0.00000391854279 max_abs=0.00784313725308 pct_changed=0.0%
+sanity: varianza_banco=0.01367623963229 varianza_flat=0.01367626839632
+FAIL: el banco no cambia con Coastal ON (<0.05% pÃ­xeles)
+PIXEL_SCENE: 1 FAIL
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:696)

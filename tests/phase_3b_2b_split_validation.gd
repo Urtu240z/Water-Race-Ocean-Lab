@@ -6,7 +6,7 @@ extends SceneTree
 ##    (S(-k) = conj(S(k))), luego campo espacial real.
 ## 3. Reconstrucción espacial: evaluando la suma de modos en el mismo punto,
 ##    height/displacement del split suman el original.
-## 4. % energía asignada a LONG_COASTAL (RACE y ROUGH).
+## 4. Métricas honestas del split: potencia H0, varianza y covarianza.
 
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
@@ -38,7 +38,7 @@ func _validate_state(state: int, state_name: String) -> void:
 	var split: Dictionary = SpectrumScript.build_h0_split_rgba32f(long_config, seed, INNER_DEG, OUTER_DEG)
 	var coastal_bytes: PackedByteArray = split["coastal"]
 	var remainder_bytes: PackedByteArray = split["remainder"]
-	var fraction: float = split["coastal_energy_fraction"]
+	var metrics: Dictionary = split["coastal_energy_metrics"]
 
 	# 1) Suma exacta byte a byte (float32: w + (1-w) = 1 exacto en la misma op).
 	var original := original_bytes.to_float32_array()
@@ -68,14 +68,15 @@ func _validate_state(state: int, state_name: String) -> void:
 			var zw_k_im: float = comp[base + 3]
 			max_hermitian_error = maxf(max_hermitian_error,
 				absf(xy_neg_re - zw_k_re) + absf(xy_neg_im + zw_k_im))
-	print("3B.2B SPLIT " + state_name + " sum_max_err=" + str(max_sum_error) + " hermitian_max_err=" + str(max_hermitian_error) + " coastal_energy=" + str(100.0 * fraction) + "%")
+	print("3B.2B SPLIT " + state_name + " sum_max_err=" + str(max_sum_error) + " hermitian_max_err=" + str(max_hermitian_error) + " weighted_h0_coastal=" + str(metrics["weighted_h0_power_coastal"]) + " variance_coastal=" + str(metrics["reconstructed_spatial_variance_coastal"]) + " covariance=" + str(metrics["coastal_remainder_covariance"]) + " total_variance=" + str(metrics["total_reconstructed_variance"]))
 	# La suma byte a byte no es exacta en float32: a*w + a*(1-w) redondea en cada
 	# multiplicación (a ~ 10-100 por discrete_scale ~ 804; ulp ~ 1e-5). La
 	# reconstrucción FÍSICA (suma de campos espaciales) se mide en el test
 	# SPATIAL siguiente y debe ser ~1e-9. Aquí exigimos redondeo float32 acotado.
 	_check(max_sum_error < 1.0e-3, "%s: coastal+remainder reconstruye LONG (redondeo float32 acotado)" % state_name)
 	_check(max_hermitian_error < 1.0e-5, "%s: cada componente Hermitiano (campo real)" % state_name)
-	_check(fraction > 0.10 and fraction < 0.90, "%s: fracción coastal en rango plausible" % state_name)
+	_check(metrics["weighted_h0_power_coastal"] > 0.0 and metrics["weighted_h0_power_coastal"] < metrics["weighted_h0_power_total"], "%s: potencia H0 coastal ponderada en rango" % state_name)
+	_check(is_equal_approx(metrics["total_reconstructed_variance"], metrics["original_reconstructed_variance"]), "%s: varianza reconstruida conserva total con covarianza" % state_name)
 
 	# 3) Reconstrucción espacial: evaluar height/Dx/Dz por suma de modos.
 	var spatial := _eval_spatial_split(long_config, seed, original, coastal, remainder, n)

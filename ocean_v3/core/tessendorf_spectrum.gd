@@ -60,7 +60,7 @@ static func build_h0_split_rgba32f(config: OpenOceanFFTConfig, simulation_seed: 
 	return {
 		"coastal": coastal.to_byte_array(),
 		"remainder": remainder.to_byte_array(),
-		"coastal_energy_fraction": _angular_energy_fraction(h0, n, delta_k, wind, inner_deg, outer_deg),
+		"coastal_energy_metrics": _split_energy_metrics(h0, n, delta_k, wind, inner_deg, outer_deg),
 	}
 
 
@@ -76,20 +76,54 @@ static func _angular_weight(k: Vector2, wind: Vector2, inner_deg: float, outer_d
 	return 1.0 - smoothstep(0.0, 1.0, t)
 
 
-static func _angular_energy_fraction(h0: PackedVector2Array, n: int, delta_k: float,
-		wind: Vector2, inner_deg: float, outer_deg: float) -> float:
-	## Fracción de energía |H0|² dentro de la máscara coastal (para reportes).
+static func _split_energy_metrics(h0: PackedVector2Array, n: int, delta_k: float,
+		wind: Vector2, inner_deg: float, outer_deg: float) -> Dictionary:
+	## H0_COASTAL y H0_REMAINDER son componentes correlacionados. Por ello no
+	## existe una fracción de energía única y aditiva: se informa potencia H0
+	## ponderada y estadística espacial reconstruida con su covarianza.
 	var half := float(n) * 0.5
-	var total := 0.0
-	var coastal := 0.0
+	var total_h0_power := 0.0
+	var coastal_weighted_h0_power := 0.0
+	var remainder_weighted_h0_power := 0.0
+	var coastal_variance_numerator := 0.0
+	var remainder_variance_numerator := 0.0
+	var covariance_numerator := 0.0
+	var original_variance_numerator := 0.0
 	for y in n:
 		for x in n:
 			var index := y * n + x
 			var k := Vector2(float(x) - half, float(y) - half) * delta_k
-			var energy := h0[index].length_squared()
-			total += energy
-			coastal += energy * _angular_weight(k, wind, inner_deg, outer_deg)
-	return coastal / total if total > 0.0 else 0.0
+			var weight := _angular_weight(k, wind, inner_deg, outer_deg)
+			var negative_index := ((n - y) % n) * n + ((n - x) % n)
+			var k_neg := Vector2(float(negative_index % n) - half, float(negative_index / n) - half) * delta_k
+			var weight_neg := _angular_weight(k_neg, wind, inner_deg, outer_deg)
+			var value := h0[index]
+			var negative_conjugate := Vector2(h0[negative_index].x, -h0[negative_index].y)
+			var coastal_height := value * weight + negative_conjugate * weight_neg
+			var remainder_height := value * (1.0 - weight) + negative_conjugate * (1.0 - weight_neg)
+			total_h0_power += value.length_squared()
+			coastal_weighted_h0_power += (value * weight).length_squared()
+			remainder_weighted_h0_power += (value * (1.0 - weight)).length_squared()
+			coastal_variance_numerator += coastal_height.length_squared()
+			remainder_variance_numerator += remainder_height.length_squared()
+			covariance_numerator += coastal_height.dot(remainder_height)
+			original_variance_numerator += (value + negative_conjugate).length_squared()
+	var normalization := pow(float(n), 4.0)
+	var coastal_variance := coastal_variance_numerator / normalization
+	var remainder_variance := remainder_variance_numerator / normalization
+	var covariance := covariance_numerator / normalization
+	return {
+		"weighted_h0_power_coastal": coastal_weighted_h0_power,
+		"weighted_h0_power_remainder": remainder_weighted_h0_power,
+		"weighted_h0_power_total": total_h0_power,
+		"weighted_h0_power_coastal_fraction": coastal_weighted_h0_power / total_h0_power if total_h0_power > 0.0 else 0.0,
+		"weighted_h0_power_remainder_fraction": remainder_weighted_h0_power / total_h0_power if total_h0_power > 0.0 else 0.0,
+		"reconstructed_spatial_variance_coastal": coastal_variance,
+		"reconstructed_spatial_variance_remainder": remainder_variance,
+		"coastal_remainder_covariance": covariance,
+		"total_reconstructed_variance": coastal_variance + remainder_variance + 2.0 * covariance,
+		"original_reconstructed_variance": original_variance_numerator / normalization,
+	}
 
 
 static func _build_h0_vector(config: OpenOceanFFTConfig, simulation_seed: int) -> PackedVector2Array:

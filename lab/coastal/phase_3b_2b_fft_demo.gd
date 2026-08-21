@@ -30,13 +30,6 @@ var _coastal_enabled := true
 func _ready() -> void:
 	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.FORWARD)
 	_grazing_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
-	# 3B.2B: el banco de la demo cubre ±64 m; el fade LONG estándar (768-2500 m)
-	# haría LONG (y el warp) invisible sobre el banco. Ajustamos el fade LONG de
-	# la DEMO para que el banco quede dentro de la zona LONG y la refracción sea
-	# visible. Es config de demo, NO del sistema.
-	var clipmap = _ocean.get_node("OceanClipmapSurface").clipmap_config
-	clipmap.long_fade_range_m = Vector2(32.0, 260.0)
-	_ocean.get_node("OceanClipmapSurface").apply_fade_ranges(clipmap)
 	_bathymetry = _build_bank_bathymetry()
 	_build_seabed_debugs(_bathymetry)
 	_set_seabed_mode(_seabed_mode)

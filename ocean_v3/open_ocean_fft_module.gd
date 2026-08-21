@@ -62,12 +62,12 @@ var _sea_state: int = SeaStateScript.State.RACE
 var _sea_state_initialized := false
 var _coastal_propagation = null
 var _coastal_warp = null
-var _coastal_energy_fraction := 0.0
+var _coastal_energy_metrics: Dictionary = {}
 
 
-## Fracción de energía LONG asignada a LONG_COASTAL (máscara direccional).
-func coastal_energy_fraction() -> float:
-	return _coastal_energy_fraction
+## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
+func coastal_energy_metrics() -> Dictionary:
+	return _coastal_energy_metrics.duplicate()
 
 
 func _ready() -> void:
@@ -86,7 +86,7 @@ func _ready() -> void:
 	# usando el LONG original (configs[0]); sólo el render usa la 4.ª cascada.
 	var long_config: OpenOceanFFTConfig = configs[0]
 	var split: Dictionary = SpectrumScript.build_h0_split_rgba32f(long_config, SpectrumScript.derive_cascade_seed(SimulationClock.simulation_seed, long_config.id), coastal_split_inner_deg, coastal_split_outer_deg)
-	_coastal_energy_fraction = split["coastal_energy_fraction"]
+	_coastal_energy_metrics = split["coastal_energy_metrics"]
 	_cascades.append(_make_cascade(long_config, split["coastal"], "Ocean2B.LONG_COASTAL"))
 	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
 	for index in [1, 2]:

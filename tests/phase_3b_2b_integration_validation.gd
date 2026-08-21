@@ -3,7 +3,7 @@ extends SceneTree
 ##
 ## 1. El módulo crea LONG_COASTAL + LONG_REMAINDER + MID + SHORT (4 cascadas).
 ## 2. dispatches_per_update = suma de 4 configs (una IFFT LONG adicional).
-## 3. coastal_energy_fraction expuesta.
+## 3. métricas de potencia/varianza/covarianza expuestas.
 ## 4. Flat ON ≈ OFF: en bathymetry plana el warp es identidad, luego
 ##    LONG_COASTAL(deep) + LONG_REMAINDER(world) reconstruye LONG(world);
 ##    medimos el error de composición sobre campos CPU.
@@ -32,12 +32,14 @@ func _initialize() -> void:
 		quit(1)
 		return
 	var cascades: Array = module.get("_cascades")
-	print("3B.2B INTEG cascades=", cascades.size(), " dispatches=", module.dispatches_per_update, " coastal_energy=", module.coastal_energy_fraction())
+	var coastal_metrics: Dictionary = module.coastal_energy_metrics()
+	print("3B.2B INTEG cascades=", cascades.size(), " dispatches=", module.dispatches_per_update, " weighted_h0_coastal=", coastal_metrics["weighted_h0_power_coastal"], " total_variance=", coastal_metrics["total_reconstructed_variance"])
 	_check(cascades.size() == 4, "integ: 4 cascadas de render (LONG_COASTAL/REMAINDER/MID/SHORT)")
 	var long_config = SeaStateScript.build_cascades(SeaStateScript.State.RACE)[0]
 	var baseline_dispatches := 3 * long_config.compute_pass_count()
 	_check(module.dispatches_per_update == 4 * long_config.compute_pass_count(), "integ: una IFFT LONG adicional (%d -> %d dispatches)" % [baseline_dispatches, module.dispatches_per_update])
-	_check(module.coastal_energy_fraction() > 0.5 and module.coastal_energy_fraction() < 0.9, "integ: fracción coastal expuesta en rango")
+	_check(coastal_metrics["weighted_h0_power_coastal"] > 0.0 and coastal_metrics["weighted_h0_power_coastal"] < coastal_metrics["weighted_h0_power_total"], "integ: potencia H0 coastal ponderada expuesta")
+	_check(is_equal_approx(coastal_metrics["total_reconstructed_variance"], coastal_metrics["original_reconstructed_variance"]), "integ: varianza total reconstruida con covarianza")
 
 	# --- 4-5: reconstrucción CPU con warp identidad (flat). ---
 	_validate_flat_composition()
