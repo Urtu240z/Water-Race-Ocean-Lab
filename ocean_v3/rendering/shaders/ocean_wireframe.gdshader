@@ -1,12 +1,15 @@
 shader_type spatial;
 render_mode wireframe, cull_disabled, unshaded;
 
-uniform sampler2D displacement_long : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D displacement_mid : repeat_enable, filter_linear;
 uniform sampler2D displacement_short : repeat_enable, filter_linear;
 uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
-uniform float domain_long_m = 512.0;
+uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform float domain_long_coastal_m = 512.0;
+uniform float domain_long_remainder_m = 512.0;
 uniform float domain_mid_m = 137.0;
 uniform float domain_short_m = 37.0;
 uniform vec2 camera_world_xz = vec2(0.0);
@@ -20,11 +23,15 @@ uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
 uniform bool coastal_transform_enabled = false;
 uniform bool coastal_monochromatic_debug = false;
+uniform bool coastal_warp_enabled = false;
 uniform int coastal_debug_field = 0;
 uniform float coastal_monochromatic_amplitude_m = 0.35;
 uniform vec2 coastal_origin_xz = vec2(0.0);
 uniform vec2 coastal_extent_m = vec2(1.0);
 uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
+uniform vec2 coastal_warp_origin_xz = vec2(0.0);
+uniform vec2 coastal_warp_extent_m = vec2(1.0);
+uniform float coastal_warp_detj_safe = 0.5;
 uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
@@ -60,6 +67,17 @@ bool has_coastal_data(vec2 uv, vec4 field_data) {
 	return coastal_propagation_enabled && coastal_transform_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
 }
 
+vec4 warp_deep_sample(vec2 world_xz) {
+	vec2 uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
+	vec2 uv_clamped = clamp(uv, vec2(0.0), vec2(1.0));
+	vec4 warp = textureLod(coastal_warp_texture, uv_clamped, 0.0);
+	float det_j = warp.b;
+	float confidence = smoothstep(0.0, coastal_warp_detj_safe, det_j);
+	confidence *= warp.a;
+	confidence *= step(uv.x, 1.0) * step(uv.y, 1.0) * step(0.0, uv.x) * step(0.0, uv.y);
+	return vec4(warp.xy, confidence, 0.0);
+}
+
 void vertex() {
 	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	ocean_world_xz = world_xz;
@@ -74,10 +92,18 @@ void vertex() {
 		coastal_field = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 		coastal_metrics = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 		bool coast_active = has_coastal_data(coast_uv, coastal_field);
-		vec2 long_sample_xz = world_xz;
-		if (coast_active) long_sample_xz += coastal_incoming_direction_xz * (coastal_field.r / max(coastal_k0_rad_m, 0.0001));
-		vec3 displacement = textureLod(displacement_long, spectrum_uv(long_sample_xz, domain_long_m), 0.0).rgb * long_weight;
-		if (coast_active) displacement *= coastal_field.g;
+		vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
+		if (coast_active && coastal_warp_enabled) {
+			warp_sample = warp_deep_sample(world_xz);
+		}
+		vec2 deep_xz = warp_sample.xy;
+		float warp_confidence = warp_sample.z;
+		vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
+		vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
+		vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
+		if (coast_active) long_coastal *= coastal_field.g;
+		vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
+		vec3 displacement = (long_coastal + long_remainder) * long_weight;
 		displacement += textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb * mid_weight;
 		displacement += textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb * short_weight;
 		if (coastal_monochromatic_debug && coast_active) {
@@ -91,7 +117,7 @@ void vertex() {
 void fragment() {
 	vec3 color = clipmap_lod_debug ? level_color(clipmap_level) : vec3(0.68, 0.91, 1.0);
 	if (periodicity_debug) {
-		float lines = max(periodic_grid(ocean_world_xz, domain_long_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
+		float lines = max(periodic_grid(ocean_world_xz, domain_long_coastal_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
 	if (coastal_debug_field > 0 && coastal_propagation_enabled) {

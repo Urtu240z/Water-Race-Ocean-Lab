@@ -14,7 +14,7 @@ func _process(_delta: float) -> void:
 		fft_line = "FFT bands: %s | %s | %d cascades | %d dispatches | Hs %.3f m" % [
 			fft_module.band_debug_name(),
 			"ON" if fft_module.is_fft_enabled() else "OFF",
-			fft_module.configs.size(),
+			fft_module.render_cascade_count(),
 			fft_module.dispatches_per_update if fft_module.is_fft_enabled() else 0,
 			fft_module.combined_hs_m(),
 		]

@@ -1,16 +1,20 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-uniform sampler2D displacement_long : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D displacement_mid : repeat_enable, filter_linear;
 uniform sampler2D displacement_short : repeat_enable, filter_linear;
-uniform sampler2D normal_long : repeat_enable, filter_linear;
+uniform sampler2D normal_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D normal_mid : repeat_enable, filter_linear;
 uniform sampler2D normal_short : repeat_enable, filter_linear;
 uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
-uniform float domain_long_m = 512.0;
+uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform float domain_long_coastal_m = 512.0;
+uniform float domain_long_remainder_m = 512.0;
 uniform float domain_mid_m = 137.0;
 uniform float domain_short_m = 37.0;
 uniform vec2 camera_world_xz = vec2(0.0);
@@ -26,11 +30,15 @@ uniform bool coastal_propagation_enabled = false;
 uniform bool coastal_transform_enabled = false;
 uniform bool coastal_monochromatic_debug = false;
 uniform bool coastal_eikonal_phase_debug = false;
+uniform bool coastal_warp_enabled = false;
 uniform int coastal_debug_field = 0;
 uniform float coastal_monochromatic_amplitude_m = 0.35;
 uniform vec2 coastal_origin_xz = vec2(0.0);
 uniform vec2 coastal_extent_m = vec2(1.0);
 uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
+uniform vec2 coastal_warp_origin_xz = vec2(0.0);
+uniform vec2 coastal_warp_extent_m = vec2(1.0);
+uniform float coastal_warp_detj_safe = 0.5;
 uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
@@ -77,6 +85,24 @@ bool has_coastal_data(vec2 uv, vec4 field_data) {
 	return coastal_propagation_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
 }
 
+// 3B.2B: warp world -> deep con blend de confianza.
+// Devuelve vec4(deep_x, deep_z, confidence, 0). confidence = 1 en SAFE,
+// suave 0..1 en NEAR_CAUSTIC, 0 en inválido/fuera/folded.
+vec4 warp_deep_sample(vec2 world_xz) {
+	vec2 uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
+	vec2 uv_clamped = clamp(uv, vec2(0.0), vec2(1.0));
+	vec4 warp = textureLod(coastal_warp_texture, uv_clamped, 0.0);
+	float det_j = warp.b;
+	// Blend suave según el Jacobiano: SAFE -> 1, NEAR_CAUSTIC -> 0..1, folded -> 0.
+	// warp.a (valid 0/1, interpolado en bordes por filter_linear) apaga el warp
+	// fuera de la zona válida con fade natural (evita seams).
+	float confidence = smoothstep(0.0, coastal_warp_detj_safe, det_j);
+	confidence *= warp.a;
+	// Fuera del rectángulo del warp: sin warp (confidence 0).
+	confidence *= step(uv.x, 1.0) * step(uv.y, 1.0) * step(0.0, uv.x) * step(0.0, uv.y);
+	return vec4(warp.xy, confidence, 0.0);
+}
+
 void vertex() {
 	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	ocean_world_xz = world_xz;
@@ -94,32 +120,42 @@ void vertex() {
 	bool coast_transform_active = coastal_transform_enabled && coast_active;
 	float phase_offset = coastal_field.r;
 	float shoaling = coastal_field.g;
-	vec2 long_sample_xz = world_xz;
-	if (coast_transform_active) {
-		// sample_offset = phase_offset / k0. El signo + se valida con el
-		// monocromático: k_local = k0 + d(phase_offset)/ds.
-		long_sample_xz += coastal_incoming_direction_xz * (phase_offset / max(coastal_k0_rad_m, 0.0001));
+
+	// 3B.2B: LONG se compone de LONG_COASTAL (posiblemente warpeada) +
+	// LONG_REMAINDER (siempre open). El warp sólo aplica a LONG_COASTAL.
+	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
+	if (coast_transform_active && coastal_warp_enabled) {
+		warp_sample = warp_deep_sample(world_xz);
 	}
-	vec3 long_displacement = textureLod(displacement_long, spectrum_uv(long_sample_xz, domain_long_m), 0.0).rgb;
+	vec2 deep_xz = warp_sample.xy;
+	float warp_confidence = warp_sample.z;
+	// LONG_COASTAL: sampleo en deep (si warp activo) con blend -> open (sin warp).
+	vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
+	vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
+	vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
 	if (coast_transform_active) {
-		long_displacement *= shoaling;
+		long_coastal *= shoaling;
 	}
+	// LONG_REMAINDER: siempre open-ocean.
+	vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
+	vec3 long_displacement = long_coastal + long_remainder;
 	vec3 mid_displacement = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb;
 	vec3 short_displacement = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb;
 	vec3 displacement = long_displacement * long_weight + mid_displacement * mid_weight + short_displacement * short_weight;
 
-	vec3 long_normal = normalize(textureLod(normal_long, spectrum_uv(long_sample_xz, domain_long_m), 0.0).rgb);
-	vec3 mid_normal = normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb);
-	vec3 short_normal = normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb);
-	// Aproximación 3B de regla de cadena: misma coordenada/factor de LONG.
-	// La derivada espacial de phase_offset queda explícitamente para una fase posterior.
-	vec2 slope = slope_from_normal(long_normal) * long_weight * (coast_transform_active ? shoaling : 1.0);
-	slope += slope_from_normal(mid_normal) * mid_weight;
-	slope += slope_from_normal(short_normal) * short_weight;
+	// Normales en slope space: slope_total = suma de slopes por banda.
+	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
+	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
+	vec3 long_coastal_normal = normalize(mix(long_coastal_normal_open, long_coastal_normal_warped, warp_confidence));
+	vec2 slope = slope_from_normal(long_coastal_normal) * long_weight * (coast_transform_active ? shoaling : 1.0);
+	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
+	slope += slope_from_normal(long_remainder_normal) * long_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
+
 	if (coastal_monochromatic_debug) {
-		// Con el transform 3B OFF se conserva la referencia profunda
-		// A*cos(k0*x-omega*t) en todo el plano, salvo debug Eikonal explícito.
+		// Instrumento 3B/3B.1: onda mono (no FFT), referencia para el transform.
 		bool eikonal_active = coastal_eikonal_phase_debug && coast_active && coastal_phase_data.a > 0.5;
 		float mono_phase_offset = coast_transform_active ? phase_offset : 0.0;
 		float mono_shoaling = coast_transform_active ? shoaling : 1.0;
@@ -156,9 +192,6 @@ void vertex() {
 
 
 void fragment() {
-	// Modo normal simple (0 y 1): agua opaca azul/gris iluminada.
-	// Modos de diagnóstico (2 NORMALS, 3 SLOPE): unlit/emission, independientes
-	// del sol del laboratorio y de la exposición, para leer pendientes.
 	vec3 color = base_color;
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
@@ -174,8 +207,6 @@ void fragment() {
 		color = mix(slope_valley_color, slope_crest_color, shade);
 	}
 	if (coastal_mono_active > 0.5) {
-		// Bandas de fase mono: los máximos son líneas cyan/blancas estrechas,
-		// independientes de luz, normal, specular o exposición.
 		float crest = 0.5 + 0.5 * cos(coastal_mono_phase);
 		float crest_line = smoothstep(0.88, 0.985, crest);
 		color = mix(vec3(0.005, 0.025, 0.12), vec3(0.03, 0.34, 0.68), pow(crest, 1.6));
@@ -198,7 +229,7 @@ void fragment() {
 		color = level_color(clipmap_level);
 	}
 	if (periodicity_debug) {
-		float lines = max(periodic_grid(ocean_world_xz, domain_long_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
+		float lines = max(periodic_grid(ocean_world_xz, domain_long_coastal_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
 

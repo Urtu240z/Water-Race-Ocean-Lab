@@ -12,6 +12,7 @@ const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.
 const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
 const CoastalBakerScript := preload("res://ocean_v3/coastal/coastal_propagation_baker.gd")
 const CoastalEikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
+const WarpBakerScript := preload("res://ocean_v3/coastal/coastal_warp_baker.gd")
 
 enum BandDebug {
 	ALL,
@@ -38,6 +39,11 @@ enum BandDebug {
 @export_range(0.01, 2.0, 0.01) var coastal_monochromatic_amplitude_m := 0.35
 # 3B.1: sólo instrumento MONO; nunca warp definitivo del FFT direccional.
 @export var coastal_eikonal_refraction_debug := false
+# 3B.2B: split direccional de LONG (COASTAL / REMAINDER).
+# Máscara angular suave: plena 1 hasta inner_deg, falloff hasta 0 en outer_deg.
+@export_range(0.0, 60.0, 1.0) var coastal_split_inner_deg := 20.0
+@export_range(20.0, 90.0, 1.0) var coastal_split_outer_deg := 35.0
+@export var coastal_warp_enabled := true
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -55,6 +61,13 @@ var _band_debug: int = BandDebug.ALL
 var _sea_state: int = SeaStateScript.State.RACE
 var _sea_state_initialized := false
 var _coastal_propagation = null
+var _coastal_warp = null
+var _coastal_energy_fraction := 0.0
+
+
+## Fracción de energía LONG asignada a LONG_COASTAL (máscara direccional).
+func coastal_energy_fraction() -> float:
+	return _coastal_energy_fraction
 
 
 func _ready() -> void:
@@ -67,23 +80,22 @@ func _ready() -> void:
 		if not config.is_valid():
 			push_error("ConfiguraciÃ³n FFT invÃ¡lida para %s." % config.id)
 			return
-		var displacement := Texture2DRD.new()
-		var normal := Texture2DRD.new()
-		var solver := SolverScript.new()
-		var h0_data := _build_h0(config, SimulationClock.simulation_seed)
-		h0_datas.append(h0_data)
-		_cascades.append({
-			"config": config,
-			"solver": solver,
-			"displacement": displacement,
-			"normal": normal,
-		})
-		RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, "Ocean1B.%s" % config.id))
+		h0_datas.append(_build_h0(config, SimulationClock.simulation_seed))
+	# 3B.2B: LONG se divide en LONG_COASTAL + LONG_REMAINDER (misma física del
+	# config LONG, H0 diferentes por máscara direccional). La query física sigue
+	# usando el LONG original (configs[0]); sólo el render usa la 4.ª cascada.
+	var long_config: OpenOceanFFTConfig = configs[0]
+	var split: Dictionary = SpectrumScript.build_h0_split_rgba32f(long_config, SpectrumScript.derive_cascade_seed(SimulationClock.simulation_seed, long_config.id), coastal_split_inner_deg, coastal_split_outer_deg)
+	_coastal_energy_fraction = split["coastal_energy_fraction"]
+	_cascades.append(_make_cascade(long_config, split["coastal"], "Ocean2B.LONG_COASTAL"))
+	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
+	for index in [1, 2]:
+		_cascades.append(_make_cascade(configs[index], h0_datas[index], "Ocean2B.%s" % configs[index].id))
 
 	_enabled = enabled_on_start
 	dispatches_per_update = 0
-	for config in configs:
-		dispatches_per_update += config.compute_pass_count()
+	for cascade in _cascades:
+		dispatches_per_update += cascade["config"].compute_pass_count()
 	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
 	# Backend de producciÃ³n: REDUCED (GDScript), siempre disponible.
 	_query_reduced = QueryReducedScript.new()
@@ -101,7 +113,7 @@ func _ready() -> void:
 		_query_golden = QueryReferenceScript.new()
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
-	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
 	rebuild_coastal_propagation()
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
@@ -109,6 +121,31 @@ func _ready() -> void:
 	OceanModuleRegistry.module_state_changed.connect(_on_module_state_changed)
 	SimulationClock.seed_changed.connect(_on_seed_changed)
 	SimulationClock.reset_completed.connect(_on_reset_completed)
+
+
+func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resource_prefix: String) -> Dictionary:
+	var displacement := Texture2DRD.new()
+	var normal := Texture2DRD.new()
+	var solver := SolverScript.new()
+	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix))
+	return {
+		"config": config,
+		"solver": solver,
+		"displacement": displacement,
+		"normal": normal,
+	}
+
+
+## Configs de RENDER: LONG_COASTAL, LONG_REMAINDER, MID, SHORT (4 cascadas).
+func _render_configs() -> Array[OpenOceanFFTConfig]:
+	var result: Array[OpenOceanFFTConfig] = []
+	for cascade in _cascades:
+		result.append(cascade["config"])
+	return result
+
+
+func render_cascade_count() -> int:
+	return _cascades.size()
 
 
 func _exit_tree() -> void:
@@ -152,14 +189,16 @@ func set_sea_state(state: int) -> void:
 	_sea_state = state
 	_sea_state_initialized = true
 	configs = SeaStateScript.build_cascades(state)
+	# 3B.2B: las dos primeras cascadas de render (COASTAL/REMAINDER) comparten el
+	# config LONG; MID/SHORT usan configs[1]/configs[2].
 	for index in _cascades.size():
 		var cascade: Dictionary = _cascades[index]
-		var config := configs[index]
+		var config := configs[0] if index < 2 else configs[index - 1]
 		cascade["config"] = config
 		RenderingServer.call_on_render_thread(cascade["solver"].update_config.bind(config))
 	dispatches_per_update = 0
-	for config in configs:
-		dispatches_per_update += config.compute_pass_count()
+	for cascade in _cascades:
+		dispatches_per_update += cascade["config"].compute_pass_count()
 	_rebuild_h0_all(SimulationClock.simulation_seed)
 
 
@@ -309,6 +348,8 @@ func toggle_periodicity_debug() -> void:
 func rebuild_coastal_propagation() -> bool:
 	## Operación explícita/development-time; nunca se ejecuta por query ni frame.
 	_coastal_propagation = null
+	_coastal_warp = null
+	surface.set_coastal_warp(null)
 	# El mono de diagnóstico necesita k0/omega aun con la transformación OFF:
 	# así C compara la misma onda profunda contra la onda costeña. En uso normal
 	# (ambos flags false) conserva el camino abierto y no hornea nada.
@@ -336,14 +377,28 @@ func rebuild_coastal_propagation() -> bool:
 	if _coastal_propagation == null:
 		surface.set_coastal_propagation(null)
 		return false
+	# 3B.2B: construir el warp world->deep a partir del campo Eikonal. El eikonal
+	# ES la base del warp (propagation_kind==1); el transform visual del FFT se
+	# autoriza cuando hay warp activo, o en el camino straight 3B (sin eikonal).
+	# Con eikonal debug SIN warp (3B.1), el transform queda OFF (solo MONO).
+	var fft_transform_enabled := coastal_propagation_enabled and (not coastal_eikonal_refraction_debug or coastal_warp_enabled)
+	if coastal_propagation_enabled and coastal_warp_enabled and _coastal_propagation.propagation_kind == 1:
+		var warp_baker := WarpBakerScript.new()
+		warp_baker.propagation = _coastal_propagation
+		warp_baker.backtrace_step_cells = 0.5
+		_coastal_warp = warp_baker.bake()
+		surface.set_coastal_warp(_coastal_warp, _coastal_warp != null)
 	# El campo 2D no se aplica al FFT: sólo el shader mono consume phi(x,z).
-	var fft_transform_enabled := coastal_propagation_enabled and not coastal_eikonal_refraction_debug
 	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, fft_transform_enabled, coastal_eikonal_refraction_debug and coastal_propagation_enabled)
 	return coastal_propagation_enabled
 
 
 func coastal_propagation_data():
 	return _coastal_propagation
+
+
+func coastal_warp_data():
+	return _coastal_warp
 
 
 func set_coastal_debug_field(field: int) -> void:
@@ -388,8 +443,8 @@ func clipmap_triangle_count() -> int:
 
 func gpu_memory_bytes() -> int:
 	var total := 0
-	for config in configs:
-		total += config.approximate_gpu_bytes()
+	for cascade in _cascades:
+		total += cascade["config"].approximate_gpu_bytes()
 	return total
 
 
@@ -425,6 +480,7 @@ func _publish_ready_textures() -> void:
 func _band_index(cascade_id: StringName) -> int:
 	match cascade_id:
 		&"LONG": return BandDebug.LONG
+		&"LONG_COASTAL", &"LONG_REMAINDER": return BandDebug.LONG
 		&"MID": return BandDebug.MID
 		&"SHORT": return BandDebug.SHORT
 	return BandDebug.ALL
@@ -449,12 +505,16 @@ func _on_reset_completed(_seed: int) -> void:
 func _rebuild_h0_all(simulation_seed: int) -> void:
 	## Regenera H0 UNA VEZ por cascada y alimenta con los MISMOS bytes a la GPU
 	## (upload_h0), al backend REDUCED y a la Golden (sÃ³lo debug/test).
+	## 3B.2B: las dos primeras cascadas de RENDER (LONG_COASTAL / LONG_REMAINDER)
+	## comparten el config LONG; la query sigue usando el LONG original (configs).
 	var h0_datas: Array[PackedByteArray] = []
+	for config in configs:
+		h0_datas.append(_build_h0(config, simulation_seed))
+	var long_config: OpenOceanFFTConfig = configs[0]
+	var split: Dictionary = SpectrumScript.build_h0_split_rgba32f(long_config, SpectrumScript.derive_cascade_seed(simulation_seed, long_config.id), coastal_split_inner_deg, coastal_split_outer_deg)
+	var render_h0 := [split["coastal"], split["remainder"], h0_datas[1], h0_datas[2]]
 	for index in _cascades.size():
-		var config: OpenOceanFFTConfig = configs[index]
-		var h0_data := _build_h0(config, simulation_seed)
-		h0_datas.append(h0_data)
-		RenderingServer.call_on_render_thread(_cascades[index]["solver"].upload_h0.bind(h0_data))
+		RenderingServer.call_on_render_thread(_cascades[index]["solver"].upload_h0.bind(render_h0[index]))
 	if _query_reduced != null:
 		_query_reduced.set_spectrum(configs, h0_datas)
 	if _query_golden != null:

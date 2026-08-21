@@ -8,6 +8,91 @@ const UINT_SCALE := 1.0 / 4294967296.0
 
 
 static func build_h0_rgba32f(config: Resource, simulation_seed: int) -> PackedByteArray:
+	var h0 := _build_h0_vector(config, simulation_seed)
+	return _pack_h0(h0, config.resolution)
+
+
+## --- 3B.2B: split direccional de LONG (COASTAL / REMAINDER) -------------------
+## Divide H0 LONG en dos componentes lineales:
+##   H0_COASTAL   = w(k) * H0[k]        (energía cerca de la dirección del viento)
+##   H0_REMAINDER = (1 - w(k)) * H0[k]
+## con w(k) máscara angular suave: 1 para |ang(k, viento)| <= inner_deg, falloff
+## suave hasta 0 en outer_deg, 0 después.
+##
+## Hermiticidad: el peso se aplica al valor complejo H0[k] ANTES del empaquetado;
+## _pack_h0 genera el conjugado del texel opuesto automáticamente, por lo que
+## cada componente es un campo espacial real y la suma reproduce H0_LONG
+## EXACTAMENTE (w + (1-w) = 1, lineal). No hay energía nueva ni regeneración.
+
+static func build_h0_split_rgba32f(config: OpenOceanFFTConfig, simulation_seed: int,
+		inner_deg: float, outer_deg: float) -> Dictionary:
+	var h0 := _build_h0_vector(config, simulation_seed)
+	var wind: Vector2 = config.wind_direction.normalized()
+	var delta_k: float = TAU / config.domain_size_m
+	var half := float(config.resolution) * 0.5
+	var coastal := PackedFloat32Array()
+	var remainder := PackedFloat32Array()
+	var n: int = config.resolution
+	coastal.resize(n * n * 4)
+	remainder.resize(n * n * 4)
+	for y in n:
+		for x in n:
+			var index := y * n + x
+			var k: Vector2 = Vector2(float(x) - half, float(y) - half) * delta_k
+			var weight := _angular_weight(k, wind, inner_deg, outer_deg)
+			var negative_index := ((n - y) % n) * n + ((n - x) % n)
+			var k_neg: Vector2 = Vector2(float(negative_index % n) - half, float(negative_index / n) - half) * delta_k
+			var weight_neg := _angular_weight(k_neg, wind, inner_deg, outer_deg)
+			var value := h0[index]
+			var negative_conjugate := Vector2(h0[negative_index].x, -h0[negative_index].y)
+			var base := index * 4
+			# Hermiticidad: el conjugado del texel opuesto (-k) lleva el peso de
+			# ese texel (w(-k)), no el del texel actual. Así cada componente es
+			# un espectro Hermitiano completo -> campo espacial real.
+			coastal[base] = value.x * weight
+			coastal[base + 1] = value.y * weight
+			coastal[base + 2] = negative_conjugate.x * weight_neg
+			coastal[base + 3] = negative_conjugate.y * weight_neg
+			remainder[base] = value.x * (1.0 - weight)
+			remainder[base + 1] = value.y * (1.0 - weight)
+			remainder[base + 2] = negative_conjugate.x * (1.0 - weight_neg)
+			remainder[base + 3] = negative_conjugate.y * (1.0 - weight_neg)
+	return {
+		"coastal": coastal.to_byte_array(),
+		"remainder": remainder.to_byte_array(),
+		"coastal_energy_fraction": _angular_energy_fraction(h0, n, delta_k, wind, inner_deg, outer_deg),
+	}
+
+
+static func _angular_weight(k: Vector2, wind: Vector2, inner_deg: float, outer_deg: float) -> float:
+	if k.length() <= 0.000001:
+		return 1.0
+	var ang := rad_to_deg(absf(k.normalized().angle_to(wind)))
+	if ang <= inner_deg:
+		return 1.0
+	if ang >= outer_deg:
+		return 0.0
+	var t := (ang - inner_deg) / maxf(outer_deg - inner_deg, 1.0e-6)
+	return 1.0 - smoothstep(0.0, 1.0, t)
+
+
+static func _angular_energy_fraction(h0: PackedVector2Array, n: int, delta_k: float,
+		wind: Vector2, inner_deg: float, outer_deg: float) -> float:
+	## Fracción de energía |H0|² dentro de la máscara coastal (para reportes).
+	var half := float(n) * 0.5
+	var total := 0.0
+	var coastal := 0.0
+	for y in n:
+		for x in n:
+			var index := y * n + x
+			var k := Vector2(float(x) - half, float(y) - half) * delta_k
+			var energy := h0[index].length_squared()
+			total += energy
+			coastal += energy * _angular_weight(k, wind, inner_deg, outer_deg)
+	return coastal / total if total > 0.0 else 0.0
+
+
+static func _build_h0_vector(config: OpenOceanFFTConfig, simulation_seed: int) -> PackedVector2Array:
 	assert(config.is_valid())
 	var n: int = config.resolution
 	var h0 := PackedVector2Array()
@@ -55,7 +140,7 @@ static func build_h0_rgba32f(config: Resource, simulation_seed: int) -> PackedBy
 			h0[index] *= amplitude_scale
 	config.measured_hs_m = estimate_hs_from_h0(h0, n)
 	config.out_of_band_energy_ratio = outside_energy / total_energy if total_energy > 0.0 else 0.0
-	return _pack_h0(h0, n)
+	return h0
 
 
 static func derive_cascade_seed(simulation_seed: int, cascade_id: StringName) -> int:

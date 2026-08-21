@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://lab/coastal/phase_3b_2b_pixel_scene.gd" id="1_pixel"]
+
+[node name="PixelCheck3B2B" type="Node"]
+script = ExtResource("1_pixel")

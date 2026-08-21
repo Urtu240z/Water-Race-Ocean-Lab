@@ -41,7 +41,8 @@ var _triangle_count := 0
 
 func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
 	assert(clipmap_config.is_valid())
-	assert(configs.size() == 3 and displacements.size() == 3 and normals.size() == 3)
+	# 3B.2B: 4 cascadas de render: LONG_COASTAL, LONG_REMAINDER, MID, SHORT.
+	assert(configs.size() == 4 and displacements.size() == 4 and normals.size() == 4)
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
 	_configure_materials(configs, displacements, normals)
@@ -61,6 +62,15 @@ func _process(_delta: float) -> void:
 
 func set_tracking_camera(camera: Camera3D) -> void:
 	_tracking_camera = camera
+
+
+## 3B.2B: reaplica los rangos de fade (la demo ajusta long_fade para ver el
+## warp sobre el banco local). No altera el campo FFT.
+func apply_fade_ranges(config) -> void:
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"short_fade_range_m", config.short_fade_range_m)
+		material.set_shader_parameter(&"mid_fade_range_m", config.mid_fade_range_m)
+		material.set_shader_parameter(&"long_fade_range_m", config.long_fade_range_m)
 
 
 func set_band_debug(mode: int) -> void:
@@ -124,6 +134,22 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 	set_coastal_debug_field(_coastal_debug_field)
 
 
+func set_coastal_warp(warp_data, enabled := true) -> void:
+	## 3B.2B: pasa el CoastalWarpData al shader (textura deep_xz + detJ + valid).
+	## El shader samplea LONG_COASTAL en deep_xz cuando el warp es válido y
+	## blend suave en NEAR_CAUSTIC; fallback a world_xz en inválido/folded.
+	var warp_enabled: bool = enabled and warp_data != null and warp_data.is_valid()
+	var textures: Dictionary = warp_data.build_gpu_textures() if warp_enabled else {}
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled)
+		if not warp_enabled:
+			continue
+		material.set_shader_parameter(&"coastal_warp_texture", textures["warp"])
+		material.set_shader_parameter(&"coastal_warp_origin_xz", warp_data.world_origin_xz)
+		material.set_shader_parameter(&"coastal_warp_extent_m", warp_data.world_max_xz() - warp_data.world_origin_xz)
+		material.set_shader_parameter(&"coastal_warp_detj_safe", warp_data.detj_safe_threshold)
+
+
 func set_coastal_time(simulation_time_s: float) -> void:
 	_surface_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
 	_wireframe_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
@@ -166,7 +192,8 @@ func final_half_extent_m() -> float:
 
 
 func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
-	var ids := ["long", "mid", "short"]
+	# 3B.2B: índices de render -> LONG_COASTAL=0, LONG_REMAINDER=1, MID=2, SHORT=3.
+	var ids := ["long_coastal", "long_remainder", "mid", "short"]
 	for material in [_surface_material, _wireframe_material]:
 		material.set_shader_parameter(&"module_enabled", _module_enabled)
 		material.set_shader_parameter(&"short_fade_range_m", clipmap_config.short_fade_range_m)
@@ -179,12 +206,14 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_monochromatic_debug", false)
 		material.set_shader_parameter(&"coastal_eikonal_phase_debug", false)
 		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
-		for index in 3:
+		material.set_shader_parameter(&"coastal_warp_enabled", false)
+		for index in 4:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])
-	_surface_material.set_shader_parameter(&"normal_long", normals[0])
-	_surface_material.set_shader_parameter(&"normal_mid", normals[1])
-	_surface_material.set_shader_parameter(&"normal_short", normals[2])
+	_surface_material.set_shader_parameter(&"normal_long_coastal", normals[0])
+	_surface_material.set_shader_parameter(&"normal_long_remainder", normals[1])
+	_surface_material.set_shader_parameter(&"normal_mid", normals[2])
+	_surface_material.set_shader_parameter(&"normal_short", normals[3])
 
 
 func _rebuild_levels() -> void:
