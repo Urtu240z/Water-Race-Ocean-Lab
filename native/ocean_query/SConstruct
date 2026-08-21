@@ -1,0 +1,13 @@
+#!/usr/bin/env python
+# SConstruct para la GDExtension OceanQuery (Fase 2C).
+# Requiere: godot-cpp clonado en native/godot-cpp (rama 4.7) y SCons.
+# Uso: scons platform=windows target=template_release
+import os
+
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/", "godot-cpp/include/core", "godot-cpp/include/gen"])
+sources = Glob("src/*.cpp")
+env.Append(LIBS=["winmm"] if os.name == "nt" else [])
+library = env.SharedLibrary("bin/water_race_ocean_query", source=sources)
+Default(library)

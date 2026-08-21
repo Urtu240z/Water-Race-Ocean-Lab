@@ -82,6 +82,7 @@ var _prepared_valid := false
 var _prepared_time := 0.0
 var _mode := MODE_REDUCED
 var _budgets: Array[int] = [DEFAULT_BUDGET, DEFAULT_BUDGET, DEFAULT_BUDGET]
+var _native_backend: RefCounted = null
 
 # Diagnóstico (sin push_warning por query).
 var diagnostic_non_converged := 0
@@ -113,6 +114,8 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 
 func set_sea_level(sea_level_y: float) -> void:
 	_sea_level = sea_level_y
+	if _native_backend != null:
+		_native_backend.set_sea_level(_sea_level)
 
 
 func set_mode(mode: int) -> void:
@@ -439,6 +442,56 @@ func _rebuild_selection() -> void:
 	for index in _cascades.size():
 		_compact_cascade(_cascades[index], _budgets[index])
 	_prepared_valid = false
+	_sync_native()
+
+
+## --- Backend nativo (Fase 2C) ------------------------------------------------
+## OceanQueryReduced conserva la selección (GDScript) y empuja los arrays
+## compactos al backend nativo cuando cambia H0/seed/state/budget. El native no
+## reconstruye ni reinterpreta el pairing canónico: weight/parity/kx/... son
+## verdad de entrada.
+
+func configure_native_backend(native) -> void:
+	_native_backend = native
+	_sync_native()
+
+
+func native_backend():
+	return _native_backend
+
+
+func get_cascades_compact() -> Array:
+	## Exporta los arrays compactos seleccionados (para native / dump / tests).
+	var result: Array = []
+	for index in _cascades.size():
+		var cascade := _cascades[index]
+		result.append({
+			"index": index,
+			"inv_n2": cascade.inv_n2,
+			"kx": cascade.kx, "ky": cascade.ky, "omega": cascade.omega,
+			"a1": cascade.a1, "a2": cascade.a2,
+			"c11": cascade.c11, "c12": cascade.c12, "c21": cascade.c21, "c22": cascade.c22,
+			"parity": cascade.parity, "weight": cascade.weight,
+			"h0_re": cascade.h0_re, "h0_im": cascade.h0_im,
+			"h0n_re": cascade.h0n_re, "h0n_im": cascade.h0n_im,
+		})
+	return result
+
+
+func _sync_native() -> void:
+	if _native_backend == null:
+		return
+	_native_backend.clear()
+	_native_backend.set_sea_level(_sea_level)
+	for cascade in get_cascades_compact():
+		_native_backend.set_cascade_data(
+			cascade.index, cascade.inv_n2,
+			cascade.kx, cascade.ky, cascade.omega,
+			cascade.a1, cascade.a2,
+			cascade.c11, cascade.c12, cascade.c21, cascade.c22,
+			cascade.parity, cascade.weight,
+			cascade.h0_re, cascade.h0_im, cascade.h0n_re, cascade.h0n_im)
+	_native_backend.finalize_spectrum()
 
 
 func _compact_cascade(cascade: _CascadeData, budget: int) -> void:

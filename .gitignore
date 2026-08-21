@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Native GDExtension: binarios e intermedios de build (no versionar)
+native/ocean_query/bin/
+native/godot-cpp/

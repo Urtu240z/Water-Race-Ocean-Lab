@@ -1,7 +1,7 @@
-extends SceneTree
-## ValidaciÃ³n rÃ¡pida de Fase 2B: OceanQueryReduced (pares Â±k, FULL_PAIRS,
-## selecciÃ³n por importancia, world-space, batch). Cubre Aâ€“N de la
-## especificaciÃ³n. CPU pura + un pequeÃ±o smoke runtime del mÃ³dulo.
+﻿extends SceneTree
+## ValidaciÃƒÂ³n rÃƒÂ¡pida de Fase 2B: OceanQueryReduced (pares Ã‚Â±k, FULL_PAIRS,
+## selecciÃƒÂ³n por importancia, world-space, batch). Cubre AÃ¢â‚¬â€œN de la
+## especificaciÃƒÂ³n. CPU pura + un pequeÃƒÂ±o smoke runtime del mÃƒÂ³dulo.
 
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
@@ -81,7 +81,7 @@ func _validate_flat_spectrum() -> void:
 	reduced.set_mode(QueryReducedScript.MODE_FULL_PAIRS)
 	reduced.set_spectrum([config], [h0.to_byte_array()])
 	var sample = reduced.sample_water(_POS, _TIME)
-	_check(sample.valid, "C: plano vÃ¡lido")
+	_check(sample.valid, "C: plano vÃƒÂ¡lido")
 	_check(sample.height == 0.0, "C: height 0 plano")
 	_check(sample.displacement == Vector3.ZERO, "C: displacement 0 plano")
 	_check(sample.normal == Vector3.UP, "C: normal UP plano")
@@ -89,7 +89,7 @@ func _validate_flat_spectrum() -> void:
 	_check(sample.jacobian_det == 1.0, "C: detJ 1 plano")
 
 
-# B. Onda Ãºnica +k/-k (compresiÃ³n de pares) contra forma cerrada.
+# B. Onda ÃƒÂºnica +k/-k (compresiÃƒÂ³n de pares) contra forma cerrada.
 func _validate_single_wave_pairs() -> void:
 	var n := 8
 	var domain := 16.0
@@ -107,7 +107,7 @@ func _validate_single_wave_pairs() -> void:
 	reduced.set_mode(QueryReducedScript.MODE_FULL_PAIRS)
 	reduced.set_spectrum([config], [floats.to_byte_array()])
 	var counts := reduced.selected_pair_counts()
-	_check(counts.size() == 1 and counts[0] == 40, "B: nº de pares canónicos (N=8 -> 40, got %s)" % str(counts))
+	_check(counts.size() == 1 and counts[0] == 40, "B: nÂº de pares canÃ³nicos (N=8 -> 40, got %s)" % str(counts))
 
 	var kx := TAU / domain
 	var omega := sqrt(9.81 * kx)
@@ -118,15 +118,15 @@ func _validate_single_wave_pairs() -> void:
 		var expected_dx := inv16 * cos(omega * t) * sin(kx * qx)
 		var world_x := qx + expected_dx
 		var sample = reduced.sample_water(Vector3(world_x, 0.0, 0.0), t)
-		_check(is_equal_approx(sample.height, expected_h), "B: pares single-wave height (%.6f ≈ %.6f)" % [sample.height, expected_h])
-		_check(is_equal_approx(sample.displacement.x, expected_dx), "B: pares single-wave Dx (%.6f ≈ %.6f)" % [sample.displacement.x, expected_dx])
+		_check(is_equal_approx(sample.height, expected_h), "B: pares single-wave height (%.6f â‰ˆ %.6f)" % [sample.height, expected_h])
+		_check(is_equal_approx(sample.displacement.x, expected_dx), "B: pares single-wave Dx (%.6f â‰ˆ %.6f)" % [sample.displacement.x, expected_dx])
 		_check(is_equal_approx(sample.displacement.z, 0.0), "B: pares single-wave Dz 0")
 
 
-# A. FULL_PAIRS â‰¡ Golden en caso sintÃ©tico (paramÃ©trico, varias q/t).
+# A. FULL_PAIRS Ã¢â€°Â¡ Golden en caso sintÃƒÂ©tico (paramÃƒÂ©trico, varias q/t).
 func _validate_full_pairs_equals_golden_synthetic() -> void:
 	var config = _small_config(16, 64.0, 0.8)
-	# H0 real consistente (conjugado-simÃ©trico) vÃ­a TessendorfSpectrum.
+	# H0 real consistente (conjugado-simÃƒÂ©trico) vÃƒÂ­a TessendorfSpectrum.
 	var h0 := SpectrumScript.build_h0_rgba32f(config, 12345)
 	var golden = QueryRefScript.new()
 	golden.set_spectrum([config], [h0])
@@ -137,15 +137,15 @@ func _validate_full_pairs_equals_golden_synthetic() -> void:
 		for q in [Vector3(2.0, 0.0, 5.0), Vector3(11.0, 0.0, -7.0), Vector3(-13.0, 0.0, 21.0)]:
 			var g = golden.sample_water(q, t)
 			var r = reduced.sample_water(q, t)
-			_check(g.valid and r.valid, "A: samples vÃ¡lidos (q=%s t=%.1f)" % [q, t])
-			_check(absf(r.height - g.height) < 1.0e-9, "A: FULL_PAIRS height â‰¡ Golden (%s)" % String.num_scientific(absf(r.height - g.height)))
-			_check(r.displacement.distance_to(g.displacement) < 1.0e-8, "A: FULL_PAIRS displacement â‰¡ Golden")
-			_check(r.normal.distance_to(g.normal) < 1.0e-8, "A: FULL_PAIRS normal â‰¡ Golden")
-			_check(r.surface_velocity.distance_to(g.surface_velocity) < 1.0e-8, "A: FULL_PAIRS velocity â‰¡ Golden")
-			_check(absf(r.jacobian_det - g.jacobian_det) < 1.0e-8, "A: FULL_PAIRS detJ â‰¡ Golden")
+			_check(g.valid and r.valid, "A: samples vÃƒÂ¡lidos (q=%s t=%.1f)" % [q, t])
+			_check(absf(r.height - g.height) < 1.0e-9, "A: FULL_PAIRS height Ã¢â€°Â¡ Golden (%s)" % String.num_scientific(absf(r.height - g.height)))
+			_check(r.displacement.distance_to(g.displacement) < 1.0e-8, "A: FULL_PAIRS displacement Ã¢â€°Â¡ Golden")
+			_check(r.normal.distance_to(g.normal) < 1.0e-8, "A: FULL_PAIRS normal Ã¢â€°Â¡ Golden")
+			_check(r.surface_velocity.distance_to(g.surface_velocity) < 1.0e-8, "A: FULL_PAIRS velocity Ã¢â€°Â¡ Golden")
+			_check(absf(r.jacobian_det - g.jacobian_det) < 1.0e-8, "A: FULL_PAIRS detJ Ã¢â€°Â¡ Golden")
 
 
-# A. FULL_PAIRS â‰¡ Golden en RACE real (world-space, Newton).
+# A. FULL_PAIRS Ã¢â€°Â¡ Golden en RACE real (world-space, Newton).
 func _validate_full_pairs_equals_golden_race() -> void:
 	var spectrum := _build_spectrum_state(SeaStateScript.State.RACE, _SEED)
 	var golden = QueryRefScript.new()
@@ -156,14 +156,14 @@ func _validate_full_pairs_equals_golden_race() -> void:
 	for world_pos in [Vector3(10.0, 0.0, 20.0), Vector3(37.5, 0.0, -12.25)]:
 		var g = golden.sample_water(world_pos, 1.3)
 		var r = reduced.sample_water(world_pos, 1.3)
-		_check(g.valid and r.valid, "A: RACE world samples vÃ¡lidos (%s)" % world_pos)
-		_check(absf(r.height - g.height) < 1.0e-4, "A: RACE FULL_PAIRS height â‰¡ Golden (%s)" % String.num_scientific(absf(r.height - g.height)))
-		_check(r.displacement.distance_to(g.displacement) < 1.0e-4, "A: RACE FULL_PAIRS displacement â‰¡ Golden")
-		_check(r.normal.distance_to(g.normal) < 1.0e-4, "A: RACE FULL_PAIRS normal â‰¡ Golden")
-		_check(r.surface_velocity.distance_to(g.surface_velocity) < 1.0e-4, "A: RACE FULL_PAIRS velocity â‰¡ Golden")
+		_check(g.valid and r.valid, "A: RACE world samples vÃƒÂ¡lidos (%s)" % world_pos)
+		_check(absf(r.height - g.height) < 1.0e-4, "A: RACE FULL_PAIRS height Ã¢â€°Â¡ Golden (%s)" % String.num_scientific(absf(r.height - g.height)))
+		_check(r.displacement.distance_to(g.displacement) < 1.0e-4, "A: RACE FULL_PAIRS displacement Ã¢â€°Â¡ Golden")
+		_check(r.normal.distance_to(g.normal) < 1.0e-4, "A: RACE FULL_PAIRS normal Ã¢â€°Â¡ Golden")
+		_check(r.surface_velocity.distance_to(g.surface_velocity) < 1.0e-4, "A: RACE FULL_PAIRS velocity Ã¢â€°Â¡ Golden")
 
 
-# D/E. SelecciÃ³n determinista: mismo H0 => mismos pares.
+# D/E. SelecciÃƒÂ³n determinista: mismo H0 => mismos pares.
 func _validate_deterministic_selection() -> void:
 	var spectrum := _build_spectrum_state(SeaStateScript.State.RACE, _SEED)
 	var first = QueryReducedScript.new()
@@ -175,7 +175,7 @@ func _validate_deterministic_selection() -> void:
 	_check(first.selected_pair_counts() == second.selected_pair_counts(), "E: mismo H0 => mismos pares seleccionados (%s)" % str(first.selected_pair_counts()))
 	var s1 = first.sample_water(_POS, _TIME)
 	var s2 = second.sample_water(_POS, _TIME)
-	_check(is_equal_approx(s1.height, s2.height) and s1.displacement == s2.displacement, "D: selecciÃ³n determinista => samples idÃ©nticos")
+	_check(is_equal_approx(s1.height, s2.height) and s1.displacement == s2.displacement, "D: selecciÃƒÂ³n determinista => samples idÃƒÂ©nticos")
 	var counts := first.selected_pair_counts()
 	_check(counts == [16, 12, 8], "D: presupuesto aplicado por banda (%s)" % str(counts))
 
@@ -197,7 +197,7 @@ func _validate_seed_changes() -> void:
 	_check(is_equal_approx(sa.height, sa2.height), "F: misma seed determinista")
 
 
-# G. InversiÃ³n world-space del Reduced (round-trip).
+# G. InversiÃƒÂ³n world-space del Reduced (round-trip).
 func _validate_world_round_trip() -> void:
 	var spectrum := _build_spectrum_state(SeaStateScript.State.ROUGH, _SEED)
 	var reduced = QueryReducedScript.new()
@@ -277,13 +277,13 @@ func _validate_no_per_query_allocations() -> void:
 		_check(forbidden not in sample_world, "M: _sample_world sin %s" % forbidden)
 
 
-# J. Band debug no altera la query (mÃ³dulo runtime).
+# J. Band debug no altera la query (mÃƒÂ³dulo runtime).
 func _validate_runtime_module() -> void:
 	var module := get_first_node_in_group(&"ocean_fft")
 	if module == null:
-		_check(false, "J: mÃ³dulo no disponible")
+		_check(false, "J: mÃƒÂ³dulo no disponible")
 		return
-	_check(module.query_backend_name() == "REDUCED", "J: backend por defecto REDUCED")
+	_check(module.query_backend_name() == "REDUCED_GDSCRIPT" or module.query_backend_name() == "NATIVE", "J: backend por defecto REDUCED_GDSCRIPT (fallback sin DLL)")
 	var before = module.sample_water(_POS, _TIME)
 	module.cycle_band_debug()
 	module.cycle_band_debug()
@@ -328,5 +328,6 @@ func _check(condition: bool, label: String) -> void:
 	else:
 		_failures += 1
 		push_error("FAIL: " + label)
+
 
 

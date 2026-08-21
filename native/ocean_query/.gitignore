@@ -1,0 +1,18 @@
+﻿# Intermedios de build nativos (no versionar binarios grandes).
+bin/
+.godot/
+godot-cpp/.godot/
+godot-cpp/bin/
+__pycache__/
+*.o
+*.obj
+*.obj.import
+*.pdb
+*.exp
+*.lib
+*.dll
+*.so
+# Datos regenerables del benchmark independiente (dump_data.gd + bench_main).
+bench/data_*.txt
+bench/out_*.txt
+bench/ref_*.txt

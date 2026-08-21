@@ -1,6 +1,6 @@
 class_name OpenOceanFFTModule
 extends Node3D
-## Orquesta LONG/MID/SHORT como detalles internos del único módulo open_ocean_fft.
+## Orquesta LONG/MID/SHORT como detalles internos del Ãºnico mÃ³dulo open_ocean_fft.
 
 const MODULE_ID := &"open_ocean_fft"
 const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
@@ -20,8 +20,9 @@ enum BandDebug {
 
 @export var enabled_on_start := true
 @export var enable_reference_query_debug := false
-# Presupuestos por banda (pares canónicos) elegidos por calibración 2B:
-# mínimo total que cumple los objetivos de precisión en el dataset de calibración.
+@export var query_native_enabled := true
+# Presupuestos por banda (pares canÃ³nicos) elegidos por calibraciÃ³n 2B:
+# mÃ­nimo total que cumple los objetivos de precisiÃ³n en el dataset de calibraciÃ³n.
 @export var reduced_long_pairs := 1024
 @export var reduced_mid_pairs := 1024
 @export var reduced_short_pairs := 1024
@@ -33,6 +34,7 @@ var dispatches_per_update := 0
 
 var _cascades: Array[Dictionary] = []
 var _query_reduced: RefCounted = null
+var _query_native: RefCounted = null
 var _query_golden: RefCounted = null
 var _enabled := true
 var _textures_published := false
@@ -50,7 +52,7 @@ func _ready() -> void:
 	var h0_datas: Array[PackedByteArray] = []
 	for config in configs:
 		if not config.is_valid():
-			push_error("Configuración FFT inválida para %s." % config.id)
+			push_error("ConfiguraciÃ³n FFT invÃ¡lida para %s." % config.id)
 			return
 		var displacement := Texture2DRD.new()
 		var normal := Texture2DRD.new()
@@ -70,12 +72,18 @@ func _ready() -> void:
 	for config in configs:
 		dispatches_per_update += config.compute_pass_count()
 	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
-	# Backend de producción: REDUCED, siempre disponible.
+	# Backend de producciÃ³n: REDUCED (GDScript), siempre disponible.
 	_query_reduced = QueryReducedScript.new()
 	_query_reduced.set_spectrum(configs, h0_datas)
 	_query_reduced.set_sea_level(surface.clipmap_config.sea_level_y)
 	_query_reduced.set_budget(reduced_long_pairs, reduced_mid_pairs, reduced_short_pairs)
-	# Golden Reference: sólo cuando se pide explícitamente para debug/test.
+	# Backend NATIVE (GDExtension) si estÃ¡ disponible; si no, fallback GDScript.
+	if query_native_enabled:
+		_query_native = _try_create_native_backend()
+		if _query_native != null:
+			_query_reduced.configure_native_backend(_query_native)
+			push_warning("OceanQuery: backend nativo activo (OceanQueryNative).")
+	# Golden Reference: sÃ³lo cuando se pide explÃ­citamente para debug/test.
 	if enable_reference_query_debug:
 		_query_golden = QueryReferenceScript.new()
 		_query_golden.set_spectrum(configs, h0_datas)
@@ -94,6 +102,7 @@ func _exit_tree() -> void:
 		OceanModuleRegistry.module_state_changed.disconnect(_on_module_state_changed)
 	OceanModuleRegistry.unregister_module(MODULE_ID)
 	_query_reduced = null
+	_query_native = null
 	_query_golden = null
 	for cascade in _cascades:
 		cascade.displacement.texture_rd_rid = RID()
@@ -121,7 +130,7 @@ func toggle_enabled() -> void:
 
 func set_sea_state(state: int) -> void:
 	if not SeaStateScript.is_valid_state(state):
-		push_warning("Estado de mar no válido: %s" % state)
+		push_warning("Estado de mar no vÃ¡lido: %s" % state)
 		return
 	if state == _sea_state and _sea_state_initialized:
 		return
@@ -143,39 +152,62 @@ func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
 
 
-## --- OceanQuery (Fase 2B, backend REDUCED por defecto) -----------------------
-## La query física evalúa SIEMPRE las tres bandas del sea state activo. El band
+## --- OceanQuery (Fase 2C, backend NATIVE si disponible, fallback REDUCED) ---
+## La query fÃ­sica evalÃºa SIEMPRE las tres bandas del sea state activo. El band
 ## debug (B), los fades visuales y los perfiles de calidad NO alteran la query.
-## No hay readback GPU->CPU. Golden Reference sólo se instancia si
-## enable_reference_query_debug está activo (debug/test).
+## No hay readback GPU->CPU. Golden Reference sÃ³lo en debug/test.
 
 func sample_water(world_position: Vector3, simulation_time: float):
-	if not _enabled or _query_reduced == null:
+	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	return _query_reduced.sample_water(world_position, simulation_time)
+	if _query_native != null:
+		return _native_to_sample(_query_native.sample_world(world_position.x, world_position.z, simulation_time))
+	if _query_reduced != null:
+		return _query_reduced.sample_water(world_position, simulation_time)
+	return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
 
 
 func sample_water_physics_time(world_position: Vector3):
-	if not _enabled or _query_reduced == null:
+	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	# Garantiza el tiempo preparado sin depender del orden de _physics_process.
-	_query_reduced.ensure_prepared(SimulationClock.simulation_time)
-	return _query_reduced.sample_water_prepared(world_position)
+	if _query_native != null:
+		_query_native.ensure_prepared(SimulationClock.simulation_time)
+		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
+	if _query_reduced != null:
+		_query_reduced.ensure_prepared(SimulationClock.simulation_time)
+		return _query_reduced.sample_water_prepared(world_position)
+	return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
 
 
 func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
-	if not _enabled or _query_reduced == null:
+	if not _enabled:
 		var flat_result: Array = []
 		var flat = QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
 		flat_result.resize(positions.size())
 		for index in positions.size():
 			flat_result[index] = flat
 		return flat_result
-	_query_reduced.ensure_prepared(SimulationClock.simulation_time)
-	return _query_reduced.sample_water_batch_prepared(positions)
+	if _query_native != null:
+		_query_native.ensure_prepared(SimulationClock.simulation_time)
+		var packed := PackedVector3Array()
+		packed.resize(positions.size())
+		for index in positions.size():
+			packed[index] = positions[index]
+		var out = _query_native.sample_batch_prepared(packed)
+		var result: Array = []
+		result.resize(positions.size())
+		for index in positions.size():
+			result[index] = _native_to_sample(out, index)
+		return result
+	if _query_reduced != null:
+		_query_reduced.ensure_prepared(SimulationClock.simulation_time)
+		return _query_reduced.sample_water_batch_prepared(positions)
+	return []
 
 
 func prepare_query_time(simulation_time: float) -> void:
+	if _query_native != null:
+		_query_native.ensure_prepared(simulation_time)
 	if _query_reduced != null:
 		_query_reduced.prepare_time(simulation_time)
 	if _query_golden != null:
@@ -183,9 +215,13 @@ func prepare_query_time(simulation_time: float) -> void:
 
 
 func sample_water_prepared(world_position: Vector3):
-	if not _enabled or _query_reduced == null:
+	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	return _query_reduced.sample_water_prepared(world_position)
+	if _query_native != null:
+		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
+	if _query_reduced != null:
+		return _query_reduced.sample_water_prepared(world_position)
+	return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
 
 
 func has_golden_reference() -> bool:
@@ -204,7 +240,39 @@ func sample_water_golden_prepared(world_position: Vector3):
 
 
 func query_backend_name() -> String:
-	return "REDUCED"
+	if _query_native != null:
+		return "NATIVE"
+	return "REDUCED_GDSCRIPT"
+
+
+func _try_create_native_backend():
+	## Carga la GDExtension si existe; si la DLL no estÃ¡ construida, fallback
+	## GDScript silencioso (no es un error: es el estado normal sin compilar).
+	var extension_path := "res://native/ocean_query/water_race_ocean_query.gdextension"
+	var dll_path := "res://native/ocean_query/bin/water_race_ocean_query.dll"
+	if not ResourceLoader.exists(extension_path) or not FileAccess.file_exists(dll_path):
+		return null
+	var extension = load(extension_path)
+	if extension == null or not ClassDB.class_exists(&"OceanQueryNative"):
+		push_warning("OceanQuery: backend nativo no disponible (%s); usando GDScript." % extension_path)
+		return null
+	return ClassDB.instantiate(&"OceanQueryNative")
+
+
+func _native_to_sample(out: PackedFloat64Array, batch_index := -1) -> OceanQuerySample:
+	## Decodifica el contrato plano nativo (stride 15, ver ocean_query_native.h).
+	var base := 0 if batch_index < 0 else batch_index * 15
+	var sample := QuerySampleScript.new()
+	sample.valid = out[base + 0] > 0.5
+	sample.height = out[base + 1]
+	sample.displacement = Vector3(out[base + 2], out[base + 3], out[base + 4])
+	sample.normal = Vector3(out[base + 5], out[base + 6], out[base + 7])
+	sample.surface_velocity = Vector3(out[base + 8], out[base + 9], out[base + 10])
+	sample.jacobian_det = out[base + 11]
+	sample.foldover_risk = out[base + 12] > 0.5
+	sample.query_residual_m = out[base + 13]
+	sample.query_iterations = int(out[base + 14])
+	return sample
 
 
 func cycle_debug_mode() -> void:
@@ -324,7 +392,7 @@ func _on_reset_completed(_seed: int) -> void:
 
 func _rebuild_h0_all(simulation_seed: int) -> void:
 	## Regenera H0 UNA VEZ por cascada y alimenta con los MISMOS bytes a la GPU
-	## (upload_h0), al backend REDUCED y a la Golden (sólo debug/test).
+	## (upload_h0), al backend REDUCED y a la Golden (sÃ³lo debug/test).
 	var h0_datas: Array[PackedByteArray] = []
 	for index in _cascades.size():
 		var config: OpenOceanFFTConfig = configs[index]
@@ -336,3 +404,5 @@ func _rebuild_h0_all(simulation_seed: int) -> void:
 	if _query_golden != null:
 		_query_golden.set_spectrum(configs, h0_datas)
 	_dispatch_requested = true
+
+
