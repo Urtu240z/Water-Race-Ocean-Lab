@@ -3,7 +3,7 @@
 > **Documento vivo y canónico del proyecto Ocean V3.**  
 > Define objetivos, decisiones cerradas, límites de arquitectura, rendimiento y plan de validación.  
 > Git debe conservar el historial: a partir de ahora se actualiza este mismo documento.  
-> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fase 2A/2A.1 completadas. Fase 2B completada (OceanQueryReduced, budget 1024/1024/1024, precisión cumple objetivos). Fase 2C COMPLETADA: GDExtension real compilada offline (godot-cpp + SCons 4.11.0 locales, MSVC 19.29, API 4.7) e integrada en Godot 4.7.1 (backend NATIVE activo; fallback silencioso REDUCED_GDSCRIPT si falta la DLL); equivalencia Native vs GDScript validada (RACE ~1e-7, ROUGH ~2e-6 por ruido libm real, tolerancia 1e-5 → PASS); benchmark end-to-end corregido (artefacto de medición térmica documentado y eliminado): 16 queries ≈ 2.4 ms y 64 ≈ 9.7 ms en RACE y ROUGH (~20-27× RACE / ~80-85× ROUGH vs GDScript; ≈ core standalone 16=1.9-2.3 / 64=8.2-9.1) → targets de Gate 2 (16≤1 ms / 64≤3 ms) aún NO cumplidos con matemática escalar exacta. Gate 2 pendiente de revisión del usuario. Física del jetski NO iniciada.**
+> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fases 2A/2A.1/2B completadas (OceanQueryReduced, budget 1024/1024/1024). Gate 2 APROBADO para Windows: NATIVE DIRECT en producción con ruta AVX2 runtime y fallback scalar; Godot 4.7 e2e medido RACE 16/64 = 0.491/2.136 ms y ROUGH 16/64 = 0.621/2.437 ms. La precisión AVX2 vs scalar y el fallback están validados. Linux/Steam Deck todavía no se ha compilado ni validado; queda como deuda de portabilidad y no bloquea Fase 3. Física del jetski NO iniciada.**
 
 ---
 
@@ -1669,6 +1669,11 @@ Añadir un casco pasivo de prueba antes del jetski completo.
 - sin stalls;
 - determinismo;
 - coste estable con múltiples consultas.
+
+**Estado: APROBADO en Windows (Fase 2C.1C).** NATIVE DIRECT selecciona AVX2
+cuando CPUID/OS lo permite y mantiene fallback scalar. Linux/Steam Deck queda
+pendiente de build/validación de portabilidad; no bloquea el trabajo de datos
+de Fase 3.
 
 ---
 
