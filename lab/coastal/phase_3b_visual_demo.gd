@@ -3,6 +3,9 @@ extends Node3D
 ## y conecta los controles al transform ya existente: no introduce física.
 
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
+const EikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
+const WarpBakerScript := preload("res://ocean_v3/coastal/coastal_warp_baker.gd")
+const WarpDataScript := preload("res://ocean_v3/coastal/coastal_warp_data.gd")
 
 const _GRID_WIDTH := 257
 const _GRID_HEIGHT := 129
@@ -10,6 +13,11 @@ const _CELL_SIZE_M := 1.0
 const _ORIGIN_XZ := Vector2(-128.0, -64.0)
 const _DEBUG_FIELDS := [0, 1, 2, 5, 6, 7, 8]
 const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET", "LOCAL_K", "VALID / SHADOW"]
+# Subgrid del warp debug (129x97 centrado en el banco): el bake es ~7 s, por eso
+# NO se usa el grid completo de la demo (257x129 -> ~28 s).
+const _WARP_DEBUG_WIDTH := 129
+const _WARP_DEBUG_HEIGHT := 97
+const _WARP_DEBUG_ORIGIN := Vector2(-64.0, -48.0)
 
 enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
 enum CameraMode { TOP, GRAZING }
@@ -21,6 +29,8 @@ enum CameraMode { TOP, GRAZING }
 @onready var _bank_guides: Node3D = $BankGuides
 @onready var _wavelength_ruler: MeshInstance3D = $WavelengthRuler
 @onready var _direction_arrows: MeshInstance3D = $DirectionArrows
+@onready var _warp_grid_debug: MeshInstance3D = $WarpGridDebug
+@onready var _warp_detj_debug: MeshInstance3D = $WarpDetJDebug
 @onready var _status: Label = %Status
 @onready var _top_camera: Camera3D = $TopCamera
 @onready var _grazing_camera: Camera3D = $GrazingCamera
@@ -32,6 +42,9 @@ var _camera_mode := CameraMode.TOP
 var _coastal_enabled := true
 var _monochromatic_enabled := true
 var _refraction_enabled := false
+var _warp_debug_enabled := false
+var _warp_debug_baked := false
+var _warp_debug = null
 
 
 func _ready() -> void:
@@ -70,7 +83,158 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_R:
 			_refraction_enabled = not _refraction_enabled
 			_apply_coastal_settings()
+		KEY_W:
+			_warp_debug_enabled = not _warp_debug_enabled
+			_warp_debug_baked = false
+			_build_warp_debug()
 	_update_status()
+
+
+func _build_warp_debug() -> void:
+	_warp_grid_debug.mesh = null
+	_warp_detj_debug.mesh = null
+	if not _warp_debug_enabled:
+		return
+	if _warp_debug_baked:
+		return
+	_warp_debug_baked = true
+	# Subgrid 129x97 centrado en el banco (bake ~7 s una vez al activar W).
+	var sub := BathymetryDataScript.new()
+	sub.world_origin_xz = _WARP_DEBUG_ORIGIN
+	sub.width = _WARP_DEBUG_WIDTH
+	sub.height = _WARP_DEBUG_HEIGHT
+	sub.cell_size_m = _CELL_SIZE_M
+	sub.sea_level_y = 0.0
+	var count := _WARP_DEBUG_WIDTH * _WARP_DEBUG_HEIGHT
+	sub.depth_m.resize(count)
+	sub.gradient_x.resize(count)
+	sub.gradient_z.resize(count)
+	sub.slope_magnitude.resize(count)
+	sub.land_water_mask.resize(count)
+	for z in _WARP_DEBUG_HEIGHT:
+		for x in _WARP_DEBUG_WIDTH:
+			var index := z * _WARP_DEBUG_WIDTH + x
+			var world_x := _WARP_DEBUG_ORIGIN.x + float(x) * _CELL_SIZE_M
+			var world_z := _WARP_DEBUG_ORIGIN.y + float(z) * _CELL_SIZE_M
+			sub.depth_m[index] = _bank_depth(world_x, world_z)
+			sub.land_water_mask[index] = 1
+	var eikonal_baker := EikonalBakerScript.new()
+	eikonal_baker.bathymetry_data = sub
+	eikonal_baker.incoming_direction_xz = Vector2.RIGHT
+	eikonal_baker.reference_wavelength_m = 16.0
+	eikonal_baker.min_valid_depth_m = 0.25
+	var propagation = eikonal_baker.bake()
+	if propagation == null:
+		return
+	var warp_baker := WarpBakerScript.new()
+	warp_baker.propagation = propagation
+	warp_baker.backtrace_step_cells = 0.5
+	_warp_debug = warp_baker.bake()
+	if _warp_debug == null:
+		return
+	_build_warp_grid_mesh()
+	_build_warp_detj_mesh()
+
+
+func _build_warp_grid_mesh() -> void:
+	## Grid de coordenadas profundas warpeado: isolíneas de s_deep (cada 16 m)
+	## y de r_deep (cada 8 m) dibujadas sobre el mundo. Se lee como un grid
+	## curvilíneo: su suavidad es la continuidad del warp.
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_LINES)
+	var width: int = _warp_debug.width
+	var height: int = _warp_debug.height
+	var origin: Vector2 = _warp_debug.world_origin_xz
+	var cell: float = _warp_debug.cell_size_m
+	var d0: Vector2 = _warp_debug.incoming_direction_xz
+	var n0 := Vector2(-d0.y, d0.x)
+	var deep_origin: Vector2 = _warp_debug.deep_origin_xz
+	var s_step := 16.0
+	var r_step := 8.0
+	for z in height:
+		for x in width:
+			var index := z * width + x
+			if _warp_debug.valid_mask[index] == 0:
+				continue
+			var deep := Vector2(_warp_debug.deep_x[index], _warp_debug.deep_z[index])
+			var s_deep: float = (deep - deep_origin).dot(d0)
+			var r_deep: float = _warp_debug.r_deep[index]
+			var world: Vector3 = Vector3(origin.x + float(x) * cell, 0.3, origin.y + float(z) * cell)
+			# Línea horizontal (r constante): si el vecino E tiene r en el mismo
+			# intervalo de isolínea, conectar.
+			if x + 1 < width and _warp_debug.valid_mask[z * width + x + 1] != 0:
+				var r_e: float = _warp_debug.r_deep[z * width + x + 1]
+				if _same_iso(r_deep, r_e, r_step):
+					var world_e := Vector3(origin.x + float(x + 1) * cell, 0.3, origin.y + float(z) * cell)
+					tool.set_color(Color(0.15, 0.9, 1.0, 0.55))
+					tool.add_vertex(world)
+					tool.add_vertex(world_e)
+			# Línea vertical (s constante): vecino S.
+			if z + 1 < height and _warp_debug.valid_mask[(z + 1) * width + x] != 0:
+				var s_s: float = _s_of(_warp_debug, z + 1, x, width, d0, deep_origin)
+				if _same_iso(s_deep, s_s, s_step):
+					var world_s := Vector3(origin.x + float(x) * cell, 0.3, origin.y + float(z + 1) * cell)
+					tool.set_color(Color(1.0, 0.8, 0.2, 0.55))
+					tool.add_vertex(world)
+					tool.add_vertex(world_s)
+	_warp_grid_debug.mesh = tool.commit()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.no_depth_test = true
+	material.render_priority = 124
+	_warp_grid_debug.material_override = material
+
+
+func _s_of(warp, z: int, x: int, width: int, d0: Vector2, deep_origin: Vector2) -> float:
+	var deep := Vector2(warp.deep_x[z * width + x], warp.deep_z[z * width + x])
+	return (deep - deep_origin).dot(d0)
+
+
+func _same_iso(a: float, b: float, step: float) -> bool:
+	## Ambos en el mismo intervalo de isolínea (tolerancia a la mitad).
+	return floorf(a / step) == floorf(b / step)
+
+
+func _build_warp_detj_mesh() -> void:
+	## Heatmap de detJ por celda: verde SAFE, amarillo NEAR_CAUSTIC, rojo FOLDED,
+	## gris INVALID. Sin clamp: los folds se pintan en rojo.
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var width: int = _warp_debug.width
+	var height: int = _warp_debug.height
+	var origin: Vector2 = _warp_debug.world_origin_xz
+	var cell: float = _warp_debug.cell_size_m
+	for z in height - 1:
+		for x in width - 1:
+			var color := Color(0.2, 0.2, 0.2, 0.5)
+			var index := z * width + x
+			match _warp_debug.jacobian_class[index]:
+				WarpDataScript.JacobianClass.SAFE:
+					var det: float = clampf(_warp_debug.jacobian_det[index] / 1.5, 0.0, 1.0)
+					color = Color(0.1, lerpf(0.7, 0.15, det), lerpf(0.2, 0.9, det), 0.5)
+				WarpDataScript.JacobianClass.NEAR_CAUSTIC:
+					color = Color(1.0, 0.85, 0.1, 0.55)
+				WarpDataScript.JacobianClass.FOLDED:
+					color = Color(1.0, 0.08, 0.08, 0.7)
+				WarpDataScript.JacobianClass.INVALID:
+					color = Color(0.18, 0.18, 0.22, 0.35)
+			var p00 := Vector3(origin.x + float(x) * cell, 0.28, origin.y + float(z) * cell)
+			var p10 := Vector3(origin.x + float(x + 1) * cell, 0.28, origin.y + float(z) * cell)
+			var p01 := Vector3(origin.x + float(x) * cell, 0.28, origin.y + float(z + 1) * cell)
+			var p11 := Vector3(origin.x + float(x + 1) * cell, 0.28, origin.y + float(z + 1) * cell)
+			for vertex in [p00, p10, p11, p00, p11, p01]:
+				tool.set_color(color)
+				tool.add_vertex(vertex)
+	_warp_detj_debug.mesh = tool.commit()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.vertex_color_use_as_albedo = true
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.no_depth_test = true
+	material.render_priority = 123
+	_warp_detj_debug.material_override = material
 
 
 func _apply_coastal_settings() -> void:
@@ -90,7 +254,23 @@ func _apply_coastal_settings() -> void:
 func _update_status() -> void:
 	var mode_name := "MONO PHASE DEBUG" if _monochromatic_enabled else "FFT"
 	var probe_text := _probe_text()
-	_status.text = "PHASE 3B / 3B.1 — COASTAL VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nR  Propagation: %s\nV  Camera: %s\nP  Paused: %s\nJ  Seabed: %s\nH  Field: %s\nlambda deep: 16.0 m | bank min depth: 0.5 m\nRuler: 16 m ticks | Incoming: +X\n\n%s" % ["ON" if _coastal_enabled else "OFF", mode_name, "REFRACTED 3B.1" if _refraction_enabled else "STRAIGHT 3B", _camera_mode_name(), "YES" if SimulationClock.is_paused() else "NO", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index], probe_text]
+	_status.text = "PHASE 3B / 3B.1 — COASTAL VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nR  Propagation: %s\nV  Camera: %s\nP  Paused: %s\nJ  Seabed: %s\nH  Field: %s\nW  Warp debug: %s\nlambda deep: 16.0 m | bank min depth: 0.5 m\nRuler: 16 m ticks | Incoming: +X\n\n%s" % ["ON" if _coastal_enabled else "OFF", mode_name, "REFRACTED 3B.1" if _refraction_enabled else "STRAIGHT 3B", _camera_mode_name(), "YES" if SimulationClock.is_paused() else "NO", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index], _warp_status_text(), probe_text]
+
+
+func _warp_status_text() -> String:
+	if not _warp_debug_enabled:
+		return "OFF"
+	if _warp_debug == null:
+		return "BAKING (una vez, ~7 s)..."
+	var safe := 0
+	var near := 0
+	var folded := 0
+	for cls in _warp_debug.jacobian_class:
+		match cls:
+			WarpDataScript.JacobianClass.SAFE: safe += 1
+			WarpDataScript.JacobianClass.NEAR_CAUSTIC: near += 1
+			WarpDataScript.JacobianClass.FOLDED: folded += 1
+	return "ON — SAFE %d / NEAR %d / FOLDED %d" % [safe, near, folded]
 
 
 func _set_camera_mode(mode: int) -> void:

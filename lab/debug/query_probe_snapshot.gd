@@ -73,7 +73,7 @@ func _snapshot() -> void:
 	_enabled = true
 
 
-func _spawn_probe(position: Vector3, color: Color, is_golden: bool) -> void:
+func _spawn_probe(probe_position: Vector3, color: Color, is_golden: bool) -> void:
 	var probe := MeshInstance3D.new()
 	var mesh := SphereMesh.new()
 	mesh.radius = 0.18
@@ -83,7 +83,7 @@ func _spawn_probe(position: Vector3, color: Color, is_golden: bool) -> void:
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.albedo_color = color
 	probe.material_override = material
-	probe.position = position
+	probe.position = probe_position
 	add_child(probe)
 	if is_golden:
 		_golden_probes.append(probe)

@@ -319,12 +319,20 @@ func rebuild_coastal_propagation() -> bool:
 		push_warning("3B coastal: BathymetryData no asignado o inválido; LONG queda abierto.")
 		surface.set_coastal_propagation(null)
 		return false
-	var baker = CoastalEikonalBakerScript.new() if coastal_eikonal_refraction_debug else CoastalBakerScript.new()
-	baker.bathymetry_data = coastal_bathymetry_data
-	baker.incoming_direction_xz = coastal_incoming_direction_xz
-	baker.reference_wavelength_m = coastal_reference_wavelength_m
-	baker.min_valid_depth_m = coastal_min_valid_depth_m
-	_coastal_propagation = baker.bake()
+	if coastal_eikonal_refraction_debug:
+		var eikonal_baker := CoastalEikonalBakerScript.new()
+		eikonal_baker.bathymetry_data = coastal_bathymetry_data
+		eikonal_baker.incoming_direction_xz = coastal_incoming_direction_xz
+		eikonal_baker.reference_wavelength_m = coastal_reference_wavelength_m
+		eikonal_baker.min_valid_depth_m = coastal_min_valid_depth_m
+		_coastal_propagation = eikonal_baker.bake()
+	else:
+		var straight_baker := CoastalBakerScript.new()
+		straight_baker.bathymetry_data = coastal_bathymetry_data
+		straight_baker.incoming_direction_xz = coastal_incoming_direction_xz
+		straight_baker.reference_wavelength_m = coastal_reference_wavelength_m
+		straight_baker.min_valid_depth_m = coastal_min_valid_depth_m
+		_coastal_propagation = straight_baker.bake()
 	if _coastal_propagation == null:
 		surface.set_coastal_propagation(null)
 		return false

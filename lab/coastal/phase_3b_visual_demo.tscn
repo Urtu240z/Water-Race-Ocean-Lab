@@ -50,6 +50,10 @@ shadow_enabled = true
 
 [node name="DirectionArrows" type="MeshInstance3D" parent="."]
 
+[node name="WarpGridDebug" type="MeshInstance3D" parent="."]
+
+[node name="WarpDetJDebug" type="MeshInstance3D" parent="."]
+
 [node name="TopCamera" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 120, 0)
 current = true
