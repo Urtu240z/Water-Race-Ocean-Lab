@@ -1,27 +1,30 @@
 class_name OceanQueryReference
 extends RefCounted
-## Referencia CPU matemática del océano FFT GPU (Fase 2A).
+## GOLDEN REFERENCE CPU del océano FFT GPU en coordenadas MUNDIALES (Fase 2A.1).
 ##
-## Reconstruye la misma superficie que el pipeline GPU a partir de:
-## - exactamente el mismo H0 (PackedByteArray RGBA32F) subido a GPU;
-## - exactamente las mismas configs LONG/MID/SHORT;
-## - el mismo simulation time;
-## - la misma dispersión y el mismo signo de choppiness (lambda negativa).
+## La superficie Tessendorf con choppiness es PARAMÉTRICA, no un heightfield:
+##   P(q,t).xz = q + Dxz(q,t)
+##   P(q,t).y  = sea_level + H(q,t)
+## donde q es la coordenada espectral original. sample_water(world_xz, t)
+## invierte world_xz -> q (Newton-Raphson 2D) y evalúa en ese q.
 ##
-## Es intencionadamente lenta: evalúa TODOS los modos espectrales de las tres
-## cascadas (3 × N² complejos). No es para physics per-frame; es la verdad
-## matemática contra la que se validará la implementación reducida de 2B.
+## - sample_water(...)   -> superficie bajo un XZ mundial (semántica pública).
+## - sample_parametric(...) -> evalúa en q directo (helper de tests/debug).
 ##
-## Normalización derivada del pipeline:
-##   tessendorf_spectrum.gd construye H0 con discrete_scale = Δk·N²;
-##   stockham_ifft.glsl aplica la IFFT sin normalizar;
-##   assemble_maps.glsl multiplica por 1/(N·N) y corrige el checkerboard.
-## La suma directa con 1/N² sobre índices centrados reproduce exactamente los
-## valores de texel del displacement_map (el checkerboard cancela al usar
-## k = (c - N/2)·Δk; queda el factor σ = (-1)^(mx+my) de la convención de
-## origen del clipmap: el mundo x=0 cae en el texel N/2).
+## Reutiliza exactamente el mismo H0 que la GPU (misma seed, configs, tiempo,
+## dispersión y lambda negativa). Es intencionadamente lenta: evalúa TODOS los
+## modos de las tres cascadas (3 × N²). Referencia para Fase 2B.
+##
+## Normalización (derivada del pipeline): suma directa con 1/N² sobre índices
+## centrados; el checkerboard del assemble cancela con k = (c - N/2)·Δk y
+## queda el factor σ = (-1)^(mx+my) de la convención de origen del clipmap.
 
 const SampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
+
+# Parámetros de inversión world_xz -> q (referencia, no solver infinito).
+const MAX_ITERATIONS := 8
+const POSITION_TOLERANCE_M := 1.0e-4
+const JACOBIAN_EPSILON := 1.0e-6
 
 
 class _ModeData:
@@ -43,7 +46,7 @@ class _ModeData:
 	var c21 := 0.0
 	var c22 := 0.0
 	var parity := 1.0 # (-1)^(mx+my)
-	# Estado preparado para un tiempo fijo (probes/snapshots).
+	# Estado preparado para un tiempo fijo (Newton interno y probes).
 	var ev_h_re := 0.0
 	var ev_h_im := 0.0
 	var ev_v_re := 0.0
@@ -56,6 +59,9 @@ class _CascadeData:
 
 
 var _cascades: Array[_CascadeData] = []
+var _sea_level := 0.0
+var _prepared_valid := false
+var _prepared_time := 0.0
 
 
 func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByteArray]) -> void:
@@ -63,6 +69,11 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 	_cascades.clear()
 	for index in configs.size():
 		_cascades.append(_decode_cascade(configs[index], h0_datas[index]))
+	_prepared_valid = false
+
+
+func set_sea_level(sea_level_y: float) -> void:
+	_sea_level = sea_level_y
 
 
 func is_ready() -> bool:
@@ -70,12 +81,30 @@ func is_ready() -> bool:
 
 
 func sample_water(world_position: Vector3, simulation_time: float):
-	return _evaluate(world_position.x, world_position.z, simulation_time, false)
+	## Superficie que existe bajo este XZ mundial: invierte world_xz -> q con
+	## Newton-Raphson y evalúa height/normal/velocity en ese q.
+	if _cascades.is_empty():
+		return SampleScript.flat(_sea_level)
+	prepare_time(simulation_time)
+	var solved := _solve_world_to_q(Vector2(world_position.x, world_position.z))
+	return _build_sample(solved.acc, solved.residual, solved.iterations, solved.converged)
+
+
+func sample_parametric(parametric_position: Vector3, simulation_time: float):
+	## Helper de tests/debug: evalúa en la coordenada paramétrica q directamente.
+	if _cascades.is_empty():
+		return SampleScript.flat(_sea_level)
+	var acc := _parametric_accumulators(parametric_position.x, parametric_position.z, false, simulation_time)
+	return _build_sample(acc, 0.0, 0, true)
 
 
 func prepare_time(simulation_time: float) -> void:
 	## Precalcula el espectro evolucionado h(j,t) y dh/dt para un tiempo fijo;
-	## luego sample_prepared() evalúa posiciones sin recalcular las fases ω·t.
+	## las evaluaciones posteriores (Newton, probes) no recalculan las fases ω·t.
+	if _cascades.is_empty():
+		return
+	_prepared_valid = true
+	_prepared_time = simulation_time
 	for cascade in _cascades:
 		for mode in cascade.modes:
 			var wt := mode.omega * simulation_time
@@ -92,55 +121,53 @@ func prepare_time(simulation_time: float) -> void:
 
 
 func sample_prepared(world_position: Vector3):
-	return _evaluate(world_position.x, world_position.z, 0.0, true)
-
-
-func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _CascadeData:
-	var n := config.resolution
-	var delta_k := TAU / config.domain_size_m
-	var lambda := -config.choppiness
-	var floats := h0_bytes.to_float32_array()
-	var half := n / 2
-	var modes: Array[_ModeData] = []
-	modes.resize(n * n)
-	for y in n:
-		for x in n:
-			var index := y * n + x
-			var mode := _ModeData.new()
-			var mx := x - half
-			var my := y - half
-			mode.kx = float(mx) * delta_k
-			mode.ky = float(my) * delta_k
-			var k_len := sqrt(mode.kx * mode.kx + mode.ky * mode.ky)
-			var base := index * 4
-			mode.h0_re = floats[base]
-			mode.h0_im = floats[base + 1]
-			mode.h0n_re = floats[base + 2]
-			mode.h0n_im = floats[base + 3]
-			if k_len > 0.000001:
-				mode.omega = sqrt(config.gravity_mps2 * k_len)
-				var kx_hat := mode.kx / k_len
-				var ky_hat := mode.ky / k_len
-				mode.a1 = lambda * kx_hat
-				mode.a2 = lambda * ky_hat
-				mode.b1 = mode.kx
-				mode.b2 = mode.ky
-				mode.c11 = mode.a1 * mode.b1
-				mode.c12 = mode.a1 * mode.b2
-				mode.c21 = mode.a2 * mode.b1
-				mode.c22 = mode.a2 * mode.b2
-			mode.parity = 1.0 if (mx + my) & 1 == 0 else -1.0
-			modes[index] = mode
-	var result := _CascadeData.new()
-	result.inv_n2 = 1.0 / float(n * n)
-	result.modes = modes
-	return result
-
-
-func _evaluate(wx: float, wz: float, simulation_time: float, use_prepared: bool):
 	if _cascades.is_empty():
-		return SampleScript.flat()
+		return SampleScript.flat(_sea_level)
+	if not _prepared_valid:
+		push_warning("OceanQueryReference.sample_prepared llamado sin prepare_time válido; devuelve sample inválido.")
+		return SampleScript.invalid()
+	var solved := _solve_world_to_q(Vector2(world_position.x, world_position.z))
+	return _build_sample(solved.acc, solved.residual, solved.iterations, solved.converged)
 
+
+## --- Inversión world_xz -> q (Newton-Raphson 2D) ----------------------------
+
+func _solve_world_to_q(target_xz: Vector2) -> Dictionary:
+	## Resuelve F(q) = q + Dxz(q) - target_xz = 0.
+	## J = [[1+dDx/dx, dDx/dz], [dDz/dx, 1+dDz/dz]]
+	var q := target_xz
+	var acc := _parametric_accumulators(q.x, q.y, true, _prepared_time)
+	var fx: float = q.x + acc.dx - target_xz.x
+	var fz: float = q.y + acc.dz - target_xz.y
+	var residual := sqrt(fx * fx + fz * fz)
+	var iterations := 0
+	var converged := residual <= POSITION_TOLERANCE_M
+	while not converged and iterations < MAX_ITERATIONS:
+		var det_j: float = (1.0 + acc.dxx) * (1.0 + acc.dzz) - acc.dxz * acc.dzx
+		if absf(det_j) <= JACOBIAN_EPSILON:
+			break # parametrización singular/localmente no invertible
+		var inv_det: float = 1.0 / det_j
+		var delta_x: float = inv_det * ((1.0 + acc.dzz) * fx - acc.dxz * fz)
+		var delta_z: float = inv_det * (-acc.dzx * fx + (1.0 + acc.dxx) * fz)
+		q.x -= delta_x
+		q.y -= delta_z
+		acc = _parametric_accumulators(q.x, q.y, true, _prepared_time)
+		fx = q.x + acc.dx - target_xz.x
+		fz = q.y + acc.dz - target_xz.y
+		residual = sqrt(fx * fx + fz * fz)
+		iterations += 1
+		converged = residual <= POSITION_TOLERANCE_M
+	return {
+		"acc": acc,
+		"residual": residual,
+		"iterations": iterations,
+		"converged": converged,
+	}
+
+
+## --- Evaluación paramétrica -------------------------------------------------
+
+func _parametric_accumulators(qx: float, qz: float, use_prepared: bool, simulation_time: float) -> Dictionary:
 	var total_h := 0.0
 	var total_dx := 0.0
 	var total_dz := 0.0
@@ -190,7 +217,7 @@ func _evaluate(wx: float, wz: float, simulation_time: float, use_prepared: bool)
 				h_im = a_im + b_im
 				v_re = mode.omega * (-a_im + b_im)
 				v_im = mode.omega * (a_re - b_re)
-			var phi := mode.kx * wx + mode.ky * wz
+			var phi := mode.kx * qx + mode.ky * qz
 			var cp := cos(phi)
 			var sp := sin(phi)
 			# P = h·e^{iφ}, Q = v·e^{iφ}
@@ -224,9 +251,18 @@ func _evaluate(wx: float, wz: float, simulation_time: float, use_prepared: bool)
 		total_vx += lvx * inv_n2
 		total_vz += lvz * inv_n2
 
-	var displacement := Vector3(total_dx, total_h, total_dz)
-	var tangent_x := Vector3(1.0 + total_dxx, total_dhx, total_dzx)
-	var tangent_z := Vector3(total_dxz, total_dhz, 1.0 + total_dzz)
+	return {
+		"h": total_h, "dx": total_dx, "dz": total_dz,
+		"dhx": total_dhx, "dhz": total_dhz,
+		"dxx": total_dxx, "dxz": total_dxz, "dzx": total_dzx, "dzz": total_dzz,
+		"vh": total_vh, "vx": total_vx, "vz": total_vz,
+	}
+
+
+func _build_sample(acc: Dictionary, residual: float, iterations: int, converged: bool):
+	var displacement := Vector3(acc.dx, acc.h, acc.dz)
+	var tangent_x := Vector3(1.0 + acc.dxx, acc.dhx, acc.dzx)
+	var tangent_z := Vector3(acc.dxz, acc.dhz, 1.0 + acc.dzz)
 	var normal := tangent_z.cross(tangent_x)
 	if normal.length_squared() > 0.0000001:
 		normal = normal.normalized()
@@ -234,18 +270,66 @@ func _evaluate(wx: float, wz: float, simulation_time: float, use_prepared: bool)
 			normal = -normal
 	else:
 		normal = Vector3.UP
-	var velocity := Vector3(total_vx, total_vh, total_vz)
-
-	if not _is_finite(displacement) or not _is_finite(normal) or not _is_finite(velocity):
+	var velocity := Vector3(acc.vx, acc.vh, acc.vz)
+	var det_j: float = (1.0 + acc.dxx) * (1.0 + acc.dzz) - acc.dxz * acc.dzx
+	if not _is_finite(displacement) or not _is_finite(normal) or not _is_finite(velocity) or not is_finite(det_j):
 		return SampleScript.invalid()
 
 	var sample := SampleScript.new()
-	sample.valid = true
-	sample.height = total_h
+	sample.valid = converged
+	sample.height = _sea_level + acc.h
 	sample.displacement = displacement
 	sample.normal = normal
 	sample.surface_velocity = velocity
+	sample.jacobian_det = det_j
+	sample.foldover_risk = det_j <= 0.0
+	sample.query_residual_m = residual
+	sample.query_iterations = iterations
 	return sample
+
+
+## --- Decodificación de H0 ---------------------------------------------------
+
+func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _CascadeData:
+	var n := config.resolution
+	var delta_k := TAU / config.domain_size_m
+	var lambda := -config.choppiness
+	var floats := h0_bytes.to_float32_array()
+	var half := n / 2
+	var modes: Array[_ModeData] = []
+	modes.resize(n * n)
+	for y in n:
+		for x in n:
+			var index := y * n + x
+			var mode := _ModeData.new()
+			var mx := x - half
+			var my := y - half
+			mode.kx = float(mx) * delta_k
+			mode.ky = float(my) * delta_k
+			var k_len := sqrt(mode.kx * mode.kx + mode.ky * mode.ky)
+			var base := index * 4
+			mode.h0_re = floats[base]
+			mode.h0_im = floats[base + 1]
+			mode.h0n_re = floats[base + 2]
+			mode.h0n_im = floats[base + 3]
+			if k_len > 0.000001:
+				mode.omega = sqrt(config.gravity_mps2 * k_len)
+				var kx_hat := mode.kx / k_len
+				var ky_hat := mode.ky / k_len
+				mode.a1 = lambda * kx_hat
+				mode.a2 = lambda * ky_hat
+				mode.b1 = mode.kx
+				mode.b2 = mode.ky
+				mode.c11 = mode.a1 * mode.b1
+				mode.c12 = mode.a1 * mode.b2
+				mode.c21 = mode.a2 * mode.b1
+				mode.c22 = mode.a2 * mode.b2
+			mode.parity = 1.0 if (mx + my) & 1 == 0 else -1.0
+			modes[index] = mode
+	var result := _CascadeData.new()
+	result.inv_n2 = 1.0 / float(n * n)
+	result.modes = modes
+	return result
 
 
 func _is_finite(value: Vector3) -> bool:

@@ -151,7 +151,7 @@ func _validate_single_mode() -> void:
 	# Punto 1: t=0, wx=2.0 (pendiente creciente hacia la cresta en wx=8).
 	var wx := 2.0
 	var t := 0.0
-	var sample = reference.sample_water(Vector3(wx, 0.0, 0.0), t)
+	var sample = reference.sample_parametric(Vector3(wx, 0.0, 0.0), t)
 	var expected_height := -inv16 * cos(omega * t) * cos(kx * wx)
 	var expected_dx := inv16 * cos(omega * t) * sin(kx * wx)
 	_check(is_equal_approx(sample.height, expected_height), "F: height single-mode (%.6f ≈ %.6f)" % [sample.height, expected_height])
@@ -164,7 +164,7 @@ func _validate_single_mode() -> void:
 	# Punto 2: t = π/(2ω), wx=0.
 	wx = 0.0
 	t = PI / (2.0 * omega)
-	sample = reference.sample_water(Vector3(wx, 0.0, 0.0), t)
+	sample = reference.sample_parametric(Vector3(wx, 0.0, 0.0), t)
 	var expected_vy := (omega / 16.0) * sin(omega * t) * cos(kx * wx)
 	_check(is_equal_approx(sample.height, 0.0), "F: height 0 en nodo")
 	_check(is_equal_approx(sample.surface_velocity.y, expected_vy), "F: dHeight/dt (%.6f ≈ %.6f)" % [sample.surface_velocity.y, expected_vy])
@@ -195,22 +195,22 @@ func _validate_quality_profile_invariance() -> void:
 	quality.free()
 
 
-# Coste aproximado de la referencia (1 y 4 samples).
+# Coste aproximado del backend paramétrico (la query mundial se mide en 2A.1).
 func _measure_cost() -> void:
 	var reference = _build_reference(SeaStateScript.State.RACE, _SEED)
 	var start := Time.get_ticks_usec()
-	reference.sample_water(_POS, _TIME)
+	reference.sample_parametric(_POS, _TIME)
 	var one_us := Time.get_ticks_usec() - start
 	start = Time.get_ticks_usec()
 	for index in 4:
-		reference.sample_water(Vector3(_POS.x + index * 3.0, 0.0, _POS.z), _TIME)
+		reference.sample_parametric(Vector3(_POS.x + index * 3.0, 0.0, _POS.z), _TIME)
 	var four_us := Time.get_ticks_usec() - start
 	reference.prepare_time(_TIME)
 	start = Time.get_ticks_usec()
 	for index in 9:
 		reference.sample_prepared(Vector3(_POS.x + index * 2.0, 0.0, _POS.z))
 	var nine_prepared_us := Time.get_ticks_usec() - start
-	print("INFO: coste 1 sample = %.1f ms | 4 samples = %.1f ms | 9 samples preparados = %.1f ms" % [one_us / 1000.0, four_us / 1000.0, nine_prepared_us / 1000.0])
+	print("INFO: coste 1 sample paramétrico = %.1f ms | 4 = %.1f ms | 9 preparados = %.1f ms" % [one_us / 1000.0, four_us / 1000.0, nine_prepared_us / 1000.0])
 
 
 # Lambda formalizada: regression check del signo.

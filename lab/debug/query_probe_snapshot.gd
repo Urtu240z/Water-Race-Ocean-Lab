@@ -49,7 +49,12 @@ func _snapshot() -> void:
 	for offset in PROBE_OFFSETS:
 		var world := Vector3(center.x + offset.x, 0.0, center.y + offset.y)
 		var sample = module.sample_water_prepared(world)
-		_spawn_probe(Vector3(world.x, sample.height, world.z))
+		# La query es WORLD-SPACE: la esfera se coloca en el XZ pedido con la
+		# altura absoluta de la superficie en ese punto. Los probes se mantienen
+		# dentro del radio donde LONG/MID/SHORT tienen peso visual 1.0 (<= 8 m)
+		# y donde la malla L0 es densa.
+		if sample.valid:
+			_spawn_probe(Vector3(world.x, sample.height, world.z))
 	_enabled = true
 
 

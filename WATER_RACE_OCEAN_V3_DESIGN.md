@@ -3,7 +3,7 @@
 > **Documento vivo y canónico del proyecto Ocean V3.**  
 > Define objetivos, decisiones cerradas, límites de arquitectura, rendimiento y plan de validación.  
 > Git debe conservar el historial: a partir de ahora se actualiza este mismo documento.  
-> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO por inspección visual del usuario. Fase 2A (OceanQueryReference CPU) completada en Ocean Lab. Siguiente: Fase 2B — evaluador reduced/production de OceanQuery. Física del jetski NO iniciada.**
+> **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fase 2A completada. Fase 2A.1 completada: Golden world-space reference disponible (inversión world_xz → q). Gate 2 todavía pendiente. Siguiente: Fase 2B — evaluador reduced/production de OceanQuery. Física del jetski NO iniciada.**
 
 ---
 

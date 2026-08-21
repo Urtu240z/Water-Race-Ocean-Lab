@@ -64,6 +64,7 @@ func _ready() -> void:
 	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
 	_query_reference = QueryReferenceScript.new()
 	_query_reference.set_spectrum(configs, h0_datas)
+	_query_reference.set_sea_level(surface.clipmap_config.sea_level_y)
 	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
