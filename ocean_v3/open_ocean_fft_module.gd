@@ -8,6 +8,7 @@ const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
+const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
 
 enum BandDebug {
@@ -18,6 +19,12 @@ enum BandDebug {
 }
 
 @export var enabled_on_start := true
+@export var enable_reference_query_debug := false
+# Presupuestos por banda (pares canónicos) elegidos por calibración 2B:
+# mínimo total que cumple los objetivos de precisión en el dataset de calibración.
+@export var reduced_long_pairs := 1024
+@export var reduced_mid_pairs := 1024
+@export var reduced_short_pairs := 1024
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -25,7 +32,8 @@ var configs: Array[OpenOceanFFTConfig] = []
 var dispatches_per_update := 0
 
 var _cascades: Array[Dictionary] = []
-var _query_reference: RefCounted = null
+var _query_reduced: RefCounted = null
+var _query_golden: RefCounted = null
 var _enabled := true
 var _textures_published := false
 var _dispatch_requested := true
@@ -62,9 +70,16 @@ func _ready() -> void:
 	for config in configs:
 		dispatches_per_update += config.compute_pass_count()
 	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
-	_query_reference = QueryReferenceScript.new()
-	_query_reference.set_spectrum(configs, h0_datas)
-	_query_reference.set_sea_level(surface.clipmap_config.sea_level_y)
+	# Backend de producción: REDUCED, siempre disponible.
+	_query_reduced = QueryReducedScript.new()
+	_query_reduced.set_spectrum(configs, h0_datas)
+	_query_reduced.set_sea_level(surface.clipmap_config.sea_level_y)
+	_query_reduced.set_budget(reduced_long_pairs, reduced_mid_pairs, reduced_short_pairs)
+	# Golden Reference: sólo cuando se pide explícitamente para debug/test.
+	if enable_reference_query_debug:
+		_query_golden = QueryReferenceScript.new()
+		_query_golden.set_spectrum(configs, h0_datas)
+		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	surface.configure(configs, _textures_for(&"displacement"), _textures_for(&"normal"))
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
@@ -78,7 +93,8 @@ func _exit_tree() -> void:
 	if OceanModuleRegistry.module_state_changed.is_connected(_on_module_state_changed):
 		OceanModuleRegistry.module_state_changed.disconnect(_on_module_state_changed)
 	OceanModuleRegistry.unregister_module(MODULE_ID)
-	_query_reference = null
+	_query_reduced = null
+	_query_golden = null
 	for cascade in _cascades:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
@@ -127,34 +143,68 @@ func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
 
 
-## --- OceanQuery (Fase 2A, backend REFERENCE) --------------------------------
+## --- OceanQuery (Fase 2B, backend REDUCED por defecto) -----------------------
 ## La query física evalúa SIEMPRE las tres bandas del sea state activo. El band
-## debug (B) y los fades visuales del renderer NO alteran la query. Los perfiles
-## de calidad tampoco. No hay readback GPU->CPU: la referencia es CPU pura.
+## debug (B), los fades visuales y los perfiles de calidad NO alteran la query.
+## No hay readback GPU->CPU. Golden Reference sólo se instancia si
+## enable_reference_query_debug está activo (debug/test).
 
 func sample_water(world_position: Vector3, simulation_time: float):
-	if not _enabled or _query_reference == null:
+	if not _enabled or _query_reduced == null:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	return _query_reference.sample_water(world_position, simulation_time)
+	return _query_reduced.sample_water(world_position, simulation_time)
 
 
 func sample_water_physics_time(world_position: Vector3):
-	return sample_water(world_position, SimulationClock.simulation_time)
+	if not _enabled or _query_reduced == null:
+		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+	# Garantiza el tiempo preparado sin depender del orden de _physics_process.
+	_query_reduced.ensure_prepared(SimulationClock.simulation_time)
+	return _query_reduced.sample_water_prepared(world_position)
+
+
+func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
+	if not _enabled or _query_reduced == null:
+		var flat_result: Array = []
+		var flat = QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+		flat_result.resize(positions.size())
+		for index in positions.size():
+			flat_result[index] = flat
+		return flat_result
+	_query_reduced.ensure_prepared(SimulationClock.simulation_time)
+	return _query_reduced.sample_water_batch_prepared(positions)
 
 
 func prepare_query_time(simulation_time: float) -> void:
-	if _query_reference != null:
-		_query_reference.prepare_time(simulation_time)
+	if _query_reduced != null:
+		_query_reduced.prepare_time(simulation_time)
+	if _query_golden != null:
+		_query_golden.prepare_time(simulation_time)
 
 
 func sample_water_prepared(world_position: Vector3):
-	if not _enabled or _query_reference == null:
+	if not _enabled or _query_reduced == null:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	return _query_reference.sample_prepared(world_position)
+	return _query_reduced.sample_water_prepared(world_position)
+
+
+func has_golden_reference() -> bool:
+	return _query_golden != null
+
+
+func prepare_golden_time(simulation_time: float) -> void:
+	if _query_golden != null:
+		_query_golden.prepare_time(simulation_time)
+
+
+func sample_water_golden_prepared(world_position: Vector3):
+	if _query_golden == null:
+		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+	return _query_golden.sample_prepared(world_position)
 
 
 func query_backend_name() -> String:
-	return "REFERENCE"
+	return "REDUCED"
 
 
 func cycle_debug_mode() -> void:
@@ -274,13 +324,15 @@ func _on_reset_completed(_seed: int) -> void:
 
 func _rebuild_h0_all(simulation_seed: int) -> void:
 	## Regenera H0 UNA VEZ por cascada y alimenta con los MISMOS bytes a la GPU
-	## (upload_h0) y a la referencia CPU (set_spectrum).
+	## (upload_h0), al backend REDUCED y a la Golden (sólo debug/test).
 	var h0_datas: Array[PackedByteArray] = []
 	for index in _cascades.size():
 		var config: OpenOceanFFTConfig = configs[index]
 		var h0_data := _build_h0(config, simulation_seed)
 		h0_datas.append(h0_data)
 		RenderingServer.call_on_render_thread(_cascades[index]["solver"].upload_h0.bind(h0_data))
-	if _query_reference != null:
-		_query_reference.set_spectrum(configs, h0_datas)
+	if _query_reduced != null:
+		_query_reduced.set_spectrum(configs, h0_datas)
+	if _query_golden != null:
+		_query_golden.set_spectrum(configs, h0_datas)
 	_dispatch_requested = true

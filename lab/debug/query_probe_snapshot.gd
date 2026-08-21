@@ -13,8 +13,14 @@ const PROBE_OFFSETS: Array[Vector2] = [
 	Vector2(-8, -8), Vector2(8, -8),
 	Vector2(-8, 8), Vector2(8, 8),
 ]
+const GOLDEN_OFFSETS: Array[Vector2] = [
+	Vector2(0, 0),
+	Vector2(-4, 4),
+	Vector2(4, -4),
+]
 
 var _probes: Array[MeshInstance3D] = []
+var _golden_probes: Array[MeshInstance3D] = []
 var _enabled := false
 
 
@@ -46,6 +52,7 @@ func _snapshot() -> void:
 	var center := Vector2(camera.global_position.x, camera.global_position.z)
 	module.prepare_query_time(time)
 	_clear()
+	# Probes REDUCED (cyan): query de producción world-space.
 	for offset in PROBE_OFFSETS:
 		var world := Vector3(center.x + offset.x, 0.0, center.y + offset.y)
 		var sample = module.sample_water_prepared(world)
@@ -54,11 +61,19 @@ func _snapshot() -> void:
 		# dentro del radio donde LONG/MID/SHORT tienen peso visual 1.0 (<= 8 m)
 		# y donde la malla L0 es densa.
 		if sample.valid:
-			_spawn_probe(Vector3(world.x, sample.height, world.z))
+			_spawn_probe(Vector3(world.x, sample.height, world.z), Color(0.2, 0.9, 1.0), false)
+	# Probes GOLDEN (naranja) sólo en 3 puntos, cuando el debug está activo.
+	if module.has_method(&"has_golden_reference") and module.has_golden_reference():
+		module.prepare_golden_time(time)
+		for offset in GOLDEN_OFFSETS:
+			var world := Vector3(center.x + offset.x, 0.0, center.y + offset.y)
+			var sample = module.sample_water_golden_prepared(world)
+			if sample.valid:
+				_spawn_probe(Vector3(world.x, sample.height, world.z), Color(1.0, 0.35, 0.08), true)
 	_enabled = true
 
 
-func _spawn_probe(position: Vector3) -> void:
+func _spawn_probe(position: Vector3, color: Color, is_golden: bool) -> void:
 	var probe := MeshInstance3D.new()
 	var mesh := SphereMesh.new()
 	mesh.radius = 0.18
@@ -66,15 +81,21 @@ func _spawn_probe(position: Vector3) -> void:
 	probe.mesh = mesh
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color(1.0, 0.35, 0.08)
+	material.albedo_color = color
 	probe.material_override = material
 	probe.position = position
 	add_child(probe)
-	_probes.append(probe)
+	if is_golden:
+		_golden_probes.append(probe)
+	else:
+		_probes.append(probe)
 
 
 func _clear() -> void:
 	for probe in _probes:
 		probe.queue_free()
 	_probes.clear()
+	for probe in _golden_probes:
+		probe.queue_free()
+	_golden_probes.clear()
 	_enabled = false

@@ -10,6 +10,7 @@ const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QualityScript := preload("res://ocean_v3/core/ocean_quality_settings.gd")
 const ConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const QueryRefScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
+const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 
 const _SEED := 20260820
 const _POS := Vector3(37.5, 0.0, -12.25)
@@ -55,6 +56,17 @@ func _build_reference(state: int, simulation_seed: int):
 	var reference = QueryRefScript.new()
 	reference.set_spectrum(configs, h0_datas)
 	return reference
+
+
+func _build_reduced_reference(state: int, simulation_seed: int):
+	var configs = SeaStateScript.build_cascades(state)
+	var h0_datas: Array[PackedByteArray] = []
+	for config in configs:
+		h0_datas.append(SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id)))
+	var reduced = QueryReducedScript.new()
+	reduced.set_budget(1024, 1024, 1024)
+	reduced.set_spectrum(configs, h0_datas)
+	return reduced
 
 
 # A. Mismo H0 + posición + tiempo => mismo sample.
@@ -246,12 +258,13 @@ func _validate_runtime() -> void:
 		_check(false, "runtime: módulo open_ocean_fft no disponible")
 		return
 
-	# L. La query del módulo usa exactamente el mismo H0 que la construcción canónica.
-	var canonical = _build_reference(SeaStateScript.State.RACE, _SEED)
+	# L. La query del módulo usa exactamente el mismo H0 que la construcción
+	# canónica (backend REDUCED por defecto desde 2B, mismo presupuesto).
+	var canonical = _build_reduced_reference(SeaStateScript.State.RACE, _SEED)
 	var module_sample = module.sample_water(_POS, _TIME)
 	var canonical_sample = canonical.sample_water(_POS, _TIME)
 	_check(module_sample.valid and canonical_sample.valid, "L: samples válidos")
-	_check(is_equal_approx(module_sample.height, canonical_sample.height) and module_sample.displacement.distance_to(canonical_sample.displacement) < 0.0001, "L: query del módulo coincide con referencia canónica (mismo H0 GPU/CPU)")
+	_check(is_equal_approx(module_sample.height, canonical_sample.height) and module_sample.displacement.distance_to(canonical_sample.displacement) < 0.0001, "L: query del módulo coincide con el reduced canónico (mismo H0 GPU/CPU)")
 
 	# H. El band debug visual no altera la query.
 	var before_band = module.sample_water(_POS, _TIME)
@@ -273,7 +286,7 @@ func _validate_runtime() -> void:
 	# K. Cambiar sea state actualiza el H0 CPU que usa la query.
 	module.set_sea_state(SeaStateScript.State.CALM)
 	var calm_module = module.sample_water(_POS, _TIME)
-	var calm_canonical = _build_reference(SeaStateScript.State.CALM, _SEED)
+	var calm_canonical = _build_reduced_reference(SeaStateScript.State.CALM, _SEED)
 	var calm_can = calm_canonical.sample_water(_POS, _TIME)
 	_check(is_equal_approx(calm_module.height, calm_can.height) and calm_module.displacement.distance_to(calm_can.displacement) < 0.0001, "K: set_sea_state actualiza H0 CPU de la query")
 	_check(not _samples_equal(calm_module, before_band), "K: CALM produce sample distinto de RACE")
