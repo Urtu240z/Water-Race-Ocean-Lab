@@ -74,6 +74,10 @@ public:
     size_t diag_last_spectral_point_evaluations = 0;
     int diag_last_newton_histogram[5] = {0, 0, 0, 0, 0}; // 0/1/2/3/no-conv.
 
+    // La detección vive en el objeto scalar: ninguna instrucción AVX2 se
+    // ejecuta antes de decidir llamar a la translation unit AVX2 aislada.
+    bool force_scalar = false;
+
     void clear() { cascades.clear(); prepared_valid = false; }
 
     void set_cascade_data(size_t cascade_index, double inv_n2,
@@ -97,8 +101,14 @@ public:
     void sample_prepared(double wx, double wz, double *out) { sample_prepared_(wx, wz, out); }
 
     // Batch: evalúa n posiciones; out debe tener n*S_STRIDE doubles.
-    // Referencia escalar estable: no se cambia su orden ni algoritmo.
+    // Producción: dispatch AVX2 si está disponible; scalar siempre fallback.
     void sample_batch_prepared(const double *positions_xz, size_t n, double *out);
+
+    // Referencia explícita para tests, benchmark y CPUs sin AVX2.
+    void sample_batch_scalar_prepared(const double *positions_xz, size_t n, double *out);
+
+    // Subtest aislado: AVX2 en aritmética, std::sin/cos por lane.
+    void sample_batch_avx2_scalar_trig_prepared(const double *positions_xz, size_t n, double *out);
 
     // TRUE_BATCH mode-major: reutiliza Workspace SoA y resuelve Newton de
     // forma colectiva. out tiene n*S_STRIDE doubles.
@@ -109,6 +119,9 @@ public:
     // el contrato normal seguido de qx,qz resueltos para el siguiente tick.
     void sample_batch_warm_prepared(const double *positions_xz, const double *initial_q_xz,
                                     size_t n, double *out);
+
+    bool avx2_supported() const;
+    const char *query_execution_backend() const;
 
     // Exposición pública de accumulate_ para diagnósticos del PATCH (2C.1A):
     // permite verificar que un nodo del grid reproduce EXACTAMENTE la suma del
@@ -134,8 +147,10 @@ private:
     void sample_prepared_(double wx, double wz, double *out);
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);
+    void evaluate_avx2_batch_(const size_t *indices, size_t active_count, bool vector_sincos);
     void build_sample_from_fields_(size_t point_index, bool converged, double *out) const;
     void solve_true_batch_(size_t n, double *out, bool append_solved_q);
+    void solve_avx2_batch_(size_t n, double *out, bool vector_sincos);
 };
 
 } // namespace oq

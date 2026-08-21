@@ -12,5 +12,12 @@ if not exist "%VCDIR%" (
   exit /b 1
 )
 call "%VCDIR%" >nul
-cl /nologo /O2 /std:c++17 /EHsc /W3 bench\bench_main.cpp src\ocean_query_core.cpp /Fe:bin\bench_main.exe
+rem Aislamiento también en standalone: sólo el objeto SIMD recibe /arch:AVX2.
+cl /nologo /O2 /std:c++17 /EHsc /W3 /c src\ocean_query_core.cpp /Fo:bin\ocean_query_core_scalar.obj
+if errorlevel 1 exit /b 1
+cl /nologo /O2 /std:c++17 /EHsc /W3 /arch:AVX2 /c src\ocean_query_simd_avx2.cpp /Fo:bin\ocean_query_simd_avx2.obj
+if errorlevel 1 exit /b 1
+cl /nologo /O2 /std:c++17 /EHsc /W3 /c bench\bench_main.cpp /Fo:bin\bench_main.obj
+if errorlevel 1 exit /b 1
+link /nologo /out:bin\bench_main.exe bin\bench_main.obj bin\ocean_query_core_scalar.obj bin\ocean_query_simd_avx2.obj
 endlocal

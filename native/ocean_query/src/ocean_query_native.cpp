@@ -28,6 +28,8 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("sample_world", "wx", "wz", "simulation_time"), &OceanQueryNative::sample_world);
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_prepared", "positions"), &OceanQueryNative::sample_batch_prepared);
+    ClassDB::bind_method(D_METHOD("sample_batch_scalar_prepared", "positions"), &OceanQueryNative::sample_batch_scalar_prepared);
+    ClassDB::bind_method(D_METHOD("sample_batch_avx2_scalar_trig_prepared", "positions"), &OceanQueryNative::sample_batch_avx2_scalar_trig_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch", "simulation_time", "positions"), &OceanQueryNative::sample_batch);
     ClassDB::bind_method(D_METHOD("sample_batch_true_prepared", "positions"), &OceanQueryNative::sample_batch_true_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_warm_prepared", "positions", "initial_q"), &OceanQueryNative::sample_batch_warm_prepared);
@@ -36,6 +38,9 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_diag_last_residual"), &OceanQueryNative::get_diag_last_residual);
     ClassDB::bind_method(D_METHOD("get_diag_last_spectral_point_evaluations"), &OceanQueryNative::get_diag_last_spectral_point_evaluations);
     ClassDB::bind_method(D_METHOD("get_diag_last_newton_histogram"), &OceanQueryNative::get_diag_last_newton_histogram);
+    ClassDB::bind_method(D_METHOD("get_cpu_supports_avx2"), &OceanQueryNative::get_cpu_supports_avx2);
+    ClassDB::bind_method(D_METHOD("get_query_execution_backend"), &OceanQueryNative::get_query_execution_backend);
+    ClassDB::bind_method(D_METHOD("set_force_scalar", "enabled"), &OceanQueryNative::set_force_scalar);
 }
 
 void OceanQueryNative::clear() {
@@ -114,6 +119,38 @@ PackedFloat64Array OceanQueryNative::sample_batch_prepared(const PackedVector3Ar
     return result;
 }
 
+PackedFloat64Array OceanQueryNative::sample_batch_scalar_prepared(const PackedVector3Array &positions) {
+    const size_t n = static_cast<size_t>(positions.size());
+    if (n == 0) { return PackedFloat64Array(); }
+    batch_xz_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vector3 p = positions[static_cast<int64_t>(i)];
+        batch_xz_[2 * i] = p.x; batch_xz_[2 * i + 1] = p.z;
+    }
+    batch_out_.resize(n * oq::S_STRIDE);
+    core_.sample_batch_scalar_prepared(batch_xz_.data(), n, batch_out_.data());
+    PackedFloat64Array result;
+    result.resize(static_cast<int64_t>(batch_out_.size()));
+    for (size_t i = 0; i < batch_out_.size(); ++i) result[static_cast<int64_t>(i)] = batch_out_[i];
+    return result;
+}
+
+PackedFloat64Array OceanQueryNative::sample_batch_avx2_scalar_trig_prepared(const PackedVector3Array &positions) {
+    const size_t n = static_cast<size_t>(positions.size());
+    if (n == 0) { return PackedFloat64Array(); }
+    batch_xz_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vector3 p = positions[static_cast<int64_t>(i)];
+        batch_xz_[2 * i] = p.x; batch_xz_[2 * i + 1] = p.z;
+    }
+    batch_out_.resize(n * oq::S_STRIDE);
+    core_.sample_batch_avx2_scalar_trig_prepared(batch_xz_.data(), n, batch_out_.data());
+    PackedFloat64Array result;
+    result.resize(static_cast<int64_t>(batch_out_.size()));
+    for (size_t i = 0; i < batch_out_.size(); ++i) result[static_cast<int64_t>(i)] = batch_out_[i];
+    return result;
+}
+
 PackedFloat64Array OceanQueryNative::sample_batch_true_prepared(const PackedVector3Array &positions) {
     const size_t n = static_cast<size_t>(positions.size());
     if (n == 0) { return PackedFloat64Array(); }
@@ -185,3 +222,9 @@ PackedInt32Array OceanQueryNative::get_diag_last_newton_histogram() const {
     for (int i = 0; i < 5; ++i) { result[i] = core_.diag_last_newton_histogram[i]; }
     return result;
 }
+
+bool OceanQueryNative::get_cpu_supports_avx2() const { return core_.avx2_supported(); }
+
+String OceanQueryNative::get_query_execution_backend() const { return String(core_.query_execution_backend()); }
+
+void OceanQueryNative::set_force_scalar(bool enabled) { core_.force_scalar = enabled; }

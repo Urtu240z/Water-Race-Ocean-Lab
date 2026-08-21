@@ -3,11 +3,40 @@
 // La matemática NO cambia respecto a 2B (GDScript).
 
 #include "ocean_query_core.h"
+#include "ocean_query_simd_avx2.h"
 
 #include <cmath>
 #include <cstring>
 
+#if defined(_M_X64) || defined(_M_IX86)
+#include <intrin.h>
+#endif
+
 namespace oq {
+
+namespace {
+
+// Compilado en la TU scalar: esta función no contiene AVX y es segura antes
+// del dispatch. AVX requiere CPU, OSXSAVE y XMM/YMM habilitados por el SO.
+bool detect_avx2_runtime() {
+#if defined(_M_X64) || defined(_M_IX86)
+    int regs[4] = {0, 0, 0, 0};
+    __cpuidex(regs, 0, 0);
+    if (regs[0] < 7) { return false; }
+    __cpuidex(regs, 1, 0);
+    const bool avx = (regs[2] & (1 << 28)) != 0;
+    const bool osxsave = (regs[2] & (1 << 27)) != 0;
+    if (!avx || !osxsave) { return false; }
+    const unsigned __int64 xcr0 = _xgetbv(0);
+    if ((xcr0 & 0x6) != 0x6) { return false; }
+    __cpuidex(regs, 7, 0);
+    return (regs[1] & (1 << 5)) != 0;
+#else
+    return false;
+#endif
+}
+
+} // namespace
 
 void BatchWorkspace::ensure_capacity(size_t required) {
     if (required <= capacity) {
@@ -262,9 +291,38 @@ void OceanQueryCore::sample_world(double wx, double wz, double simulation_time, 
 }
 
 void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n, double *out) {
+    if (avx2_supported() && !force_scalar && n >= 4) {
+        batch_.ensure_capacity(n);
+        for (size_t p = 0; p < n; ++p) {
+            batch_.wx[p] = positions_xz[2 * p]; batch_.wz[p] = positions_xz[2 * p + 1];
+            batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
+        }
+        solve_avx2_batch_(n, out, true);
+        return;
+    }
+    sample_batch_scalar_prepared(positions_xz, n, out);
+}
+
+void OceanQueryCore::sample_batch_scalar_prepared(const double *positions_xz, size_t n, double *out) {
     for (size_t i = 0; i < n; ++i) {
         sample_prepared_(positions_xz[2 * i], positions_xz[2 * i + 1], out + i * S_STRIDE);
     }
+}
+
+void OceanQueryCore::sample_batch_avx2_scalar_trig_prepared(const double *positions_xz, size_t n, double *out) {
+    if (!avx2_supported() || n < 4) { sample_batch_scalar_prepared(positions_xz, n, out); return; }
+    batch_.ensure_capacity(n);
+    for (size_t p = 0; p < n; ++p) {
+        batch_.wx[p] = positions_xz[2 * p]; batch_.wz[p] = positions_xz[2 * p + 1];
+        batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
+    }
+    solve_avx2_batch_(n, out, false);
+}
+
+bool OceanQueryCore::avx2_supported() const { return detect_avx2_runtime(); }
+
+const char *OceanQueryCore::query_execution_backend() const {
+    return avx2_supported() && !force_scalar ? "AVX2" : "SCALAR";
 }
 
 void OceanQueryCore::evaluate_true_batch_(const size_t *indices, size_t active_count) {
@@ -334,6 +392,19 @@ void OceanQueryCore::evaluate_true_batch_(const size_t *indices, size_t active_c
             batch_.vz[p] += batch_.cascade_vz[p] * inv_n2;
         }
     }
+    diag_last_spectral_point_evaluations += active_count;
+}
+
+void OceanQueryCore::evaluate_avx2_batch_(const size_t *indices, size_t active_count, bool vector_sincos) {
+    if (active_count < 4) { evaluate_true_batch_(indices, active_count); return; }
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.h[p] = batch_.dx[p] = batch_.dz[p] = 0.0;
+        batch_.dhx[p] = batch_.dhz[p] = 0.0;
+        batch_.dxx[p] = batch_.dxz[p] = batch_.dzx[p] = batch_.dzz[p] = 0.0;
+        batch_.vh[p] = batch_.vx[p] = batch_.vz[p] = 0.0;
+    }
+    evaluate_batch_avx2(cascades, batch_, indices, active_count, vector_sincos);
     diag_last_spectral_point_evaluations += active_count;
 }
 
@@ -439,6 +510,63 @@ void OceanQueryCore::solve_true_batch_(size_t n, double *out, bool append_solved
             sample[S_STRIDE] = batch_.qx[p];
             sample[S_STRIDE + 1] = batch_.qz[p];
         }
+    }
+}
+
+void OceanQueryCore::solve_avx2_batch_(size_t n, double *out, bool vector_sincos) {
+    diag_last_spectral_point_evaluations = 0;
+    for (int &count : diag_last_newton_histogram) { count = 0; }
+    size_t active_count = n;
+    for (size_t p = 0; p < n; ++p) {
+        batch_.iterations[p] = 0;
+        batch_.active_indices[p] = p;
+    }
+    evaluate_avx2_batch_(batch_.active_indices.data(), active_count, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = batch_.active_indices[ai];
+        const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+        const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+        batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+        batch_.done[p] = batch_.residual[p] <= POSITION_TOLERANCE_M ? 1 : 0;
+    }
+    size_t next_count = 0;
+    for (size_t p = 0; p < n; ++p) if (!batch_.done[p]) batch_.active_indices[next_count++] = p;
+    active_count = next_count;
+    for (int iteration = 0; iteration < MAX_ITERATIONS && active_count > 0; ++iteration) {
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double det_j = (1.0 + batch_.dxx[p]) * (1.0 + batch_.dzz[p]) - batch_.dxz[p] * batch_.dzx[p];
+            if (std::abs(det_j) <= JACOBIAN_EPSILON) { continue; }
+            const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+            const double inv_det = 1.0 / det_j;
+            batch_.qx[p] -= inv_det * ((1.0 + batch_.dzz[p]) * fx - batch_.dxz[p] * fz);
+            batch_.qz[p] -= inv_det * (-batch_.dzx[p] * fx + (1.0 + batch_.dxx[p]) * fz);
+            batch_.active_indices[next_count++] = p;
+        }
+        active_count = next_count;
+        if (active_count == 0) { break; }
+        // Para conjuntos activos pequeños el evaluador cae a scalar; evita
+        // pagar gathers y setup AVX2 cuando quedan menos de cuatro puntos.
+        evaluate_avx2_batch_(batch_.active_indices.data(), active_count, vector_sincos);
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+            batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+            batch_.iterations[p] = iteration + 1;
+            if (batch_.residual[p] <= POSITION_TOLERANCE_M) { batch_.done[p] = 1; }
+            else { batch_.active_indices[next_count++] = p; }
+        }
+        active_count = next_count;
+    }
+    for (size_t p = 0; p < n; ++p) {
+        const bool converged = batch_.done[p] != 0;
+        if (converged) { ++diag_last_newton_histogram[batch_.iterations[p]]; }
+        else { ++diag_last_newton_histogram[4]; ++diag_non_converged; }
+        build_sample_from_fields_(p, converged, out + p * S_STRIDE);
     }
 }
 

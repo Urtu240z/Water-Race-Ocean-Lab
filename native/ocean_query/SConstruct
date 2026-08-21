@@ -22,6 +22,16 @@ sources = [
     "src/register_types.cpp",
 ]
 
+# AVX2 queda en una translation unit aislada. El core/wrapper se compilan con
+# las flags base de godot-cpp para que el fallback siga siendo ejecutable en
+# CPUs sin AVX2; sólo este Object recibe /arch:AVX2 (o -mavx2 en GCC/Clang).
+avx2_env = env.Clone()
+if env["platform"] == "windows":
+    avx2_env.Append(CCFLAGS=["/arch:AVX2"])
+else:
+    avx2_env.Append(CCFLAGS=["-mavx2"])
+sources.append(avx2_env.Object("src/ocean_query_simd_avx2.cpp"))
+
 # Nombre canónico de godot-cpp: <base><suffix><SHLIBSUFFIX>, p. ej.
 # water_race_ocean_query.windows.template_release.x86_64.dll
 library = env.SharedLibrary(

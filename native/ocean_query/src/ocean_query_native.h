@@ -10,6 +10,7 @@
 #include <godot_cpp/variant/packed_float64_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
+#include <godot_cpp/variant/string.hpp>
 
 #include <vector>
 
@@ -53,6 +54,8 @@ public:
     PackedFloat64Array sample_prepared(double wx, double wz);
     // Referencia escalar estable.
     PackedFloat64Array sample_batch_prepared(const PackedVector3Array &positions);
+    PackedFloat64Array sample_batch_scalar_prepared(const PackedVector3Array &positions);
+    PackedFloat64Array sample_batch_avx2_scalar_trig_prepared(const PackedVector3Array &positions);
     PackedFloat64Array sample_batch(double simulation_time, const PackedVector3Array &positions);
     // Ruta experimental 2C.1B TRUE_BATCH. warm devuelve stride 17: los 15
     // campos normales y qx,qz resueltos para alimentar el tick siguiente.
@@ -65,6 +68,9 @@ public:
     double get_diag_last_residual() const;
     int get_diag_last_spectral_point_evaluations() const;
     PackedInt32Array get_diag_last_newton_histogram() const;
+    bool get_cpu_supports_avx2() const;
+    String get_query_execution_backend() const;
+    void set_force_scalar(bool enabled);
 };
 
 } // namespace godot

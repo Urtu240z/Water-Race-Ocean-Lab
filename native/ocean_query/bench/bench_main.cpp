@@ -3,6 +3,7 @@
 // Uso: bench_main.exe <data_file> <out_file>
 
 #include "../src/ocean_query_core.h"
+#include "../src/ocean_query_simd_avx2.h"
 
 #include <chrono>
 #include <algorithm>
@@ -38,6 +39,7 @@ int main(int argc, char **argv) {
     }
 
     oq::OceanQueryCore core;
+    const bool quick_avx = argc >= 4;
     auto header = read_line(in); // cascade_count sea_level
     const size_t cascade_count = static_cast<size_t>(header[0]);
     core.sea_level = header[1];
@@ -161,6 +163,7 @@ int main(int argc, char **argv) {
     {
         const int racer_counts[] = {1, 4, 8};
         for (const int racer_count : racer_counts) {
+        if (quick_avx && racer_count > 1) { continue; }
         const int point_count = 16 * racer_count;
         std::vector<double> world(static_cast<size_t>(point_count) * 2);
         std::vector<double> previous_world(static_cast<size_t>(point_count) * 2);
@@ -213,7 +216,53 @@ int main(int argc, char **argv) {
         }
     }
 
-    // F. dump de resultados para comparaciÃ³n de exactitud (16 posiciones, t=3.5).
+    // F. AVX2: scalar de referencia, aritmética AVX2+trig scalar y sincos
+    // vectorial. Nueve repeticiones, mismas posiciones/prepared state.
+    if (core.avx2_supported()) {
+        for (int count : counts) {
+            std::vector<double> scalar(static_cast<size_t>(count) * oq::S_STRIDE);
+            std::vector<double> arithmetic(static_cast<size_t>(count) * oq::S_STRIDE);
+            std::vector<double> full(static_cast<size_t>(count) * oq::S_STRIDE);
+            double scalar_t[9], arithmetic_t[9], full_t[9];
+            for (int rep = 0; rep < 9; ++rep) {
+                auto start = clock::now(); core.sample_batch_scalar_prepared(positions_xz.data(), count, scalar.data()); scalar_t[rep] = ms(clock::now() - start);
+                start = clock::now(); core.sample_batch_avx2_scalar_trig_prepared(positions_xz.data(), count, arithmetic.data()); arithmetic_t[rep] = ms(clock::now() - start);
+                core.force_scalar = false;
+                start = clock::now(); core.sample_batch_prepared(positions_xz.data(), count, full.data()); full_t[rep] = ms(clock::now() - start);
+            }
+            std::sort(scalar_t, scalar_t + 9); std::sort(arithmetic_t, arithmetic_t + 9); std::sort(full_t, full_t + 9);
+            double max_abs = 0.0;
+            for (size_t k = 0; k < full.size(); ++k) max_abs = std::max(max_abs, std::abs(scalar[k] - full[k]));
+            std::printf("AVX2_BENCH N=%d scalar %.4f arithmetic_scalar_trig %.4f full_sincos %.4f speedup %.2f us_per_query %.2f max_abs %.3e\n",
+                        count, scalar_t[4], arithmetic_t[4], full_t[4], scalar_t[4] / full_t[4], full_t[4] * 1000.0 / count, max_abs);
+        }
+        // Dataset de phi del espectro real y 64 posiciones: comprueba la
+        // sincos AVX2 antes de interpretar la precisión física.
+        double max_s = 0.0, max_c = 0.0, sum2_s = 0.0, sum2_c = 0.0;
+        size_t trig_count = 0;
+        alignas(32) double phi[4], so[4], co[4];
+        for (const oq::Cascade &c : core.cascades) {
+            for (size_t m = 0; m < c.kx.size(); ++m) {
+                for (int p = 0; p < 64; p += 4) {
+                    for (int lane = 0; lane < 4; ++lane)
+                        phi[lane] = c.kx[m] * positions_xz[2 * (p + lane)] + c.ky[m] * positions_xz[2 * (p + lane) + 1];
+                    oq::sincos_pd_avx2(phi, so, co);
+                    for (int lane = 0; lane < 4; ++lane) {
+                        const double ds = so[lane] - std::sin(phi[lane]);
+                        const double dc = co[lane] - std::cos(phi[lane]);
+                        max_s = std::max(max_s, std::abs(ds)); max_c = std::max(max_c, std::abs(dc));
+                        sum2_s += ds * ds; sum2_c += dc * dc; ++trig_count;
+                    }
+                }
+            }
+        }
+        std::printf("AVX2_TRIG samples %zu max_s %.3e max_c %.3e rmse_s %.3e rmse_c %.3e\n", trig_count, max_s, max_c,
+                    std::sqrt(sum2_s / trig_count), std::sqrt(sum2_c / trig_count));
+    } else {
+        std::printf("AVX2_BENCH SKIP cpu_no_avx2\n");
+    }
+
+    // G. dump de resultados para comparaciÃ³n de exactitud (16 posiciones, t=3.5).
     {
         std::ofstream out(argv[2]);
         std::vector<double> buf(static_cast<size_t>(16) * oq::S_STRIDE);
