@@ -1,10 +1,10 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene format=3 uid="uid://cdeambdilthv2"]
 
-[ext_resource type="Script" path="res://lab/lab_main.gd" id="1_main"]
-[ext_resource type="Script" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
-[ext_resource type="Script" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
-[ext_resource type="Script" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
-[ext_resource type="Script" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
+[ext_resource type="Script" uid="uid://c2swf61455l5h" path="res://lab/lab_main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
+[ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
+[ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
+[ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
 [ext_resource type="PackedScene" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
@@ -23,48 +23,48 @@ ambient_light_source = 3
 ambient_light_color = Color(0.55, 0.65, 0.8, 1)
 ambient_light_energy = 0.65
 
-[node name="LabMain" type="Node3D"]
+[node name="LabMain" type="Node3D" unique_id=1698941175]
 script = ExtResource("1_main")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=467834431]
 environment = SubResource("Environment_lab")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-48, -32, 0)
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
+transform = Transform3D(0.8480481, 0.3938068, -0.35458517, 0, 0.66913056, 0.74314487, 0.52991927, -0.63022256, 0.5674549, 0, 0, 0)
 light_energy = 1.1
 shadow_enabled = true
 
-[node name="RaceReferenceTarget" type="Node3D" parent="."]
-position = Vector3(0, 1, -60)
+[node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -60)
 
-[node name="Cameras" type="Node3D" parent="."]
+[node name="Cameras" type="Node3D" parent="." unique_id=1853314533]
 
-[node name="FreeCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
+[node name="FreeCamera" type="Camera3D" parent="Cameras" unique_id=301081113 groups=["lab_camera"]]
 unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 12, 28)
-script = ExtResource("2_free_camera")
 far = 7000.0
+script = ExtResource("2_free_camera")
 
-[node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" groups=["lab_camera"]]
+[node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" unique_id=428314263 groups=["lab_camera"]]
 unique_name_in_owner = true
-position = Vector3(0, 2.5, 7.5)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 7.5)
 fov = 78.0
 far = 7000.0
 script = ExtResource("3_race_camera")
 target_path = NodePath("../../RaceReferenceTarget")
 
-[node name="MetricReferences" type="Node3D" parent="."]
+[node name="MetricReferences" type="Node3D" parent="." unique_id=1425463389]
 script = ExtResource("4_metrics")
 
-[node name="OceanV3Mount" type="Node3D" parent="."]
+[node name="OceanV3Mount" type="Node3D" parent="." unique_id=426342056]
 
-[node name="OceanV3" parent="OceanV3Mount" instance=ExtResource("6_ocean")]
+[node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
 
-[node name="BenchmarkHUD" type="CanvasLayer" parent="."]
+[node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
 script = ExtResource("5_hud")
 
-[node name="Margin" type="MarginContainer" parent="BenchmarkHUD"]
+[node name="Margin" type="MarginContainer" parent="BenchmarkHUD" unique_id=968768225]
 offset_right = 475.0
 offset_bottom = 285.0
 theme_override_constants/margin_left = 16
@@ -72,18 +72,19 @@ theme_override_constants/margin_top = 16
 theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 16
 
-[node name="Panel" type="PanelContainer" parent="BenchmarkHUD/Margin"]
+[node name="Panel" type="PanelContainer" parent="BenchmarkHUD/Margin" unique_id=567551109]
+layout_mode = 2
 
-[node name="Metrics" type="Label" parent="BenchmarkHUD/Margin/Panel"]
+[node name="Metrics" type="Label" parent="BenchmarkHUD/Margin/Panel" unique_id=891588710]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.95, 1, 1)
 theme_override_font_sizes/font_size = 15
 
-[node name="Controls" type="Label" parent="BenchmarkHUD"]
+[node name="Controls" type="Label" parent="BenchmarkHUD" unique_id=58845568]
 unique_name_in_owner = true
-offset_left = 16.0
-offset_top = 302.0
-offset_right = 665.0
-offset_bottom = 408.0
+offset_left = 1051.0
+offset_top = 32.0
+offset_right = 1700.0
+offset_bottom = 138.0
 theme_override_colors/font_color = Color(0.82, 0.9, 0.95, 1)
 theme_override_font_sizes/font_size = 14

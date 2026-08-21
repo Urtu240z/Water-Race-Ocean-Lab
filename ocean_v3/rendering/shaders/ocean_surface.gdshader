@@ -20,7 +20,6 @@ uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
 uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
-uniform vec3 slope_light_direction = vec3(0.55, 0.65, -0.55);
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -47,7 +46,7 @@ vec3 level_color(float level) {
 
 float periodic_grid(vec2 world_xz, float domain_size_m) {
 	vec2 cell = abs(fract(world_xz / domain_size_m + 0.5) - 0.5);
-	return 1.0 - smoothstep(0.485, 0.5, max(cell.x, cell.y));
+	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
 }
 
 void vertex() {
@@ -91,8 +90,14 @@ void fragment() {
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
 	} else if (debug_mode == 3) {
-		float n_dot_l = dot(normalize(derived_normal), normalize(slope_light_direction));
-		float shade = clamp(n_dot_l * 0.5 + 0.5, 0.0, 1.0);
+		vec3 n = normalize(derived_normal);
+
+		vec2 slope = -n.xz / max(n.y, 0.05);
+		vec2 slope_dir = normalize(vec2(0.7, -0.7));
+
+		float signed_slope = dot(slope, slope_dir);
+		float shade = clamp(0.5 + signed_slope * 5.0, 0.0, 1.0);
+
 		color = mix(slope_valley_color, slope_crest_color, shade);
 	}
 

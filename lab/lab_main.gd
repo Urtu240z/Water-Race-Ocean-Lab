@@ -4,13 +4,14 @@ extends Node3D
 @onready var race_camera: Camera3D = %RaceReferenceCamera
 @onready var benchmark_hud: CanvasLayer = %BenchmarkHUD
 @onready var controls_label: Label = %Controls
+@onready var metric_references: Node3D = $MetricReferences
 
 var _using_race_camera := false
 
 
 func _ready() -> void:
 	_set_active_camera(false)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad\n4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | -/=: escala de tiempo | F1: HUD"
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\n4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -26,6 +27,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			SimulationClock.reset_simulation()
 		KEY_N:
 			SimulationClock.start_simulation_with_seed(SimulationClock.simulation_seed + 1)
+		KEY_M:
+			metric_references.visible = not metric_references.visible
 		KEY_O:
 			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module:
@@ -64,9 +67,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			OceanQualitySettings.set_profile(1) # STANDARD
 		KEY_3:
 			OceanQualitySettings.set_profile(2) # DEV_HIGH
-		KEY_MINUS:
+		KEY_COMMA:
 			SimulationClock.time_scale = maxf(SimulationClock.time_scale * 0.5, 0.125)
-		KEY_EQUAL:
+		KEY_PERIOD:
 			SimulationClock.time_scale = minf(SimulationClock.time_scale * 2.0, 8.0)
 		KEY_F1:
 			benchmark_hud.visible = not benchmark_hud.visible
