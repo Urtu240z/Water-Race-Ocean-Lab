@@ -38,7 +38,11 @@ shadow_enabled = true
 
 [node name="OceanV3" parent="." instance=ExtResource("2_ocean")]
 
-[node name="SeabedDebug" type="MeshInstance3D" parent="."]
+[node name="SeabedActualDebug" type="MeshInstance3D" parent="."]
+
+[node name="SeabedOverlayDebug" type="MeshInstance3D" parent="."]
+
+[node name="BankCrestMarker" type="MeshInstance3D" parent="."]
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 58, 128)

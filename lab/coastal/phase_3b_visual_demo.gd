@@ -11,13 +11,18 @@ const _ORIGIN_XZ := Vector2(-128.0, -64.0)
 const _DEBUG_FIELDS := [0, 1, 2, 5, 6] # NORMAL, depth, lambda, shoaling, phase.
 const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET"]
 
+enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
+
 @onready var _ocean = $OceanV3/OpenOceanFFT
-@onready var _seabed_debug: MeshInstance3D = $SeabedDebug
+@onready var _seabed_actual: MeshInstance3D = $SeabedActualDebug
+@onready var _seabed_overlay: MeshInstance3D = $SeabedOverlayDebug
+@onready var _bank_crest_marker: MeshInstance3D = $BankCrestMarker
 @onready var _status: Label = %Status
 @onready var _camera: Camera3D = $Camera3D
 
 var _bathymetry = null
 var _debug_field_index := 0
+var _seabed_mode := SeabedMode.OVERLAY
 var _coastal_enabled := true
 var _monochromatic_enabled := true
 
@@ -25,7 +30,8 @@ var _monochromatic_enabled := true
 func _ready() -> void:
 	_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 	_bathymetry = _build_bank_bathymetry()
-	_build_seabed_debug(_bathymetry)
+	_build_seabed_debugs(_bathymetry)
+	_set_seabed_mode(_seabed_mode)
 	_apply_coastal_settings()
 	_update_status()
 
@@ -41,7 +47,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_monochromatic_enabled = not _monochromatic_enabled
 			_apply_coastal_settings()
 		KEY_J:
-			_seabed_debug.visible = not _seabed_debug.visible
+			_set_seabed_mode((_seabed_mode + 1) % (SeabedMode.OVERLAY + 1))
 		KEY_H:
 			_debug_field_index = (_debug_field_index + 1) % _DEBUG_FIELDS.size()
 			_ocean.set_coastal_debug_field(_DEBUG_FIELDS[_debug_field_index])
@@ -60,7 +66,22 @@ func _apply_coastal_settings() -> void:
 
 
 func _update_status() -> void:
-	_status.text = "PHASE 3B — FINITE-DEPTH VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nJ  Seabed debug: %s\nH  Field: %s\nlambda ref = 16 m\n\nIncoming direction: +X\nDeep  ->  submerged bank  ->  deep" % ["ON" if _coastal_enabled else "OFF", "MONO" if _monochromatic_enabled else "FFT", "ON" if _seabed_debug.visible else "OFF", _DEBUG_FIELD_NAMES[_debug_field_index]]
+	_status.text = "PHASE 3B — FINITE-DEPTH VISUAL DEMO\nC  Coastal: %s\nK  Mode: %s\nJ  Seabed: %s\nH  Field: %s\nlambda ref = 16 m\n\nIncoming direction: +X\nDeep  ->  submerged bank  ->  deep" % ["ON" if _coastal_enabled else "OFF", "MONO" if _monochromatic_enabled else "FFT", _seabed_mode_name(), _DEBUG_FIELD_NAMES[_debug_field_index]]
+
+
+func _set_seabed_mode(mode: int) -> void:
+	_seabed_mode = clampi(mode, SeabedMode.HIDDEN, SeabedMode.OVERLAY)
+	_seabed_actual.visible = _seabed_mode == SeabedMode.ACTUAL_DEPTH
+	_seabed_overlay.visible = _seabed_mode == SeabedMode.OVERLAY
+	_bank_crest_marker.visible = _seabed_mode == SeabedMode.OVERLAY
+
+
+func _seabed_mode_name() -> String:
+	match _seabed_mode:
+		SeabedMode.HIDDEN: return "HIDDEN"
+		SeabedMode.ACTUAL_DEPTH: return "ACTUAL"
+		SeabedMode.OVERLAY: return "OVERLAY"
+	return "UNKNOWN"
 
 
 func _build_bank_bathymetry():
@@ -104,32 +125,69 @@ func _bank_depth(world_x: float, world_z: float) -> float:
 	return 18.0 - 17.5 * bank_weight
 
 
-func _build_seabed_debug(data) -> void:
+func _build_seabed_debugs(data) -> void:
+	_seabed_actual.mesh = _build_seabed_mesh(data, false)
+	_seabed_overlay.mesh = _build_seabed_mesh(data, true)
+	_seabed_actual.material_override = _make_seabed_material(false)
+	_seabed_overlay.material_override = _make_seabed_material(true)
+	_build_crest_marker()
+
+
+func _build_seabed_mesh(data, overlay: bool) -> ArrayMesh:
 	var tool := SurfaceTool.new()
 	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for z in data.height - 1:
 		for x in data.width - 1:
-			_add_floor_triangle(tool, data, x, z, x + 1, z, x + 1, z + 1)
-			_add_floor_triangle(tool, data, x, z, x + 1, z + 1, x, z + 1)
-	_seabed_debug.mesh = tool.commit()
+			_add_floor_triangle(tool, data, overlay, x, z, x + 1, z, x + 1, z + 1)
+			_add_floor_triangle(tool, data, overlay, x, z, x + 1, z + 1, x, z + 1)
+	return tool.commit()
+
+
+func _make_seabed_material(overlay: bool) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.vertex_color_use_as_albedo = true
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.no_depth_test = true
+	# Overlay es una herramienta de lectura: se dibuja por encima del agua,
+	# sin alterar profundidad ni render del océano.
+	material.no_depth_test = overlay
+	material.render_priority = 127 if overlay else 0
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_seabed_debug.material_override = material
+	return material
 
 
-func _add_floor_triangle(tool: SurfaceTool, data, ax: int, az: int, bx: int, bz: int, cx: int, cz: int) -> void:
-	_add_floor_vertex(tool, data, ax, az)
-	_add_floor_vertex(tool, data, bx, bz)
-	_add_floor_vertex(tool, data, cx, cz)
+func _build_crest_marker() -> void:
+	# Anillo, no disco: marca la cresta sin ocultar las olas mono/FFT.
+	var crest := TorusMesh.new()
+	crest.inner_radius = 10.5
+	crest.outer_radius = 11.0
+	crest.rings = 48
+	crest.ring_segments = 12
+	_bank_crest_marker.mesh = crest
+	_bank_crest_marker.position = Vector3(0.0, 0.145, 0.0)
+	_bank_crest_marker.scale = Vector3(1.0, 1.0, 1.35)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(1.0, 0.92, 0.12, 0.82)
+	material.emission_enabled = true
+	material.emission = Color(1.0, 0.48, 0.02, 1.0)
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.no_depth_test = true
+	material.render_priority = 127
+	_bank_crest_marker.material_override = material
 
 
-func _add_floor_vertex(tool: SurfaceTool, data, x: int, z: int) -> void:
+func _add_floor_triangle(tool: SurfaceTool, data, overlay: bool, ax: int, az: int, bx: int, bz: int, cx: int, cz: int) -> void:
+	_add_floor_vertex(tool, data, overlay, ax, az)
+	_add_floor_vertex(tool, data, overlay, bx, bz)
+	_add_floor_vertex(tool, data, overlay, cx, cz)
+
+
+func _add_floor_vertex(tool: SurfaceTool, data, overlay: bool, x: int, z: int) -> void:
 	var index: int = z * data.width + x
 	var world_xz: Vector2 = data.world_origin_xz + Vector2(float(x), float(z)) * data.cell_size_m
 	var shallow: float = 1.0 - clampf(data.depth_m[index] / 18.0, 0.0, 1.0)
-	tool.set_color(Color(lerpf(0.03, 0.9, shallow), lerpf(0.15, 0.38, shallow), lerpf(0.22, 0.05, shallow), 0.45))
-	tool.add_vertex(Vector3(world_xz.x, -data.depth_m[index], world_xz.y))
+	# Azul oscuro = profundo; naranja/amarillo = banco somero.
+	tool.set_color(Color(lerpf(0.02, 1.0, shallow), lerpf(0.10, 0.52, shallow), lerpf(0.30, 0.03, shallow), 0.55 if overlay else 0.45))
+	var height: float = data.sea_level_y + 0.10 if overlay else -data.depth_m[index]
+	tool.add_vertex(Vector3(world_xz.x, height, world_xz.y))
