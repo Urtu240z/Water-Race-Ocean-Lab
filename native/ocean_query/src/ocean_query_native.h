@@ -7,6 +7,11 @@
 #pragma once
 
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
+
+#include <vector>
 
 #include "ocean_query_core.h"
 
@@ -17,8 +22,10 @@ class OceanQueryNative : public RefCounted {
 
 private:
     oq::OceanQueryCore core_;
-    // Buffer plano de salida batch reutilizado (evita allocs por llamada).
-    PackedFloat64Array batch_out_;
+    // Buffers C++ contiguos reutilizados; sólo crecen con la capacidad batch.
+    std::vector<double> batch_xz_;
+    std::vector<double> batch_warm_q_;
+    std::vector<double> batch_out_;
 
     static void _bind_methods();
 
@@ -44,12 +51,20 @@ public:
 
     PackedFloat64Array sample_world(double wx, double wz, double simulation_time);
     PackedFloat64Array sample_prepared(double wx, double wz);
+    // Referencia escalar estable.
     PackedFloat64Array sample_batch_prepared(const PackedVector3Array &positions);
     PackedFloat64Array sample_batch(double simulation_time, const PackedVector3Array &positions);
+    // Ruta experimental 2C.1B TRUE_BATCH. warm devuelve stride 17: los 15
+    // campos normales y qx,qz resueltos para alimentar el tick siguiente.
+    PackedFloat64Array sample_batch_true_prepared(const PackedVector3Array &positions);
+    PackedFloat64Array sample_batch_warm_prepared(const PackedVector3Array &positions,
+                                                  const PackedVector3Array &initial_q);
 
     int get_diag_non_converged() const;
     int get_diag_last_iterations() const;
     double get_diag_last_residual() const;
+    int get_diag_last_spectral_point_evaluations() const;
+    PackedInt32Array get_diag_last_newton_histogram() const;
 };
 
 } // namespace godot

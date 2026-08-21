@@ -6,7 +6,10 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
+
+#include <limits>
 
 using namespace godot;
 
@@ -26,9 +29,13 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_prepared", "positions"), &OceanQueryNative::sample_batch_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch", "simulation_time", "positions"), &OceanQueryNative::sample_batch);
+    ClassDB::bind_method(D_METHOD("sample_batch_true_prepared", "positions"), &OceanQueryNative::sample_batch_true_prepared);
+    ClassDB::bind_method(D_METHOD("sample_batch_warm_prepared", "positions", "initial_q"), &OceanQueryNative::sample_batch_warm_prepared);
     ClassDB::bind_method(D_METHOD("get_diag_non_converged"), &OceanQueryNative::get_diag_non_converged);
     ClassDB::bind_method(D_METHOD("get_diag_last_iterations"), &OceanQueryNative::get_diag_last_iterations);
     ClassDB::bind_method(D_METHOD("get_diag_last_residual"), &OceanQueryNative::get_diag_last_residual);
+    ClassDB::bind_method(D_METHOD("get_diag_last_spectral_point_evaluations"), &OceanQueryNative::get_diag_last_spectral_point_evaluations);
+    ClassDB::bind_method(D_METHOD("get_diag_last_newton_histogram"), &OceanQueryNative::get_diag_last_newton_histogram);
 }
 
 void OceanQueryNative::clear() {
@@ -91,20 +98,63 @@ PackedFloat64Array OceanQueryNative::sample_batch_prepared(const PackedVector3Ar
     if (n == 0) {
         return PackedFloat64Array();
     }
-    // Copia XZ contiguo (el core usa double*).
-    std::vector<double> xz(2 * n);
+    batch_xz_.resize(2 * n);
     for (size_t i = 0; i < n; ++i) {
         const Vector3 p = positions[static_cast<int64_t>(i)];
-        xz[2 * i] = p.x;
-        xz[2 * i + 1] = p.z;
+        batch_xz_[2 * i] = p.x;
+        batch_xz_[2 * i + 1] = p.z;
     }
-    std::vector<double> out(n * oq::S_STRIDE);
-    core_.sample_batch_prepared(xz.data(), n, out.data());
+    batch_out_.resize(n * oq::S_STRIDE);
+    core_.sample_batch_prepared(batch_xz_.data(), n, batch_out_.data());
     PackedFloat64Array result;
     result.resize(static_cast<int64_t>(n) * oq::S_STRIDE);
     for (size_t i = 0; i < n * oq::S_STRIDE; ++i) {
-        result[static_cast<int64_t>(i)] = out[i];
+        result[static_cast<int64_t>(i)] = batch_out_[i];
     }
+    return result;
+}
+
+PackedFloat64Array OceanQueryNative::sample_batch_true_prepared(const PackedVector3Array &positions) {
+    const size_t n = static_cast<size_t>(positions.size());
+    if (n == 0) { return PackedFloat64Array(); }
+    batch_xz_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vector3 p = positions[static_cast<int64_t>(i)];
+        batch_xz_[2 * i] = p.x;
+        batch_xz_[2 * i + 1] = p.z;
+    }
+    batch_out_.resize(n * oq::S_STRIDE);
+    core_.sample_batch_true_prepared(batch_xz_.data(), n, batch_out_.data());
+    PackedFloat64Array result;
+    result.resize(static_cast<int64_t>(batch_out_.size()));
+    for (size_t i = 0; i < batch_out_.size(); ++i) { result[static_cast<int64_t>(i)] = batch_out_[i]; }
+    return result;
+}
+
+PackedFloat64Array OceanQueryNative::sample_batch_warm_prepared(const PackedVector3Array &positions,
+                                                                  const PackedVector3Array &initial_q) {
+    const size_t n = static_cast<size_t>(positions.size());
+    if (n == 0) { return PackedFloat64Array(); }
+    batch_xz_.resize(2 * n);
+    batch_warm_q_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vector3 p = positions[static_cast<int64_t>(i)];
+        batch_xz_[2 * i] = p.x;
+        batch_xz_[2 * i + 1] = p.z;
+        if (i < static_cast<size_t>(initial_q.size())) {
+            const Vector3 q = initial_q[static_cast<int64_t>(i)];
+            batch_warm_q_[2 * i] = q.x;
+            batch_warm_q_[2 * i + 1] = q.z;
+        } else {
+            batch_warm_q_[2 * i] = std::numeric_limits<double>::quiet_NaN();
+            batch_warm_q_[2 * i + 1] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    batch_out_.resize(n * oq::TRUE_BATCH_WARM_STRIDE);
+    core_.sample_batch_warm_prepared(batch_xz_.data(), batch_warm_q_.data(), n, batch_out_.data());
+    PackedFloat64Array result;
+    result.resize(static_cast<int64_t>(batch_out_.size()));
+    for (size_t i = 0; i < batch_out_.size(); ++i) { result[static_cast<int64_t>(i)] = batch_out_[i]; }
     return result;
 }
 
@@ -123,4 +173,15 @@ int OceanQueryNative::get_diag_last_iterations() const {
 
 double OceanQueryNative::get_diag_last_residual() const {
     return 0.0;
+}
+
+int OceanQueryNative::get_diag_last_spectral_point_evaluations() const {
+    return static_cast<int>(core_.diag_last_spectral_point_evaluations);
+}
+
+PackedInt32Array OceanQueryNative::get_diag_last_newton_histogram() const {
+    PackedInt32Array result;
+    result.resize(5);
+    for (int i = 0; i < 5; ++i) { result[i] = core_.diag_last_newton_histogram[i]; }
+    return result;
 }

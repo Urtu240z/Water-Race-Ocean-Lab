@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <cstddef>
+#include <cstdint>
 
 namespace oq {
 
@@ -42,6 +43,24 @@ enum SampleIndex {
 const int MAX_ITERATIONS = 3;
 const double POSITION_TOLERANCE_M = 1.0e-3;
 const double JACOBIAN_EPSILON = 1.0e-6;
+const int TRUE_BATCH_WARM_STRIDE = S_STRIDE + 2;
+
+// SoA reutilizable para la ruta TRUE_BATCH. Sólo crece cuando la capacidad
+// solicitada aumenta; nunca crea objetos por punto durante una consulta.
+struct BatchWorkspace {
+    size_t capacity = 0;
+    std::vector<double> wx, wz, qx, qz;
+    std::vector<double> h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz;
+    std::vector<double> cascade_h, cascade_dx, cascade_dz;
+    std::vector<double> cascade_dhx, cascade_dhz, cascade_dxx, cascade_dxz, cascade_dzx, cascade_dzz;
+    std::vector<double> cascade_vh, cascade_vx, cascade_vz;
+    std::vector<double> residual;
+    std::vector<int> iterations;
+    std::vector<uint8_t> done;
+    std::vector<size_t> active_indices;
+
+    void ensure_capacity(size_t required);
+};
 
 class OceanQueryCore {
 public:
@@ -50,6 +69,10 @@ public:
     bool prepared_valid = false;
     double prepared_time = 0.0;
     int diag_non_converged = 0;
+    // Diagnóstico de la última operación TRUE_BATCH: una evaluación equivale
+    // a evaluar todos los modos de las cascadas para un punto activo.
+    size_t diag_last_spectral_point_evaluations = 0;
+    int diag_last_newton_histogram[5] = {0, 0, 0, 0, 0}; // 0/1/2/3/no-conv.
 
     void clear() { cascades.clear(); prepared_valid = false; }
 
@@ -74,7 +97,18 @@ public:
     void sample_prepared(double wx, double wz, double *out) { sample_prepared_(wx, wz, out); }
 
     // Batch: evalúa n posiciones; out debe tener n*S_STRIDE doubles.
+    // Referencia escalar estable: no se cambia su orden ni algoritmo.
     void sample_batch_prepared(const double *positions_xz, size_t n, double *out);
+
+    // TRUE_BATCH mode-major: reutiliza Workspace SoA y resuelve Newton de
+    // forma colectiva. out tiene n*S_STRIDE doubles.
+    void sample_batch_true_prepared(const double *positions_xz, size_t n, double *out);
+
+    // Variante temporal. initial_q_xz contiene la predicción q de cada punto;
+    // si un valor no es finito se usa world_xz. out tiene n*(S_STRIDE + 2):
+    // el contrato normal seguido de qx,qz resueltos para el siguiente tick.
+    void sample_batch_warm_prepared(const double *positions_xz, const double *initial_q_xz,
+                                    size_t n, double *out);
 
     // Exposición pública de accumulate_ para diagnósticos del PATCH (2C.1A):
     // permite verificar que un nodo del grid reproduce EXACTAMENTE la suma del
@@ -89,6 +123,8 @@ public:
     }
 
 private:
+    BatchWorkspace batch_;
+
     void accumulate_(double qx, double qz, bool use_prepared, double sim_time,
                      double &h, double &dx, double &dz,
                      double &dhx, double &dhz,
@@ -96,6 +132,10 @@ private:
                      double &vh, double &vx, double &vz);
 
     void sample_prepared_(double wx, double wz, double *out);
+
+    void evaluate_true_batch_(const size_t *indices, size_t active_count);
+    void build_sample_from_fields_(size_t point_index, bool converged, double *out) const;
+    void solve_true_batch_(size_t n, double *out, bool append_solved_q);
 };
 
 } // namespace oq

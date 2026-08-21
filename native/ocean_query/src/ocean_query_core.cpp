@@ -9,6 +9,25 @@
 
 namespace oq {
 
+void BatchWorkspace::ensure_capacity(size_t required) {
+    if (required <= capacity) {
+        return;
+    }
+    capacity = required;
+    wx.resize(capacity); wz.resize(capacity); qx.resize(capacity); qz.resize(capacity);
+    h.resize(capacity); dx.resize(capacity); dz.resize(capacity);
+    dhx.resize(capacity); dhz.resize(capacity); dxx.resize(capacity); dxz.resize(capacity);
+    dzx.resize(capacity); dzz.resize(capacity); vh.resize(capacity); vx.resize(capacity); vz.resize(capacity);
+    cascade_h.resize(capacity); cascade_dx.resize(capacity); cascade_dz.resize(capacity);
+    cascade_dhx.resize(capacity); cascade_dhz.resize(capacity); cascade_dxx.resize(capacity);
+    cascade_dxz.resize(capacity); cascade_dzx.resize(capacity); cascade_dzz.resize(capacity);
+    cascade_vh.resize(capacity); cascade_vx.resize(capacity); cascade_vz.resize(capacity);
+    residual.resize(capacity);
+    iterations.resize(capacity);
+    done.resize(capacity);
+    active_indices.resize(capacity);
+}
+
 void OceanQueryCore::set_cascade_data(size_t cascade_index, double inv_n2,
                                       const double *kx, const double *ky, const double *omega,
                                       const double *a1, const double *a2,
@@ -246,6 +265,205 @@ void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n,
     for (size_t i = 0; i < n; ++i) {
         sample_prepared_(positions_xz[2 * i], positions_xz[2 * i + 1], out + i * S_STRIDE);
     }
+}
+
+void OceanQueryCore::evaluate_true_batch_(const size_t *indices, size_t active_count) {
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.h[p] = batch_.dx[p] = batch_.dz[p] = 0.0;
+        batch_.dhx[p] = batch_.dhz[p] = 0.0;
+        batch_.dxx[p] = batch_.dxz[p] = batch_.dzx[p] = batch_.dzz[p] = 0.0;
+        batch_.vh[p] = batch_.vx[p] = batch_.vz[p] = 0.0;
+    }
+
+    // Orden mode-major. Dentro de cada punto se mantiene exactamente el mismo
+    // orden de sumas de modos y de reducción por cascada que DIRECT_SCALAR.
+    for (const Cascade &c : cascades) {
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = indices[ai];
+            batch_.cascade_h[p] = batch_.cascade_dx[p] = batch_.cascade_dz[p] = 0.0;
+            batch_.cascade_dhx[p] = batch_.cascade_dhz[p] = 0.0;
+            batch_.cascade_dxx[p] = batch_.cascade_dxz[p] = 0.0;
+            batch_.cascade_dzx[p] = batch_.cascade_dzz[p] = 0.0;
+            batch_.cascade_vh[p] = batch_.cascade_vx[p] = batch_.cascade_vz[p] = 0.0;
+        }
+        const size_t count = c.kx.size();
+        for (size_t idx = 0; idx < count; ++idx) {
+            const double h_re = c.ev_h_re[idx];
+            const double h_im = c.ev_h_im[idx];
+            const double v_re = c.ev_v_re[idx];
+            const double v_im = c.ev_v_im[idx];
+            const double sig = c.parity[idx] * c.weight[idx];
+            for (size_t ai = 0; ai < active_count; ++ai) {
+                const size_t p = indices[ai];
+                const double phi = c.kx[idx] * batch_.qx[p] + c.ky[idx] * batch_.qz[p];
+                const double cp = std::cos(phi);
+                const double sp = std::sin(phi);
+                const double p_re = h_re * cp - h_im * sp;
+                const double p_im = h_re * sp + h_im * cp;
+                const double q_re = v_re * cp - v_im * sp;
+                const double q_im = v_re * sp + v_im * cp;
+                batch_.cascade_h[p] += sig * p_re;
+                batch_.cascade_dx[p] += sig * c.a1[idx] * p_im;
+                batch_.cascade_dz[p] += sig * c.a2[idx] * p_im;
+                batch_.cascade_dhx[p] += sig * -c.kx[idx] * p_im;
+                batch_.cascade_dhz[p] += sig * -c.ky[idx] * p_im;
+                batch_.cascade_dxx[p] += sig * c.c11[idx] * p_re;
+                batch_.cascade_dxz[p] += sig * c.c12[idx] * p_re;
+                batch_.cascade_dzx[p] += sig * c.c21[idx] * p_re;
+                batch_.cascade_dzz[p] += sig * c.c22[idx] * p_re;
+                batch_.cascade_vh[p] += sig * q_re;
+                batch_.cascade_vx[p] += sig * c.a1[idx] * q_im;
+                batch_.cascade_vz[p] += sig * c.a2[idx] * q_im;
+            }
+        }
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = indices[ai];
+            const double inv_n2 = c.inv_n2;
+            batch_.h[p] += batch_.cascade_h[p] * inv_n2;
+            batch_.dx[p] += batch_.cascade_dx[p] * inv_n2;
+            batch_.dz[p] += batch_.cascade_dz[p] * inv_n2;
+            batch_.dhx[p] += batch_.cascade_dhx[p] * inv_n2;
+            batch_.dhz[p] += batch_.cascade_dhz[p] * inv_n2;
+            batch_.dxx[p] += batch_.cascade_dxx[p] * inv_n2;
+            batch_.dxz[p] += batch_.cascade_dxz[p] * inv_n2;
+            batch_.dzx[p] += batch_.cascade_dzx[p] * inv_n2;
+            batch_.dzz[p] += batch_.cascade_dzz[p] * inv_n2;
+            batch_.vh[p] += batch_.cascade_vh[p] * inv_n2;
+            batch_.vx[p] += batch_.cascade_vx[p] * inv_n2;
+            batch_.vz[p] += batch_.cascade_vz[p] * inv_n2;
+        }
+    }
+    diag_last_spectral_point_evaluations += active_count;
+}
+
+void OceanQueryCore::build_sample_from_fields_(size_t p, bool converged, double *out) const {
+    const double dx = batch_.dx[p], dz = batch_.dz[p];
+    const double dxx = batch_.dxx[p], dxz = batch_.dxz[p];
+    const double dzx = batch_.dzx[p], dzz = batch_.dzz[p];
+    const double dhx = batch_.dhx[p], dhz = batch_.dhz[p];
+    double normal[3];
+    normal[0] = dhz * dzx - (1.0 + dzz) * dhx;
+    normal[1] = (1.0 + dzz) * (1.0 + dxx) - dxz * dzx;
+    normal[2] = dxz * dhx - dhz * (1.0 + dxx);
+    const double len2 = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+    if (len2 > 1.0e-14) {
+        const double len = std::sqrt(len2);
+        normal[0] /= len; normal[1] /= len; normal[2] /= len;
+        if (normal[1] < 0.0) { normal[0] = -normal[0]; normal[1] = -normal[1]; normal[2] = -normal[2]; }
+    } else {
+        normal[0] = 0.0; normal[1] = 1.0; normal[2] = 0.0;
+    }
+    const double det_j = (1.0 + dxx) * (1.0 + dzz) - dxz * dzx;
+    out[S_VALID] = converged ? 1.0 : 0.0;
+    out[S_HEIGHT] = sea_level + batch_.h[p];
+    out[S_DX] = dx; out[S_DY] = batch_.h[p]; out[S_DZ] = dz;
+    out[S_NX] = normal[0]; out[S_NY] = normal[1]; out[S_NZ] = normal[2];
+    out[S_VX] = batch_.vx[p]; out[S_VY] = batch_.vh[p]; out[S_VZ] = batch_.vz[p];
+    out[S_JACOBIAN_DET] = det_j;
+    out[S_FOLDOVER] = det_j <= 0.0 ? 1.0 : 0.0;
+    out[S_RESIDUAL] = batch_.residual[p];
+    out[S_ITERATIONS] = static_cast<double>(batch_.iterations[p]);
+}
+
+void OceanQueryCore::solve_true_batch_(size_t n, double *out, bool append_solved_q) {
+    diag_last_spectral_point_evaluations = 0;
+    for (int &count : diag_last_newton_histogram) { count = 0; }
+    size_t active_count = n;
+    for (size_t p = 0; p < n; ++p) {
+        batch_.iterations[p] = 0;
+        batch_.active_indices[p] = p;
+    }
+    evaluate_true_batch_(batch_.active_indices.data(), active_count);
+
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = batch_.active_indices[ai];
+        const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+        const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+        batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+    }
+
+    const int minimum_iterations = 0;
+    for (size_t p = 0; p < n; ++p) {
+        batch_.done[p] = (batch_.residual[p] <= POSITION_TOLERANCE_M && minimum_iterations == 0) ? 1 : 0;
+    }
+    size_t next_count = 0;
+    for (size_t p = 0; p < n; ++p) if (!batch_.done[p]) batch_.active_indices[next_count++] = p;
+    active_count = next_count;
+
+    for (int iteration = 0; iteration < MAX_ITERATIONS && active_count > 0; ++iteration) {
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double det_j = (1.0 + batch_.dxx[p]) * (1.0 + batch_.dzz[p]) - batch_.dxz[p] * batch_.dzx[p];
+            if (std::abs(det_j) <= JACOBIAN_EPSILON) {
+                continue;
+            }
+            const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+            const double inv_det = 1.0 / det_j;
+            batch_.qx[p] -= inv_det * ((1.0 + batch_.dzz[p]) * fx - batch_.dxz[p] * fz);
+            batch_.qz[p] -= inv_det * (-batch_.dzx[p] * fx + (1.0 + batch_.dxx[p]) * fz);
+            batch_.active_indices[next_count++] = p;
+        }
+        active_count = next_count;
+        if (active_count == 0) { break; }
+        evaluate_true_batch_(batch_.active_indices.data(), active_count);
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+            batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+            batch_.iterations[p] = iteration + 1;
+            if (batch_.residual[p] <= POSITION_TOLERANCE_M && batch_.iterations[p] >= minimum_iterations) {
+                batch_.done[p] = 1;
+            } else {
+                batch_.active_indices[next_count++] = p;
+            }
+        }
+        active_count = next_count;
+    }
+
+    for (size_t p = 0; p < n; ++p) {
+        const bool is_converged = batch_.done[p] != 0;
+        if (is_converged) {
+            ++diag_last_newton_histogram[batch_.iterations[p]];
+        } else {
+            ++diag_last_newton_histogram[4];
+            ++diag_non_converged;
+        }
+        double *sample = out + p * (append_solved_q ? TRUE_BATCH_WARM_STRIDE : S_STRIDE);
+        build_sample_from_fields_(p, is_converged, sample);
+        if (append_solved_q) {
+            sample[S_STRIDE] = batch_.qx[p];
+            sample[S_STRIDE + 1] = batch_.qz[p];
+        }
+    }
+}
+
+void OceanQueryCore::sample_batch_true_prepared(const double *positions_xz, size_t n, double *out) {
+    if (n == 0) { return; }
+    batch_.ensure_capacity(n);
+    for (size_t p = 0; p < n; ++p) {
+        batch_.wx[p] = positions_xz[2 * p]; batch_.wz[p] = positions_xz[2 * p + 1];
+        batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
+    }
+    solve_true_batch_(n, out, false);
+}
+
+void OceanQueryCore::sample_batch_warm_prepared(const double *positions_xz, const double *initial_q_xz,
+                                                 size_t n, double *out) {
+    if (n == 0) { return; }
+    batch_.ensure_capacity(n);
+    for (size_t p = 0; p < n; ++p) {
+        batch_.wx[p] = positions_xz[2 * p]; batch_.wz[p] = positions_xz[2 * p + 1];
+        const double qx = initial_q_xz[2 * p], qz = initial_q_xz[2 * p + 1];
+        const bool valid_guess = std::isfinite(qx) && std::isfinite(qz);
+        batch_.qx[p] = valid_guess ? qx : batch_.wx[p];
+        batch_.qz[p] = valid_guess ? qz : batch_.wz[p];
+    }
+    solve_true_batch_(n, out, true);
 }
 
 } // namespace oq
