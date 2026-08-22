@@ -58,7 +58,7 @@ func _initialize() -> void:
 			var grid_local := Vector2(float(x) + 0.3, float(z) + 0.7)
 			var world := origin + grid_local * cell
 			var s = propagation.sample_propagation(world, sample)
-			var sd: Dictionary = warp_baker.debug_sample_direction(propagation, origin, cell, width, height, grid_local, sample)
+			var sd: Dictionary = warp_baker.debug_sample_direction(propagation, width, height, grid_local)
 			if s.valid:
 				valid_old += 1
 			if sd["valid"]:

@@ -13,6 +13,7 @@ uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
 uniform float domain_long_coastal_m = 512.0;
 uniform float domain_long_remainder_m = 512.0;
 uniform float domain_mid_m = 137.0;
@@ -112,6 +113,11 @@ vec4 warp_deep_sample(vec2 world_xz) {
 	return vec4(warp.xy, confidence, 0.0);
 }
 
+vec4 warp_jacobian_sample(vec2 world_xz) {
+	vec2 uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
+	return textureLod(coastal_warp_jacobian_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+}
+
 void vertex() {
 	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	ocean_world_xz = world_xz;
@@ -142,14 +148,21 @@ void vertex() {
 	}
 	vec2 deep_xz = warp_sample.xy;
 	float warp_confidence = warp_sample.z;
+	vec4 warp_jacobian = vec4(1.0, 0.0, 0.0, 1.0);
+	if (coast_transform_active && coastal_warp_enabled && !coastal_forced_warp_debug && coastal_warp_effect_debug != 2) {
+		warp_jacobian = warp_jacobian_sample(world_xz);
+	}
 	// LONG_COASTAL: sampleo en deep (si warp activo) con blend -> open (sin warp).
 	vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
 	vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
 	vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
 	coastal_warp_delta_m = length(long_coastal_warped - long_coastal_open);
-	if (coast_transform_active && coastal_warp_effect_debug != 1) {
-		long_coastal *= shoaling;
+	float effective_shoaling = 1.0;
+	if (coast_transform_active) {
+		if (coastal_warp_effect_debug == 2) effective_shoaling = shoaling; // DEBUG: shoaling sin warp.
+		else if (coastal_warp_effect_debug == 0) effective_shoaling = mix(1.0, shoaling, warp_confidence);
 	}
+	long_coastal *= effective_shoaling;
 	// LONG_REMAINDER: siempre open-ocean.
 	vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
 	vec3 long_displacement = long_coastal + long_remainder;
@@ -165,9 +178,16 @@ void vertex() {
 	// Normales en slope space: slope_total = suma de slopes por banda.
 	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
 	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
-	vec3 long_coastal_normal = normalize(mix(long_coastal_normal_open, long_coastal_normal_warped, warp_confidence));
-	float normal_shoaling = coast_transform_active && coastal_warp_effect_debug != 1 ? shoaling : 1.0;
-	vec2 slope = slope_from_normal(long_coastal_normal) * coastal_weight * normal_shoaling * coastal_gain;
+	vec2 slope_open = slope_from_normal(long_coastal_normal_open);
+	vec2 slope_deep = slope_from_normal(long_coastal_normal_warped);
+	// Heightfield/choppy approximation: s_world = J^T * s_deep. No reconstruye
+	// los tangentes 3D completos del desplazamiento FFT, pero respeta el warp 2D.
+	vec2 slope_warped_world = vec2(
+		warp_jacobian.r * slope_deep.x + warp_jacobian.b * slope_deep.y,
+		warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y
+	);
+	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
+	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
 	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
 	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;

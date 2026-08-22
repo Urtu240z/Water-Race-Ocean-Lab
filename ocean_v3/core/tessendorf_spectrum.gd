@@ -41,7 +41,8 @@ static func build_h0_split_rgba32f(config: OpenOceanFFTConfig, simulation_seed: 
 			var k: Vector2 = Vector2(float(x) - half, float(y) - half) * delta_k
 			var weight := _angular_weight(k, wind, inner_deg, outer_deg)
 			var negative_index := ((n - y) % n) * n + ((n - x) % n)
-			var k_neg: Vector2 = Vector2(float(negative_index % n) - half, float(negative_index / n) - half) * delta_k
+			var negative_y: int = int(float(negative_index) / float(n))
+			var k_neg: Vector2 = Vector2(float(negative_index % n) - half, float(negative_y) - half) * delta_k
 			var weight_neg := _angular_weight(k_neg, wind, inner_deg, outer_deg)
 			var value := h0[index]
 			var negative_conjugate := Vector2(h0[negative_index].x, -h0[negative_index].y)
@@ -95,7 +96,8 @@ static func _split_energy_metrics(h0: PackedVector2Array, n: int, delta_k: float
 			var k := Vector2(float(x) - half, float(y) - half) * delta_k
 			var weight := _angular_weight(k, wind, inner_deg, outer_deg)
 			var negative_index := ((n - y) % n) * n + ((n - x) % n)
-			var k_neg := Vector2(float(negative_index % n) - half, float(negative_index / n) - half) * delta_k
+			var negative_y: int = int(float(negative_index) / float(n))
+			var k_neg := Vector2(float(negative_index % n) - half, float(negative_y) - half) * delta_k
 			var weight_neg := _angular_weight(k_neg, wind, inner_deg, outer_deg)
 			var value := h0[index]
 			var negative_conjugate := Vector2(h0[negative_index].x, -h0[negative_index].y)

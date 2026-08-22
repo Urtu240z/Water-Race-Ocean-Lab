@@ -150,7 +150,7 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 
 
 func set_coastal_warp(warp_data, enabled := true) -> void:
-	## 3B.2B: pasa el CoastalWarpData al shader (textura deep_xz + detJ + valid).
+	## 3B.2B: pasa el CoastalWarpData al shader (deep_xz/detJ/valid + J).
 	## El shader samplea LONG_COASTAL en deep_xz cuando el warp es válido y
 	## blend suave en NEAR_CAUSTIC; fallback a world_xz en inválido/folded.
 	var warp_enabled: bool = enabled and warp_data != null and warp_data.is_valid()
@@ -160,6 +160,7 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 		if not warp_enabled:
 			continue
 		material.set_shader_parameter(&"coastal_warp_texture", textures["warp"])
+		material.set_shader_parameter(&"coastal_warp_jacobian_texture", textures["jacobian"])
 		material.set_shader_parameter(&"coastal_warp_origin_xz", warp_data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_warp_extent_m", warp_data.world_max_xz() - warp_data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_warp_detj_safe", warp_data.detj_safe_threshold)

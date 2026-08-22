@@ -40,6 +40,11 @@ enum BoundaryHit { NONE = 0, UPSTREAM = 1, LATERAL = 2, LAND_OR_SHADOW = 3, STEP
 @export_storage var deep_x := PackedFloat32Array()
 @export_storage var deep_z := PackedFloat32Array()
 @export_storage var jacobian_det := PackedFloat32Array()
+## J = d(deep_xz) / d(world_xz): [J00 J01; J10 J11].
+@export_storage var jacobian_j00 := PackedFloat32Array()
+@export_storage var jacobian_j01 := PackedFloat32Array()
+@export_storage var jacobian_j10 := PackedFloat32Array()
+@export_storage var jacobian_j11 := PackedFloat32Array()
 @export_storage var valid_mask := PackedByteArray()
 # Debug/inspección (no redundante: permiten validar continuidad y caustics).
 @export_storage var r_deep := PackedFloat32Array()
@@ -48,12 +53,14 @@ enum BoundaryHit { NONE = 0, UPSTREAM = 1, LATERAL = 2, LAND_OR_SHADOW = 3, STEP
 @export_storage var jacobian_class := PackedByteArray()
 
 var _warp_texture: ImageTexture
+var _jacobian_texture: ImageTexture
 
 
 func is_valid() -> bool:
 	var count := width * height
 	return width >= 2 and height >= 2 and cell_size_m > 0.0 and k0_rad_m > 0.0 \
 		and deep_x.size() == count and deep_z.size() == count and jacobian_det.size() == count \
+		and jacobian_j00.size() == count and jacobian_j01.size() == count and jacobian_j10.size() == count and jacobian_j11.size() == count \
 		and valid_mask.size() == count and r_deep.size() == count and backtrace_steps.size() == count \
 		and boundary_hit.size() == count and jacobian_class.size() == count
 
@@ -63,9 +70,23 @@ func world_max_xz() -> Vector2:
 
 
 func approximate_memory_bytes() -> int:
-	# 2 float32 (deep) + 1 float32 (detJ) + 1 float32 (r_deep) + 1 int32 (steps)
+	# 2 float32 (deep) + detJ + 4 float32 (J) + 1 float32 (r_deep) + 1 int32 (steps)
 	# + 3 máscaras byte.
-	return width * height * (4 * 4 + 1 * 4 + 3)
+	return width * height * (8 * 4 + 1 * 4 + 3)
+
+
+func approximate_warp_gpu_memory_bytes() -> int:
+	## deep_x/deep_z/detJ/valid RGBA32F.
+	return width * height * 16
+
+
+func approximate_jacobian_gpu_memory_bytes() -> int:
+	## J00/J01/J10/J11 RGBA32F adicional.
+	return width * height * 16
+
+
+func approximate_gpu_memory_bytes() -> int:
+	return approximate_warp_gpu_memory_bytes() + approximate_jacobian_gpu_memory_bytes()
 
 
 func sample_warp(world_xz: Vector2, reuse = null):
@@ -86,6 +107,10 @@ func sample_warp(world_xz: Vector2, reuse = null):
 	var i11 := i01 + 1
 	result.deep_xz = Vector2(_bilinear(deep_x, i00, i10, i01, i11, tx, tz), _bilinear(deep_z, i00, i10, i01, i11, tx, tz))
 	result.jacobian_det = _bilinear(jacobian_det, i00, i10, i01, i11, tx, tz)
+	result.jacobian_j00 = _bilinear(jacobian_j00, i00, i10, i01, i11, tx, tz)
+	result.jacobian_j01 = _bilinear(jacobian_j01, i00, i10, i01, i11, tx, tz)
+	result.jacobian_j10 = _bilinear(jacobian_j10, i00, i10, i01, i11, tx, tz)
+	result.jacobian_j11 = _bilinear(jacobian_j11, i00, i10, i01, i11, tx, tz)
 	result.r_deep = _bilinear(r_deep, i00, i10, i01, i11, tx, tz)
 	var nearest := clampi(int(round(grid.y)), 0, height - 1) * width + clampi(int(round(grid.x)), 0, width - 1)
 	result.valid = valid_mask[nearest] != 0
@@ -118,16 +143,24 @@ func build_gpu_textures() -> Dictionary:
 	if not is_valid():
 		return {}
 	var values := PackedFloat32Array()
+	var jacobian_values := PackedFloat32Array()
 	values.resize(width * height * 4)
+	jacobian_values.resize(width * height * 4)
 	for index in width * height:
 		var base := index * 4
 		values[base] = deep_x[index]
 		values[base + 1] = deep_z[index]
 		values[base + 2] = jacobian_det[index]
 		values[base + 3] = 1.0 if valid_mask[index] != 0 else 0.0
+		jacobian_values[base] = jacobian_j00[index]
+		jacobian_values[base + 1] = jacobian_j01[index]
+		jacobian_values[base + 2] = jacobian_j10[index]
+		jacobian_values[base + 3] = jacobian_j11[index]
 	var image := Image.create_from_data(width, height, false, Image.FORMAT_RGBAF, values.to_byte_array())
+	var jacobian_image := Image.create_from_data(width, height, false, Image.FORMAT_RGBAF, jacobian_values.to_byte_array())
 	_warp_texture = ImageTexture.create_from_image(image)
-	return {"warp": _warp_texture}
+	_jacobian_texture = ImageTexture.create_from_image(jacobian_image)
+	return {"warp": _warp_texture, "jacobian": _jacobian_texture}
 
 
 func _bilinear(values: PackedFloat32Array, i00: int, i10: int, i01: int, i11: int, tx: float, tz: float) -> float:

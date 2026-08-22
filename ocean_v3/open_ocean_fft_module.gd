@@ -70,6 +70,34 @@ func coastal_energy_metrics() -> Dictionary:
 	return _coastal_energy_metrics.duplicate()
 
 
+func coastal_long_reference_direction() -> Vector2:
+	## Dirección del sector LONG que se dividió en COASTAL/REMAINDER.
+	if not configs.is_empty() and configs[0] != null:
+		var direction: Vector2 = configs[0].wind_direction.normalized()
+		if direction.length_squared() > 1.0e-8:
+			return direction
+	return Vector2.RIGHT
+
+
+func coastal_warp_direction() -> Vector2:
+	if _coastal_propagation != null:
+		return _coastal_propagation.incoming_direction_xz.normalized()
+	return coastal_long_reference_direction()
+
+
+func coastal_render_memory_diagnostics() -> Dictionary:
+	var propagation_bytes: int = int(_coastal_propagation.approximate_gpu_memory_bytes()) if _coastal_propagation != null else 0
+	var warp_bytes: int = int(_coastal_warp.approximate_warp_gpu_memory_bytes()) if _coastal_warp != null else 0
+	var jacobian_bytes: int = int(_coastal_warp.approximate_jacobian_gpu_memory_bytes()) if _coastal_warp != null else 0
+	return {
+		"fft_gpu_bytes": gpu_memory_bytes(),
+		"propagation_gpu_bytes": propagation_bytes,
+		"warp_gpu_bytes": warp_bytes,
+		"jacobian_gpu_bytes": jacobian_bytes,
+		"fft_dispatches_per_update": dispatches_per_update,
+	}
+
+
 func _ready() -> void:
 	add_to_group(&"ocean_fft")
 	_sea_state = SeaStateScript.State.RACE

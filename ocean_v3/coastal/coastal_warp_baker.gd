@@ -19,8 +19,6 @@ extends RefCounted
 ## tierra/shadow o agota pasos, el nodo queda INVALID (no se cruza tierra).
 
 const WarpDataScript := preload("res://ocean_v3/coastal/coastal_warp_data.gd")
-const PropagationDataScript := preload("res://ocean_v3/coastal/coastal_propagation_data.gd")
-const PropagationSampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample.gd")
 
 var propagation: CoastalPropagationData
 var backtrace_step_cells := 0.5
@@ -63,6 +61,10 @@ func bake():
 	warp.deep_x.resize(count)
 	warp.deep_z.resize(count)
 	warp.jacobian_det.resize(count)
+	warp.jacobian_j00.resize(count)
+	warp.jacobian_j01.resize(count)
+	warp.jacobian_j10.resize(count)
+	warp.jacobian_j11.resize(count)
 	warp.valid_mask.resize(count)
 	warp.r_deep.resize(count)
 	warp.backtrace_steps.resize(count)
@@ -125,28 +127,26 @@ func bake():
 
 ## --- Backtrace de characteristics --------------------------------------------
 
-func debug_sample_direction(propagation, origin: Vector2, cell: float, width: int, height: int,
-		grid_local: Vector2, sample) -> Dictionary:
-	return _sample_direction(propagation, origin, cell, width, height, grid_local, sample)
+func debug_sample_direction(prop_data, width: int, height: int, grid_local: Vector2) -> Dictionary:
+	return _sample_direction(prop_data, width, height, grid_local)
 
 
-func debug_backtrace(propagation, direction: Vector2, origin: Vector2, cell: float,
+func debug_backtrace(prop_data, direction: Vector2, origin: Vector2, cell: float,
 		width: int, height: int, grid_local: Vector2, step_h: float, max_steps: int) -> Dictionary:
-	return _backtrace(propagation, direction, Vector2(-direction.y, direction.x), origin, cell,
+	return _backtrace(prop_data, direction, Vector2(-direction.y, direction.x), origin, cell,
 		width, height, grid_local, step_h, max_steps)
 
 
-func _backtrace(propagation, direction: Vector2, _normal: Vector2, origin: Vector2, cell: float,
+func _backtrace(prop_data, direction: Vector2, _normal: Vector2, origin: Vector2, cell: float,
 		width: int, height: int, grid_local: Vector2, step_h: float, max_steps: int) -> Dictionary:
 	## Integra p' = -local_direction(p) desde grid_local (en celdas, local al
 	## grid) hacia aguas arriba hasta tocar la frontera upstream.
 	## Devuelve {steps:int, hit:BoundaryHit, cross_point:Vector2 (celdas)}.
 	var t_backtrace0 := Time.get_ticks_usec()
 	var result := {"steps": 0, "hit": WarpDataScript.BoundaryHit.NONE, "cross_point": Vector2.ZERO}
-	var sample: CoastalPropagationSample = PropagationSampleScript.new()
 	var p := grid_local
 	var t_s0 := Time.get_ticks_usec()
-	var dir_sample: Dictionary = _sample_direction(propagation, origin, cell, width, height, p, sample)
+	var dir_sample: Dictionary = _sample_direction(prop_data, width, height, p)
 	diag_time_sample_direction_us += Time.get_ticks_usec() - t_s0
 	if not dir_sample["valid"]:
 		result["hit"] = WarpDataScript.BoundaryHit.LAND_OR_SHADOW
@@ -163,7 +163,7 @@ func _backtrace(propagation, direction: Vector2, _normal: Vector2, origin: Vecto
 		# correctamente con el borde.
 		if mid.x >= 0.0 and mid.y >= 0.0 and mid.x <= float(width - 1) and mid.y <= float(height - 1):
 			var t_s1 := Time.get_ticks_usec()
-			var mid_sample: Dictionary = _sample_direction(propagation, origin, cell, width, height, mid, sample)
+			var mid_sample: Dictionary = _sample_direction(prop_data, width, height, mid)
 			diag_time_sample_direction_us += Time.get_ticks_usec() - t_s1
 			if not mid_sample["valid"]:
 				result["hit"] = WarpDataScript.BoundaryHit.LAND_OR_SHADOW
@@ -174,7 +174,7 @@ func _backtrace(propagation, direction: Vector2, _normal: Vector2, origin: Vecto
 		var dir_next := dir
 		if next.x >= 0.0 and next.y >= 0.0 and next.x <= float(width - 1) and next.y <= float(height - 1):
 			var t_s2 := Time.get_ticks_usec()
-			var next_sample: Dictionary = _sample_direction(propagation, origin, cell, width, height, next, sample)
+			var next_sample: Dictionary = _sample_direction(prop_data, width, height, next)
 			diag_time_sample_direction_us += Time.get_ticks_usec() - t_s2
 			if not next_sample["valid"]:
 				result["hit"] = WarpDataScript.BoundaryHit.LAND_OR_SHADOW
@@ -185,7 +185,7 @@ func _backtrace(propagation, direction: Vector2, _normal: Vector2, origin: Vecto
 		if next.x < 0.0 or next.y < 0.0 or next.x > float(width - 1) or next.y > float(height - 1):
 			var cross := _intersect_grid_border(p, next, width, height)
 			result["cross_point"] = cross
-			result["hit"] = _classify_cross(propagation, direction, cross, width, height)
+			result["hit"] = _classify_cross(direction, cross, width, height)
 			diag_time_integration_us += Time.get_ticks_usec() - t_backtrace0
 			return result
 		p = next
@@ -195,8 +195,7 @@ func _backtrace(propagation, direction: Vector2, _normal: Vector2, origin: Vecto
 	return result
 
 
-func _sample_direction(propagation, origin: Vector2, cell: float, width: int, height: int,
-		grid_local: Vector2, sample) -> Dictionary:
+func _sample_direction(prop_data, width: int, height: int, grid_local: Vector2) -> Dictionary:
 	## Dirección local interpolada bilinealmente; devuelve {valid, dir}.
 	## valid=false si el punto cae en tierra/shadow (no se atraviesa).
 	## Hot path del backtrace: interpola SÓLO dirección+reached (no los 10
@@ -214,14 +213,14 @@ func _sample_direction(propagation, origin: Vector2, cell: float, width: int, he
 	# reached/valid por nearest (como sample_propagation): no atravesar
 	# tierra/shadow.
 	var nearest := clampi(int(round(grid_local.y)), 0, height - 1) * width + clampi(int(round(grid_local.x)), 0, width - 1)
-	if propagation.valid_mask[nearest] == 0 or propagation.reached_mask[nearest] == 0:
+	if prop_data.valid_mask[nearest] == 0 or prop_data.reached_mask[nearest] == 0:
 		return {"valid": false, "dir": Vector2.ZERO}
 	var w00 := (1.0 - tx) * (1.0 - tz)
 	var w10 := tx * (1.0 - tz)
 	var w01 := (1.0 - tx) * tz
 	var w11 := tx * tz
-	var dir_x: float = propagation.local_direction_x[i00] * w00 + propagation.local_direction_x[i10] * w10 + propagation.local_direction_x[i01] * w01 + propagation.local_direction_x[i11] * w11
-	var dir_z: float = propagation.local_direction_z[i00] * w00 + propagation.local_direction_z[i10] * w10 + propagation.local_direction_z[i01] * w01 + propagation.local_direction_z[i11] * w11
+	var dir_x: float = prop_data.local_direction_x[i00] * w00 + prop_data.local_direction_x[i10] * w10 + prop_data.local_direction_x[i01] * w01 + prop_data.local_direction_x[i11] * w11
+	var dir_z: float = prop_data.local_direction_z[i00] * w00 + prop_data.local_direction_z[i10] * w10 + prop_data.local_direction_z[i01] * w01 + prop_data.local_direction_z[i11] * w11
 	var direction := Vector2(dir_x, dir_z).normalized()
 	if direction.length_squared() <= 1.0e-12:
 		return {"valid": false, "dir": Vector2.ZERO}
@@ -243,7 +242,7 @@ func _intersect_grid_border(p: Vector2, next: Vector2, width: int, height: int) 
 	return p + delta * maxf(t, 0.0)
 
 
-func _classify_cross(propagation, direction: Vector2, cross: Vector2, width: int, height: int) -> int:
+func _classify_cross(direction: Vector2, cross: Vector2, width: int, height: int) -> int:
 	## Un cruce es UPSTREAM si el punto anterior a lo largo de -direction está
 	## fuera del grid (mismo criterio que la frontera del solve eikonal).
 	var before := cross - direction
@@ -293,6 +292,10 @@ func _compute_jacobian(warp) -> void:
 			var dxz: float = (warp.deep_x[zp * width + x] - warp.deep_x[zm * width + x]) / hz
 			var dzz: float = (warp.deep_z[zp * width + x] - warp.deep_z[zm * width + x]) / hz
 			var det: float = dxx * dzz - dxz * dzx
+			warp.jacobian_j00[index] = dxx
+			warp.jacobian_j01[index] = dxz
+			warp.jacobian_j10[index] = dzx
+			warp.jacobian_j11[index] = dzz
 			warp.jacobian_det[index] = det
 			if det > threshold:
 				warp.jacobian_class[index] = WarpDataScript.JacobianClass.SAFE

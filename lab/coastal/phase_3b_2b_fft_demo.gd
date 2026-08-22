@@ -85,7 +85,8 @@ func _unhandled_input(event: InputEvent) -> void:
 func _apply_coastal_settings() -> void:
 	_ocean.coastal_bathymetry_data = _bathymetry
 	_ocean.coastal_propagation_enabled = _coastal_enabled
-	_ocean.coastal_incoming_direction_xz = Vector2.RIGHT
+	# El warp debe seguir la dirección del sector LONG_COASTAL, no un eje debug.
+	_ocean.coastal_incoming_direction_xz = _ocean.coastal_long_reference_direction()
 	_ocean.coastal_reference_wavelength_m = 16.0
 	_ocean.coastal_monochromatic_debug = false # FFT REAL, sin instrumento mono.
 	_ocean.coastal_eikonal_refraction_debug = true # Eikonal + warp (3B.2B).
@@ -103,7 +104,10 @@ func _apply_render_diagnostics() -> void:
 func _update_status() -> void:
 	var warp: Variant = _ocean.coastal_warp_data()
 	var warp_text := "BAKING (una vez, ~7 s)..." if _coastal_enabled and warp == null else ("ON valid=%d" % warp.valid_mask.count(1) if warp != null else "OFF")
-	_status.text = "PHASE 3B.2B — FFT COMPOSITION DIAGNOSTIC\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\n\nWarp world->deep: %s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text()]
+	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
+	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
+	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
+	_status.text = "PHASE 3B.2B — FFT COMPOSITION DIAGNOSTIC\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nWarp world->deep: %s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text()]
 
 
 func _split_metrics_text() -> String:

@@ -10,7 +10,7 @@ extends SceneTree
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
 
 const WARMUP_FRAMES := 120
-const MEASURE_FRAMES := 240
+const MEASURE_FRAMES := 300
 
 var _ocean = null
 var _demo = null
@@ -63,11 +63,10 @@ func _make_bank(width: int, height: int, origin: Vector2):
 func _process(delta: float) -> bool:
 	if _ocean == null:
 		return false
-	if _frames == 0:
+	if _phase == 0 and _frames == 0:
 		# Primer frame: Coastal OFF para la primera medición (split sin warp).
-		if not _ocean.coastal_propagation_enabled:
-			_ocean.coastal_propagation_enabled = false
-			_ocean.rebuild_coastal_propagation()
+		_ocean.coastal_propagation_enabled = false
+		_ocean.rebuild_coastal_propagation()
 	_frames += 1
 	match _phase:
 		0:
@@ -125,7 +124,13 @@ func _stats(label: String) -> Array:
 
 
 func _report() -> void:
+	var memory: Dictionary = _ocean.coastal_render_memory_diagnostics()
 	print("=== 3B.2B FPS RESULT ===")
-	print("COASTAL OFF: %.2f ms (%.1f FPS)" % [_offs[0], 1000.0 / maxf(_offs[0], 0.001)])
-	print("COASTAL ON : %.2f ms (%.1f FPS)" % [_ons[0], 1000.0 / maxf(_ons[0], 0.001)])
+	print("COASTAL OFF: median=%.2f ms p95=%.2f ms (%.1f FPS)" % [_offs[0], _offs[1], 1000.0 / maxf(_offs[0], 0.001)])
+	print("COASTAL ON : median=%.2f ms p95=%.2f ms (%.1f FPS)" % [_ons[0], _ons[1], 1000.0 / maxf(_ons[0], 0.001)])
 	print("overhead ON vs OFF: %.2f ms" % (_ons[0] - _offs[0]))
+	print("dispatches/update: %d" % int(memory.get("fft_dispatches_per_update", 0)))
+	print("GPU memory: FFT=%d B propagation=%d B warp=%d B Jacobian=%d B" % [
+		int(memory.get("fft_gpu_bytes", 0)), int(memory.get("propagation_gpu_bytes", 0)),
+		int(memory.get("warp_gpu_bytes", 0)), int(memory.get("jacobian_gpu_bytes", 0))
+	])

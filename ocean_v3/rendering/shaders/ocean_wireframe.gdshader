@@ -8,6 +8,7 @@ uniform sampler2D displacement_short : repeat_enable, filter_linear;
 uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
 uniform float domain_long_coastal_m = 512.0;
 uniform float domain_long_remainder_m = 512.0;
 uniform float domain_mid_m = 137.0;
@@ -109,7 +110,12 @@ void vertex() {
 		vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
-		if (coast_active && coastal_warp_effect_debug != 1) long_coastal *= coastal_field.g;
+		float effective_shoaling = 1.0;
+		if (coast_active) {
+			if (coastal_warp_effect_debug == 2) effective_shoaling = coastal_field.g;
+			else if (coastal_warp_effect_debug == 0) effective_shoaling = mix(1.0, coastal_field.g, warp_confidence);
+		}
+		long_coastal *= effective_shoaling;
 		vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
 		float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
 		float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
