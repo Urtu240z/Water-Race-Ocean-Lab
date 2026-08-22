@@ -21,6 +21,15 @@ struct Cascade {
     std::vector<double> ev_h_re, ev_h_im, ev_v_re, ev_v_im;
     std::vector<double> ev_a_h_re, ev_a_h_im, ev_b_h_re, ev_b_h_im;
     std::vector<double> ev_a_v_re, ev_a_v_im, ev_b_v_re, ev_b_v_im;
+    // 3B.3A: C = w( k) A + w(-k) B preparado una vez por instante. El
+    // evaluador AVX2 reutiliza estas componentes durante el mismo phi de LONG.
+    std::vector<double> ev_coastal_h_re, ev_coastal_h_im, ev_coastal_v_re, ev_coastal_v_im;
+    // Factores geométricos sig*{1,a,k,c} invariables por espectro. Evitan
+    // recomponerlos por modo/punto en los dos evaluadores coastal AVX2.
+    std::vector<double> coastal_f_h, coastal_f_dx, coastal_f_dz, coastal_f_dhx, coastal_f_dhz;
+    std::vector<double> coastal_f_dxx, coastal_f_dxz, coastal_f_dzx, coastal_f_dzz, coastal_f_vh, coastal_f_vx, coastal_f_vz;
+    // Lista compacta exacta: sólo elimina pares con ambos pesos exactamente 0.
+    std::vector<size_t> coastal_nonzero_indices;
     double inv_n2 = 0.0;
 };
 
@@ -28,6 +37,20 @@ struct CoastalSample {
     double deep_x = 0.0, deep_z = 0.0;
     double confidence = 0.0, effective_shoaling = 1.0;
     double j00 = 1.0, j01 = 0.0, j10 = 0.0, j11 = 1.0;
+};
+
+// Perfil temporal de diagnóstico 3B.3A. Se desactiva por defecto y sólo se
+// usa para descomponer la implementación coastal durante el benchmark.
+struct CoastalProfile {
+    bool enabled = false;
+    uint64_t base_us = 0;
+    uint64_t sampler_us = 0;
+    uint64_t cq_us = 0;
+    uint64_t cdeep_us = 0;
+    uint64_t combine_us = 0;
+    uint64_t calls = 0;
+
+    void reset() { base_us = sampler_us = cq_us = cdeep_us = combine_us = calls = 0; }
 };
 
 // Datos CPU horneados de 3B.2B. Se copian sólo al configurar/rebuild, nunca
@@ -81,6 +104,15 @@ struct BatchWorkspace {
     std::vector<int> iterations;
     std::vector<uint8_t> done;
     std::vector<size_t> active_indices;
+    std::vector<size_t> coastal_active_indices;
+    std::vector<CoastalSample> coastal_samples;
+    std::vector<double> coastal_deep_x, coastal_deep_z;
+    // C(q), fusionado dentro del pase LONG existente.
+    std::vector<double> coastal_h, coastal_dx, coastal_dz, coastal_dhx, coastal_dhz;
+    std::vector<double> coastal_dxx, coastal_dxz, coastal_dzx, coastal_dzz, coastal_vh, coastal_vx, coastal_vz;
+    // C(F(q)), evaluado por lote sólo para puntos coastal activos.
+    std::vector<double> coastal_deep_h, coastal_deep_dx, coastal_deep_dz, coastal_deep_dhx, coastal_deep_dhz;
+    std::vector<double> coastal_deep_dxx, coastal_deep_dxz, coastal_deep_dzx, coastal_deep_dzz, coastal_deep_vh, coastal_deep_vx, coastal_deep_vz;
 
     void ensure_capacity(size_t required);
 };
@@ -97,6 +129,7 @@ public:
     // a evaluar todos los modos de las cascadas para un punto activo.
     size_t diag_last_spectral_point_evaluations = 0;
     int diag_last_newton_histogram[5] = {0, 0, 0, 0, 0}; // 0/1/2/3/no-conv.
+    mutable CoastalProfile coastal_profile;
 
     // La detección vive en el objeto scalar: ninguna instrucción AVX2 se
     // ejecuta antes de decidir llamar a la translation unit AVX2 aislada.
@@ -123,6 +156,10 @@ public:
                              const uint8_t *warp_valid, const double *shoaling,
                              const uint8_t *propagation_valid, size_t count);
     void clear_coastal() { coastal.clear(); }
+    void set_coastal_profile_enabled(bool enabled) { coastal_profile.enabled = enabled; }
+    void reset_coastal_profile() { coastal_profile.reset(); }
+    size_t coastal_nonzero_pair_count() const;
+    size_t coastal_pair_count() const;
 
     void ensure_prepared(double simulation_time);
 
@@ -191,6 +228,8 @@ private:
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);
     void evaluate_avx2_batch_(const size_t *indices, size_t active_count, bool vector_sincos);
+    size_t sample_coastal_batch_(const size_t *indices, size_t active_count);
+    void apply_coastal_batch_(const size_t *indices, size_t active_count);
     void build_sample_from_fields_(size_t point_index, bool converged, double *out) const;
     void solve_true_batch_(size_t n, double *out, bool append_solved_q);
     void solve_avx2_batch_(size_t n, double *out, bool vector_sincos);

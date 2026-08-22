@@ -116,9 +116,12 @@ void sincos_pd_avx2(const double *phi4, double *sin4, double *cos4) {
 }
 
 void evaluate_batch_avx2(const std::vector<Cascade> &cascades, BatchWorkspace &batch,
-                         const size_t *indices, size_t active_count, bool vector_sincos) {
+                         const size_t *indices, size_t active_count, bool vector_sincos,
+                         bool fuse_coastal_q) {
     const __m256d zero = _mm256_setzero_pd();
-    for (const Cascade &cascade : cascades) {
+    for (size_t cascade_index = 0; cascade_index < cascades.size(); ++cascade_index) {
+        const Cascade &cascade = cascades[cascade_index];
+        const bool accumulate_coastal = fuse_coastal_q && cascade_index == 0;
         size_t ai = 0;
         for (; ai + 4 <= active_count; ai += 4) {
             const size_t p0 = indices[ai], p1 = indices[ai + 1], p2 = indices[ai + 2], p3 = indices[ai + 3];
@@ -128,6 +131,8 @@ void evaluate_batch_avx2(const std::vector<Cascade> &cascades, BatchWorkspace &b
             const __m256d qz = _mm256_i64gather_pd(batch.qz.data(), gather, 8);
             __m256d h = zero, dx = zero, dz = zero, dhx = zero, dhz = zero;
             __m256d dxx = zero, dxz = zero, dzx = zero, dzz = zero, vh = zero, vx = zero, vz = zero;
+            __m256d ch = zero, cdx = zero, cdz = zero, cdhx = zero, cdhz = zero;
+            __m256d cdxx = zero, cdxz = zero, cdzx = zero, cdzz = zero, cvh = zero, cvx = zero, cvz = zero;
             for (size_t idx = 0; idx < cascade.kx.size(); ++idx) {
                 const __m256d phi = _mm256_add_pd(_mm256_mul_pd(_mm256_set1_pd(cascade.kx[idx]), qx),
                                                    _mm256_mul_pd(_mm256_set1_pd(cascade.ky[idx]), qz));
@@ -154,14 +159,57 @@ void evaluate_batch_avx2(const std::vector<Cascade> &cascades, BatchWorkspace &b
                 vh = _mm256_add_pd(vh, _mm256_mul_pd(sig, qre));
                 vx = _mm256_add_pd(vx, _mm256_mul_pd(sig, _mm256_mul_pd(_mm256_set1_pd(cascade.a1[idx]), qim)));
                 vz = _mm256_add_pd(vz, _mm256_mul_pd(sig, _mm256_mul_pd(_mm256_set1_pd(cascade.a2[idx]), qim)));
+                if (accumulate_coastal) {
+                    const __m256d ch_re = _mm256_set1_pd(cascade.ev_coastal_h_re[idx]);
+                    const __m256d ch_im = _mm256_set1_pd(cascade.ev_coastal_h_im[idx]);
+                    const __m256d cv_re = _mm256_set1_pd(cascade.ev_coastal_v_re[idx]);
+                    const __m256d cv_im = _mm256_set1_pd(cascade.ev_coastal_v_im[idx]);
+                    const __m256d cpre = _mm256_sub_pd(_mm256_mul_pd(ch_re, cp), _mm256_mul_pd(ch_im, sp));
+                    const __m256d cpim = _mm256_add_pd(_mm256_mul_pd(ch_re, sp), _mm256_mul_pd(ch_im, cp));
+                    const __m256d cqre = _mm256_sub_pd(_mm256_mul_pd(cv_re, cp), _mm256_mul_pd(cv_im, sp));
+                    const __m256d cqim = _mm256_add_pd(_mm256_mul_pd(cv_re, sp), _mm256_mul_pd(cv_im, cp));
+                    ch = _mm256_add_pd(ch, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_h[idx]), cpre));
+                    cdx = _mm256_add_pd(cdx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dx[idx]), cpim)); cdz = _mm256_add_pd(cdz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dz[idx]), cpim));
+                    cdhx = _mm256_add_pd(cdhx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dhx[idx]), cpim)); cdhz = _mm256_add_pd(cdhz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dhz[idx]), cpim));
+                    cdxx = _mm256_add_pd(cdxx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dxx[idx]), cpre)); cdxz = _mm256_add_pd(cdxz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dxz[idx]), cpre)); cdzx = _mm256_add_pd(cdzx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dzx[idx]), cpre)); cdzz = _mm256_add_pd(cdzz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dzz[idx]), cpre));
+                    cvh = _mm256_add_pd(cvh, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vh[idx]), cqre)); cvx = _mm256_add_pd(cvx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vx[idx]), cqim)); cvz = _mm256_add_pd(cvz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vz[idx]), cqim));
+                }
             }
             store_points(batch.cascade_h, p0,p1,p2,p3,h); store_points(batch.cascade_dx,p0,p1,p2,p3,dx); store_points(batch.cascade_dz,p0,p1,p2,p3,dz);
             store_points(batch.cascade_dhx,p0,p1,p2,p3,dhx); store_points(batch.cascade_dhz,p0,p1,p2,p3,dhz);
             store_points(batch.cascade_dxx,p0,p1,p2,p3,dxx); store_points(batch.cascade_dxz,p0,p1,p2,p3,dxz);
             store_points(batch.cascade_dzx,p0,p1,p2,p3,dzx); store_points(batch.cascade_dzz,p0,p1,p2,p3,dzz);
             store_points(batch.cascade_vh,p0,p1,p2,p3,vh); store_points(batch.cascade_vx,p0,p1,p2,p3,vx); store_points(batch.cascade_vz,p0,p1,p2,p3,vz);
+            if (accumulate_coastal) {
+                const __m256d inv = _mm256_set1_pd(cascade.inv_n2);
+                store_points(batch.coastal_h,p0,p1,p2,p3,_mm256_mul_pd(ch, inv)); store_points(batch.coastal_dx,p0,p1,p2,p3,_mm256_mul_pd(cdx, inv)); store_points(batch.coastal_dz,p0,p1,p2,p3,_mm256_mul_pd(cdz, inv));
+                store_points(batch.coastal_dhx,p0,p1,p2,p3,_mm256_mul_pd(cdhx, inv)); store_points(batch.coastal_dhz,p0,p1,p2,p3,_mm256_mul_pd(cdhz, inv));
+                store_points(batch.coastal_dxx,p0,p1,p2,p3,_mm256_mul_pd(cdxx, inv)); store_points(batch.coastal_dxz,p0,p1,p2,p3,_mm256_mul_pd(cdxz, inv));
+                store_points(batch.coastal_dzx,p0,p1,p2,p3,_mm256_mul_pd(cdzx, inv)); store_points(batch.coastal_dzz,p0,p1,p2,p3,_mm256_mul_pd(cdzz, inv));
+                store_points(batch.coastal_vh,p0,p1,p2,p3,_mm256_mul_pd(cvh, inv)); store_points(batch.coastal_vx,p0,p1,p2,p3,_mm256_mul_pd(cvx, inv)); store_points(batch.coastal_vz,p0,p1,p2,p3,_mm256_mul_pd(cvz, inv));
+            }
         }
-        for (; ai < active_count; ++ai) { scalar_tail(cascade, batch, indices[ai]); }
+        for (; ai < active_count; ++ai) {
+            const size_t p = indices[ai];
+            scalar_tail(cascade, batch, p);
+            if (accumulate_coastal) {
+                double h = 0.0, dx = 0.0, dz = 0.0, dhx = 0.0, dhz = 0.0, dxx = 0.0, dxz = 0.0, dzx = 0.0, dzz = 0.0, vh = 0.0, vx = 0.0, vz = 0.0;
+                for (size_t idx = 0; idx < cascade.kx.size(); ++idx) {
+                    const double phi = cascade.kx[idx] * batch.qx[p] + cascade.ky[idx] * batch.qz[p], cp = std::cos(phi), sp = std::sin(phi);
+                    const double pre = cascade.ev_coastal_h_re[idx] * cp - cascade.ev_coastal_h_im[idx] * sp;
+                    const double pim = cascade.ev_coastal_h_re[idx] * sp + cascade.ev_coastal_h_im[idx] * cp;
+                    const double qre = cascade.ev_coastal_v_re[idx] * cp - cascade.ev_coastal_v_im[idx] * sp;
+                    const double qim = cascade.ev_coastal_v_re[idx] * sp + cascade.ev_coastal_v_im[idx] * cp;
+                    const double sig = cascade.parity[idx] * cascade.weight[idx];
+                    h += sig * pre; dx += sig * cascade.a1[idx] * pim; dz += sig * cascade.a2[idx] * pim; dhx += sig * -cascade.kx[idx] * pim; dhz += sig * -cascade.ky[idx] * pim;
+                    dxx += sig * cascade.c11[idx] * pre; dxz += sig * cascade.c12[idx] * pre; dzx += sig * cascade.c21[idx] * pre; dzz += sig * cascade.c22[idx] * pre;
+                    vh += sig * qre; vx += sig * cascade.a1[idx] * qim; vz += sig * cascade.a2[idx] * qim;
+                }
+                batch.coastal_h[p] = h * cascade.inv_n2; batch.coastal_dx[p] = dx * cascade.inv_n2; batch.coastal_dz[p] = dz * cascade.inv_n2;
+                batch.coastal_dhx[p] = dhx * cascade.inv_n2; batch.coastal_dhz[p] = dhz * cascade.inv_n2; batch.coastal_dxx[p] = dxx * cascade.inv_n2; batch.coastal_dxz[p] = dxz * cascade.inv_n2;
+                batch.coastal_dzx[p] = dzx * cascade.inv_n2; batch.coastal_dzz[p] = dzz * cascade.inv_n2; batch.coastal_vh[p] = vh * cascade.inv_n2; batch.coastal_vx[p] = vx * cascade.inv_n2; batch.coastal_vz[p] = vz * cascade.inv_n2;
+            }
+        }
         for (size_t j = 0; j < active_count; ++j) {
             const size_t p = indices[j]; const double inv = cascade.inv_n2;
             batch.h[p] += batch.cascade_h[p] * inv; batch.dx[p] += batch.cascade_dx[p] * inv; batch.dz[p] += batch.cascade_dz[p] * inv;
@@ -170,6 +218,50 @@ void evaluate_batch_avx2(const std::vector<Cascade> &cascades, BatchWorkspace &b
             batch.dzx[p] += batch.cascade_dzx[p] * inv; batch.dzz[p] += batch.cascade_dzz[p] * inv;
             batch.vh[p] += batch.cascade_vh[p] * inv; batch.vx[p] += batch.cascade_vx[p] * inv; batch.vz[p] += batch.cascade_vz[p] * inv;
         }
+    }
+}
+
+void evaluate_coastal_long_batch_avx2(const Cascade &cascade, BatchWorkspace &batch,
+                                      const size_t *indices, size_t active_count, bool vector_sincos) {
+    const __m256d zero = _mm256_setzero_pd();
+    size_t ai = 0;
+    for (; ai + 4 <= active_count; ai += 4) {
+        const size_t p0 = indices[ai], p1 = indices[ai + 1], p2 = indices[ai + 2], p3 = indices[ai + 3];
+        const __m256i gather = _mm256_set_epi64x(static_cast<long long>(p3), static_cast<long long>(p2), static_cast<long long>(p1), static_cast<long long>(p0));
+        const __m256d qx = _mm256_i64gather_pd(batch.coastal_deep_x.data(), gather, 8);
+        const __m256d qz = _mm256_i64gather_pd(batch.coastal_deep_z.data(), gather, 8);
+        __m256d h = zero, dx = zero, dz = zero, dhx = zero, dhz = zero, dxx = zero, dxz = zero, dzx = zero, dzz = zero, vh = zero, vx = zero, vz = zero;
+        for (const size_t idx : cascade.coastal_nonzero_indices) {
+            const __m256d phi = _mm256_add_pd(_mm256_mul_pd(_mm256_set1_pd(cascade.kx[idx]), qx), _mm256_mul_pd(_mm256_set1_pd(cascade.ky[idx]), qz));
+            __m256d sp, cp;
+            if (vector_sincos) { sincos_safe(phi, sp, cp); } else { sincos_lanes(phi, sp, cp); }
+            const __m256d h_re = _mm256_set1_pd(cascade.ev_coastal_h_re[idx]), h_im = _mm256_set1_pd(cascade.ev_coastal_h_im[idx]);
+            const __m256d v_re = _mm256_set1_pd(cascade.ev_coastal_v_re[idx]), v_im = _mm256_set1_pd(cascade.ev_coastal_v_im[idx]);
+            const __m256d pre = _mm256_sub_pd(_mm256_mul_pd(h_re, cp), _mm256_mul_pd(h_im, sp));
+            const __m256d pim = _mm256_add_pd(_mm256_mul_pd(h_re, sp), _mm256_mul_pd(h_im, cp));
+            const __m256d qre = _mm256_sub_pd(_mm256_mul_pd(v_re, cp), _mm256_mul_pd(v_im, sp));
+            const __m256d qim = _mm256_add_pd(_mm256_mul_pd(v_re, sp), _mm256_mul_pd(v_im, cp));
+            const __m256d sig = _mm256_set1_pd(cascade.parity[idx] * cascade.weight[idx]);
+            h = _mm256_add_pd(h, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_h[idx]), pre)); dx = _mm256_add_pd(dx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dx[idx]), pim)); dz = _mm256_add_pd(dz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dz[idx]), pim));
+            dhx = _mm256_add_pd(dhx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dhx[idx]), pim)); dhz = _mm256_add_pd(dhz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dhz[idx]), pim));
+            dxx = _mm256_add_pd(dxx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dxx[idx]), pre)); dxz = _mm256_add_pd(dxz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dxz[idx]), pre)); dzx = _mm256_add_pd(dzx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dzx[idx]), pre)); dzz = _mm256_add_pd(dzz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_dzz[idx]), pre));
+            vh = _mm256_add_pd(vh, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vh[idx]), qre)); vx = _mm256_add_pd(vx, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vx[idx]), qim)); vz = _mm256_add_pd(vz, _mm256_mul_pd(_mm256_set1_pd(cascade.coastal_f_vz[idx]), qim));
+        }
+        const __m256d inv = _mm256_set1_pd(cascade.inv_n2);
+        store_points(batch.coastal_deep_h,p0,p1,p2,p3,_mm256_mul_pd(h, inv)); store_points(batch.coastal_deep_dx,p0,p1,p2,p3,_mm256_mul_pd(dx, inv)); store_points(batch.coastal_deep_dz,p0,p1,p2,p3,_mm256_mul_pd(dz, inv));
+        store_points(batch.coastal_deep_dhx,p0,p1,p2,p3,_mm256_mul_pd(dhx, inv)); store_points(batch.coastal_deep_dhz,p0,p1,p2,p3,_mm256_mul_pd(dhz, inv)); store_points(batch.coastal_deep_dxx,p0,p1,p2,p3,_mm256_mul_pd(dxx, inv)); store_points(batch.coastal_deep_dxz,p0,p1,p2,p3,_mm256_mul_pd(dxz, inv)); store_points(batch.coastal_deep_dzx,p0,p1,p2,p3,_mm256_mul_pd(dzx, inv)); store_points(batch.coastal_deep_dzz,p0,p1,p2,p3,_mm256_mul_pd(dzz, inv));
+        store_points(batch.coastal_deep_vh,p0,p1,p2,p3,_mm256_mul_pd(vh, inv)); store_points(batch.coastal_deep_vx,p0,p1,p2,p3,_mm256_mul_pd(vx, inv)); store_points(batch.coastal_deep_vz,p0,p1,p2,p3,_mm256_mul_pd(vz, inv));
+    }
+    for (; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        double h = 0.0, dx = 0.0, dz = 0.0, dhx = 0.0, dhz = 0.0, dxx = 0.0, dxz = 0.0, dzx = 0.0, dzz = 0.0, vh = 0.0, vx = 0.0, vz = 0.0;
+        for (const size_t idx : cascade.coastal_nonzero_indices) {
+            const double phi = cascade.kx[idx] * batch.coastal_deep_x[p] + cascade.ky[idx] * batch.coastal_deep_z[p], cp = std::cos(phi), sp = std::sin(phi);
+            const double pre = cascade.ev_coastal_h_re[idx] * cp - cascade.ev_coastal_h_im[idx] * sp, pim = cascade.ev_coastal_h_re[idx] * sp + cascade.ev_coastal_h_im[idx] * cp;
+            const double qre = cascade.ev_coastal_v_re[idx] * cp - cascade.ev_coastal_v_im[idx] * sp, qim = cascade.ev_coastal_v_re[idx] * sp + cascade.ev_coastal_v_im[idx] * cp, sig = cascade.parity[idx] * cascade.weight[idx];
+            h += sig * pre; dx += sig * cascade.a1[idx] * pim; dz += sig * cascade.a2[idx] * pim; dhx += sig * -cascade.kx[idx] * pim; dhz += sig * -cascade.ky[idx] * pim; dxx += sig * cascade.c11[idx] * pre; dxz += sig * cascade.c12[idx] * pre; dzx += sig * cascade.c21[idx] * pre; dzz += sig * cascade.c22[idx] * pre; vh += sig * qre; vx += sig * cascade.a1[idx] * qim; vz += sig * cascade.a2[idx] * qim;
+        }
+        batch.coastal_deep_h[p] = h * cascade.inv_n2; batch.coastal_deep_dx[p] = dx * cascade.inv_n2; batch.coastal_deep_dz[p] = dz * cascade.inv_n2; batch.coastal_deep_dhx[p] = dhx * cascade.inv_n2; batch.coastal_deep_dhz[p] = dhz * cascade.inv_n2; batch.coastal_deep_dxx[p] = dxx * cascade.inv_n2; batch.coastal_deep_dxz[p] = dxz * cascade.inv_n2; batch.coastal_deep_dzx[p] = dzx * cascade.inv_n2; batch.coastal_deep_dzz[p] = dzz * cascade.inv_n2; batch.coastal_deep_vh[p] = vh * cascade.inv_n2; batch.coastal_deep_vx[p] = vx * cascade.inv_n2; batch.coastal_deep_vz[p] = vz * cascade.inv_n2;
     }
 }
 

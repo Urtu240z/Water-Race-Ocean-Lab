@@ -11,6 +11,7 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_int64_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 
@@ -60,6 +61,10 @@ public:
                              const PackedByteArray &warp_valid, const PackedFloat32Array &shoaling,
                              const PackedByteArray &propagation_valid);
     void clear_coastal();
+    void set_coastal_profile_enabled(bool enabled);
+    void reset_coastal_profile();
+    PackedInt64Array get_coastal_profile_us() const;
+    PackedInt64Array get_coastal_pair_counts() const;
     void ensure_prepared(double simulation_time);
 
     PackedFloat64Array sample_world(double wx, double wz, double simulation_time);

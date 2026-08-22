@@ -9,6 +9,7 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_int64_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <limits>
@@ -29,6 +30,10 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_coastal_long_weights", "pos", "neg"), &OceanQueryNative::set_coastal_long_weights);
     ClassDB::bind_method(D_METHOD("set_coastal_runtime", "origin_x", "origin_z", "width", "height", "cell_size", "detj_safe", "deep_x", "deep_z", "det_j", "j00", "j01", "j10", "j11", "warp_valid", "shoaling", "propagation_valid"), &OceanQueryNative::set_coastal_runtime);
     ClassDB::bind_method(D_METHOD("clear_coastal"), &OceanQueryNative::clear_coastal);
+    ClassDB::bind_method(D_METHOD("set_coastal_profile_enabled", "enabled"), &OceanQueryNative::set_coastal_profile_enabled);
+    ClassDB::bind_method(D_METHOD("reset_coastal_profile"), &OceanQueryNative::reset_coastal_profile);
+    ClassDB::bind_method(D_METHOD("get_coastal_profile_us"), &OceanQueryNative::get_coastal_profile_us);
+    ClassDB::bind_method(D_METHOD("get_coastal_pair_counts"), &OceanQueryNative::get_coastal_pair_counts);
     ClassDB::bind_method(D_METHOD("ensure_prepared", "simulation_time"), &OceanQueryNative::ensure_prepared);
     ClassDB::bind_method(D_METHOD("sample_world", "wx", "wz", "simulation_time"), &OceanQueryNative::sample_world);
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
@@ -81,6 +86,30 @@ void OceanQueryNative::finalize_spectrum() {
 void OceanQueryNative::set_coastal_long_weights(const PackedFloat64Array &pos, const PackedFloat64Array &neg) {
     if (pos.size() != neg.size()) { core_.clear_coastal(); return; }
     core_.set_coastal_long_weights(pos.ptr(), neg.ptr(), static_cast<size_t>(pos.size()));
+}
+
+void OceanQueryNative::set_coastal_profile_enabled(bool enabled) { core_.set_coastal_profile_enabled(enabled); }
+
+void OceanQueryNative::reset_coastal_profile() { core_.reset_coastal_profile(); }
+
+PackedInt64Array OceanQueryNative::get_coastal_profile_us() const {
+    PackedInt64Array values;
+    values.resize(6);
+    values[0] = static_cast<int64_t>(core_.coastal_profile.base_us);
+    values[1] = static_cast<int64_t>(core_.coastal_profile.sampler_us);
+    values[2] = static_cast<int64_t>(core_.coastal_profile.cq_us);
+    values[3] = static_cast<int64_t>(core_.coastal_profile.cdeep_us);
+    values[4] = static_cast<int64_t>(core_.coastal_profile.combine_us);
+    values[5] = static_cast<int64_t>(core_.coastal_profile.calls);
+    return values;
+}
+
+PackedInt64Array OceanQueryNative::get_coastal_pair_counts() const {
+    PackedInt64Array values;
+    values.resize(2);
+    values[0] = static_cast<int64_t>(core_.coastal_nonzero_pair_count());
+    values[1] = static_cast<int64_t>(core_.coastal_pair_count());
+    return values;
 }
 
 void OceanQueryNative::set_coastal_runtime(double origin_x, double origin_z, int width, int height,

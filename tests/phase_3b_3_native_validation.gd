@@ -23,9 +23,15 @@ func _initialize() -> void:
 	var reduced = _make_reduced()
 	reduced.configure_native_backend(native)
 	var bank = _bake_bank()
+	var flat = _bake_flat()
 	reduced.configure_coastal(bank["warp"], bank["propagation"], 20.0, 35.0, Vector2(1.0, 0.15).normalized())
+	var pair_counts: PackedInt64Array = native.get_coastal_pair_counts()
+	print("3B.3A PAIRS nonzero=%d total=%d fraction=%.1f%%" % [pair_counts[0], pair_counts[1], 100.0 * float(pair_counts[0]) / maxf(float(pair_counts[1]), 1.0)])
 	_validate_parity(reduced, native)
 	_validate_batch(native)
+	_validate_optimized_batch_reference(reduced, native, flat, bank)
+	if OS.get_cmdline_user_args().has("--profile"):
+		_profile_coastal(native, reduced, bank)
 	if not OS.get_cmdline_user_args().has("--skip-bench"):
 		_benchmark(native, reduced, bank)
 	if _failures == 0:
@@ -67,6 +73,31 @@ func _bake_bank() -> Dictionary:
 			var point: Vector2 = data.world_origin_xz + Vector2(float(x), float(z))
 			data.depth_m[index] = 18.0 - 17.5 * exp(-(point.x * point.x / 900.0 + point.y * point.y / 1800.0))
 			data.land_water_mask[index] = 1
+	var eikonal = EikonalBakerScript.new()
+	eikonal.bathymetry_data = data
+	eikonal.incoming_direction_xz = Vector2(1.0, 0.15).normalized()
+	eikonal.reference_wavelength_m = 16.0
+	var propagation = eikonal.bake()
+	var baker = WarpBakerScript.new()
+	baker.propagation = propagation
+	return {"propagation": propagation, "warp": baker.bake()}
+
+
+func _bake_flat() -> Dictionary:
+	var data = BathymetryDataScript.new()
+	data.world_origin_xz = Vector2(-32.0, -24.0)
+	data.width = 65
+	data.height = 49
+	data.cell_size_m = 1.0
+	var count: int = data.width * data.height
+	data.depth_m.resize(count)
+	data.gradient_x.resize(count)
+	data.gradient_z.resize(count)
+	data.slope_magnitude.resize(count)
+	data.land_water_mask.resize(count)
+	for index in count:
+		data.depth_m[index] = 18.0
+		data.land_water_mask[index] = 1
 	var eikonal = EikonalBakerScript.new()
 	eikonal.bathymetry_data = data
 	eikonal.incoming_direction_xz = Vector2(1.0, 0.15).normalized()
@@ -126,6 +157,27 @@ func _validate_batch(native) -> void:
 	_check(max_error < 2.0e-7, "NATIVE coastal batch == scalar")
 
 
+func _validate_optimized_batch_reference(reduced, native, flat: Dictionary, bank: Dictionary) -> void:
+	var max_error := 0.0
+	for field_data in [{"name": "flat", "data": flat}, {"name": "bank", "data": bank}]:
+		reduced.configure_coastal(field_data["data"]["warp"], field_data["data"]["propagation"], 20.0, 35.0, Vector2(1.0, 0.15).normalized())
+		for sample_time in [0.0, 1.7, 5.1]:
+			native.ensure_prepared(sample_time)
+			for count in [1, 16, 64]:
+				var points := PackedVector3Array()
+				points.resize(count)
+				for index in count:
+					points[index] = Vector3(-28.0 + float(index % 16) * 3.5, 0.0, -18.0 + float(index / 16) * 8.0)
+				var old_scalar: PackedFloat64Array = native.sample_batch_scalar_prepared(points)
+				var optimized: PackedFloat64Array = native.sample_batch_prepared(points)
+				for index in old_scalar.size():
+					max_error = maxf(max_error, absf(old_scalar[index] - optimized[index]))
+	print("3B.3A reference old_scalar_vs_optimized=%.12f" % max_error)
+	_check(max_error < 2.0e-7, "flat/bank multi-time 1/16/64 optimizado == referencia scalar")
+	# Restablece la configuración usada por el perfil y el benchmark posterior.
+	reduced.configure_coastal(bank["warp"], bank["propagation"], 20.0, 35.0, Vector2(1.0, 0.15).normalized())
+
+
 func _benchmark(native, reduced, bank: Dictionary) -> void:
 	var point_sets := [16, 64]
 	for count in point_sets:
@@ -151,6 +203,33 @@ func _benchmark(native, reduced, bank: Dictionary) -> void:
 		var open_ms := float(Time.get_ticks_usec() - start) / 80.0 / 1000.0
 		print("3B.3 PERF %d: open=%.3f ms coastal=%.3f ms overhead=%.1f%%" % [count, open_ms, coastal_ms, 100.0 * (coastal_ms - open_ms) / maxf(open_ms, 0.001)])
 		_check(coastal_ms <= (1.0 if count == 16 else 4.0), "coastal %d queries dentro de línea de alarma" % count)
+
+
+func _profile_coastal(native, reduced, bank: Dictionary) -> void:
+	for count in [16, 64]:
+		var points := PackedVector3Array()
+		points.resize(count)
+		for index in count:
+			points[index] = Vector3(-30.0 + float(index % 16) * 4.0, 0.0, -20.0 + float(index / 16) * 8.0)
+		native.ensure_prepared(TIME)
+		for _warmup in 10:
+			native.sample_batch_prepared(points)
+		native.reset_coastal_profile()
+		native.set_coastal_profile_enabled(true)
+		for _iteration in 80:
+			native.sample_batch_prepared(points)
+		native.set_coastal_profile_enabled(false)
+		var profile: PackedInt64Array = native.get_coastal_profile_us()
+		native.clear_coastal()
+		native.reset_coastal_profile()
+		native.set_coastal_profile_enabled(true)
+		for _iteration in 80:
+			native.sample_batch_prepared(points)
+		native.set_coastal_profile_enabled(false)
+		var open_profile: PackedInt64Array = native.get_coastal_profile_us()
+		var fused_cq_us: int = maxi(profile[0] - open_profile[0], 0)
+		print("3B.3A PROFILE %d: base=%dus Cq_fused=%dus sampler=%dus Cdeep=%dus combine=%dus active=%d" % [count, open_profile[0], fused_cq_us, profile[1], profile[3], profile[4], profile[5]])
+		reduced.configure_coastal(bank["warp"], bank["propagation"], 20.0, 35.0, Vector2(1.0, 0.15).normalized())
 
 
 func _check(condition: bool, label: String) -> void:

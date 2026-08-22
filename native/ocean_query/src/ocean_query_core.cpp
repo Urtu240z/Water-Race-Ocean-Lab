@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 
 #if defined(_M_X64) || defined(_M_IX86)
 #include <intrin.h>
@@ -98,6 +99,15 @@ void BatchWorkspace::ensure_capacity(size_t required) {
     iterations.resize(capacity);
     done.resize(capacity);
     active_indices.resize(capacity);
+    coastal_active_indices.resize(capacity);
+    coastal_samples.resize(capacity);
+    coastal_deep_x.resize(capacity); coastal_deep_z.resize(capacity);
+    coastal_h.resize(capacity); coastal_dx.resize(capacity); coastal_dz.resize(capacity);
+    coastal_dhx.resize(capacity); coastal_dhz.resize(capacity); coastal_dxx.resize(capacity); coastal_dxz.resize(capacity);
+    coastal_dzx.resize(capacity); coastal_dzz.resize(capacity); coastal_vh.resize(capacity); coastal_vx.resize(capacity); coastal_vz.resize(capacity);
+    coastal_deep_h.resize(capacity); coastal_deep_dx.resize(capacity); coastal_deep_dz.resize(capacity);
+    coastal_deep_dhx.resize(capacity); coastal_deep_dhz.resize(capacity); coastal_deep_dxx.resize(capacity); coastal_deep_dxz.resize(capacity);
+    coastal_deep_dzx.resize(capacity); coastal_deep_dzz.resize(capacity); coastal_deep_vh.resize(capacity); coastal_deep_vx.resize(capacity); coastal_deep_vz.resize(capacity);
 }
 
 void OceanQueryCore::set_cascade_data(size_t cascade_index, double inv_n2,
@@ -143,6 +153,10 @@ void OceanQueryCore::finalize_spectrum() {
         c.ev_b_h_re.assign(count, 0.0); c.ev_b_h_im.assign(count, 0.0);
         c.ev_a_v_re.assign(count, 0.0); c.ev_a_v_im.assign(count, 0.0);
         c.ev_b_v_re.assign(count, 0.0); c.ev_b_v_im.assign(count, 0.0);
+        c.ev_coastal_h_re.assign(count, 0.0); c.ev_coastal_h_im.assign(count, 0.0);
+        c.ev_coastal_v_re.assign(count, 0.0); c.ev_coastal_v_im.assign(count, 0.0);
+        c.coastal_f_h.assign(count, 0.0); c.coastal_f_dx.assign(count, 0.0); c.coastal_f_dz.assign(count, 0.0); c.coastal_f_dhx.assign(count, 0.0); c.coastal_f_dhz.assign(count, 0.0);
+        c.coastal_f_dxx.assign(count, 0.0); c.coastal_f_dxz.assign(count, 0.0); c.coastal_f_dzx.assign(count, 0.0); c.coastal_f_dzz.assign(count, 0.0); c.coastal_f_vh.assign(count, 0.0); c.coastal_f_vx.assign(count, 0.0); c.coastal_f_vz.assign(count, 0.0);
     }
     prepared_valid = false;
 }
@@ -153,6 +167,13 @@ void OceanQueryCore::set_coastal_long_weights(const double *pos, const double *n
     if (count != c.kx.size()) { coastal.clear(); return; }
     c.coastal_weight_pos.assign(pos, pos + count);
     c.coastal_weight_neg.assign(neg, neg + count);
+    c.coastal_nonzero_indices.clear();
+    c.coastal_nonzero_indices.reserve(count);
+    for (size_t idx = 0; idx < count; ++idx) {
+        if (pos[idx] != 0.0 || neg[idx] != 0.0) {
+            c.coastal_nonzero_indices.push_back(idx);
+        }
+    }
 }
 
 void OceanQueryCore::set_coastal_runtime(double origin_x, double origin_z, int width, int height,
@@ -196,8 +217,34 @@ void OceanQueryCore::ensure_prepared(double simulation_time) {
             c.ev_b_h_re[idx] = b_re; c.ev_b_h_im[idx] = b_im;
             c.ev_a_v_re[idx] = -c.omega[idx] * a_im; c.ev_a_v_im[idx] = c.omega[idx] * a_re;
             c.ev_b_v_re[idx] = c.omega[idx] * b_im; c.ev_b_v_im[idx] = -c.omega[idx] * b_re;
+            // Mantiene exactamente el orden de C original: peso*A + peso*B.
+            if (idx < c.coastal_weight_pos.size() && idx < c.coastal_weight_neg.size()) {
+                c.ev_coastal_h_re[idx] = c.coastal_weight_pos[idx] * a_re + c.coastal_weight_neg[idx] * b_re;
+                c.ev_coastal_h_im[idx] = c.coastal_weight_pos[idx] * a_im + c.coastal_weight_neg[idx] * b_im;
+                c.ev_coastal_v_re[idx] = c.coastal_weight_pos[idx] * c.ev_a_v_re[idx] + c.coastal_weight_neg[idx] * c.ev_b_v_re[idx];
+                c.ev_coastal_v_im[idx] = c.coastal_weight_pos[idx] * c.ev_a_v_im[idx] + c.coastal_weight_neg[idx] * c.ev_b_v_im[idx];
+                const double sig = c.parity[idx] * c.weight[idx];
+                c.coastal_f_h[idx] = sig; c.coastal_f_dx[idx] = sig * c.a1[idx]; c.coastal_f_dz[idx] = sig * c.a2[idx];
+                c.coastal_f_dhx[idx] = sig * -c.kx[idx]; c.coastal_f_dhz[idx] = sig * -c.ky[idx];
+                c.coastal_f_dxx[idx] = sig * c.c11[idx]; c.coastal_f_dxz[idx] = sig * c.c12[idx];
+                c.coastal_f_dzx[idx] = sig * c.c21[idx]; c.coastal_f_dzz[idx] = sig * c.c22[idx];
+                c.coastal_f_vh[idx] = sig; c.coastal_f_vx[idx] = sig * c.a1[idx]; c.coastal_f_vz[idx] = sig * c.a2[idx];
+            } else {
+                c.ev_coastal_h_re[idx] = c.ev_coastal_h_im[idx] = 0.0;
+                c.ev_coastal_v_re[idx] = c.ev_coastal_v_im[idx] = 0.0;
+                c.coastal_f_h[idx] = c.coastal_f_dx[idx] = c.coastal_f_dz[idx] = c.coastal_f_dhx[idx] = c.coastal_f_dhz[idx] = 0.0;
+                c.coastal_f_dxx[idx] = c.coastal_f_dxz[idx] = c.coastal_f_dzx[idx] = c.coastal_f_dzz[idx] = c.coastal_f_vh[idx] = c.coastal_f_vx[idx] = c.coastal_f_vz[idx] = 0.0;
+            }
         }
     }
+}
+
+size_t OceanQueryCore::coastal_nonzero_pair_count() const {
+    return cascades.empty() ? 0 : cascades[0].coastal_nonzero_indices.size();
+}
+
+size_t OceanQueryCore::coastal_pair_count() const {
+    return cascades.empty() ? 0 : cascades[0].kx.size();
 }
 
 void OceanQueryCore::accumulate_(double qx, double qz, bool use_prepared, double sim_time,
@@ -337,12 +384,31 @@ void OceanQueryCore::apply_coastal_correction_(double qx, double qz, bool use_pr
                                                double &dhx, double &dhz,
                                                double &dxx, double &dxz, double &dzx, double &dzz,
                                                double &vh, double &vx, double &vz) const {
+    const bool profile = coastal_profile.enabled;
+    std::chrono::steady_clock::time_point sample_start;
+    if (profile) { sample_start = std::chrono::steady_clock::now(); }
     CoastalSample s;
-    if (!coastal.sample(qx, qz, s)) { return; }
+    const bool active = coastal.sample(qx, qz, s);
+    if (profile) {
+        coastal_profile.sampler_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - sample_start).count());
+    }
+    if (!active) { return; }
     double oh, odx, odz, odhx, odhz, odxx, odxz, odzx, odzz, ovh, ovx, ovz;
     double dh, ddx, ddz, ddhx, ddhz, ddxx, ddxz, ddzx, ddzz, dvh, dvx, dvz;
+    std::chrono::steady_clock::time_point cq_start;
+    if (profile) { cq_start = std::chrono::steady_clock::now(); }
     accumulate_coastal_long_(qx, qz, use_prepared, sim_time, oh, odx, odz, odhx, odhz, odxx, odxz, odzx, odzz, ovh, ovx, ovz);
+    if (profile) {
+        coastal_profile.cq_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - cq_start).count());
+    }
+    std::chrono::steady_clock::time_point cdeep_start;
+    if (profile) { cdeep_start = std::chrono::steady_clock::now(); }
     accumulate_coastal_long_(s.deep_x, s.deep_z, use_prepared, sim_time, dh, ddx, ddz, ddhx, ddhz, ddxx, ddxz, ddzx, ddzz, dvh, dvx, dvz);
+    if (profile) {
+        coastal_profile.cdeep_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - cdeep_start).count());
+    }
+    std::chrono::steady_clock::time_point combine_start;
+    if (profile) { combine_start = std::chrono::steady_clock::now(); }
     const double open = s.effective_shoaling * (1.0 - s.confidence), deep = s.effective_shoaling * s.confidence;
     h += open * oh + deep * dh - oh; dx += open * odx + deep * ddx - odx; dz += open * odz + deep * ddz - odz;
     vh += open * ovh + deep * dvh - ovh; vx += open * ovx + deep * dvx - ovx; vz += open * ovz + deep * dvz - ovz;
@@ -352,6 +418,10 @@ void OceanQueryCore::apply_coastal_correction_(double qx, double qz, bool use_pr
     dxz += open * odxz + deep * (ddxx * s.j01 + ddxz * s.j11) - odxz;
     dzx += open * odzx + deep * (ddzx * s.j00 + ddzz * s.j10) - odzx;
     dzz += open * odzz + deep * (ddzx * s.j01 + ddzz * s.j11) - odzz;
+    if (profile) {
+        coastal_profile.combine_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - combine_start).count());
+        coastal_profile.calls += 1;
+    }
 }
 
 void OceanQueryCore::sample_prepared_(double wx, double wz, double *out) {
@@ -557,17 +627,66 @@ void OceanQueryCore::evaluate_avx2_batch_(const size_t *indices, size_t active_c
         batch_.dxx[p] = batch_.dxz[p] = batch_.dzx[p] = batch_.dzz[p] = 0.0;
         batch_.vh[p] = batch_.vx[p] = batch_.vz[p] = 0.0;
     }
-    evaluate_batch_avx2(cascades, batch_, indices, active_count, vector_sincos);
-    // AVX2 conserva el kernel de LONG/MID/SHORT base; la corrección C es un
-    // segundo evaluador LONG escalar, sin branch por pair y sólo in-field.
-    for (size_t ai = 0; ai < active_count; ++ai) {
-        const size_t p = indices[ai];
-        apply_coastal_correction_(batch_.qx[p], batch_.qz[p], true, prepared_time,
-                                  batch_.h[p], batch_.dx[p], batch_.dz[p], batch_.dhx[p], batch_.dhz[p],
-                                  batch_.dxx[p], batch_.dxz[p], batch_.dzx[p], batch_.dzz[p],
-                                  batch_.vh[p], batch_.vx[p], batch_.vz[p]);
+    const size_t coastal_active_count = sample_coastal_batch_(indices, active_count);
+    const bool fuse_coastal_q = coastal_active_count > 0;
+    const auto base_start = coastal_profile.enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+    evaluate_batch_avx2(cascades, batch_, indices, active_count, vector_sincos, fuse_coastal_q);
+    if (coastal_profile.enabled) {
+        coastal_profile.base_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - base_start).count());
+    }
+    if (fuse_coastal_q) {
+        const auto deep_start = coastal_profile.enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+        evaluate_coastal_long_batch_avx2(cascades[0], batch_, batch_.coastal_active_indices.data(), coastal_active_count, vector_sincos);
+        if (coastal_profile.enabled) {
+            coastal_profile.cdeep_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - deep_start).count());
+        }
+        apply_coastal_batch_(batch_.coastal_active_indices.data(), coastal_active_count);
     }
     diag_last_spectral_point_evaluations += active_count;
+}
+
+size_t OceanQueryCore::sample_coastal_batch_(const size_t *indices, size_t active_count) {
+    if (!coastal.enabled || cascades.empty() || cascades[0].coastal_nonzero_indices.empty()) { return 0; }
+    const auto start = coastal_profile.enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+    size_t count = 0;
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        CoastalSample sample;
+        if (!coastal.sample(batch_.qx[p], batch_.qz[p], sample)) { continue; }
+        batch_.coastal_samples[p] = sample;
+        batch_.coastal_deep_x[p] = sample.deep_x;
+        batch_.coastal_deep_z[p] = sample.deep_z;
+        batch_.coastal_active_indices[count++] = p;
+    }
+    if (coastal_profile.enabled) {
+        coastal_profile.sampler_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+    }
+    return count;
+}
+
+void OceanQueryCore::apply_coastal_batch_(const size_t *indices, size_t active_count) {
+    const auto start = coastal_profile.enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        const CoastalSample &s = batch_.coastal_samples[p];
+        const double open = s.effective_shoaling * (1.0 - s.confidence), deep = s.effective_shoaling * s.confidence;
+        batch_.h[p] += open * batch_.coastal_h[p] + deep * batch_.coastal_deep_h[p] - batch_.coastal_h[p];
+        batch_.dx[p] += open * batch_.coastal_dx[p] + deep * batch_.coastal_deep_dx[p] - batch_.coastal_dx[p];
+        batch_.dz[p] += open * batch_.coastal_dz[p] + deep * batch_.coastal_deep_dz[p] - batch_.coastal_dz[p];
+        batch_.vh[p] += open * batch_.coastal_vh[p] + deep * batch_.coastal_deep_vh[p] - batch_.coastal_vh[p];
+        batch_.vx[p] += open * batch_.coastal_vx[p] + deep * batch_.coastal_deep_vx[p] - batch_.coastal_vx[p];
+        batch_.vz[p] += open * batch_.coastal_vz[p] + deep * batch_.coastal_deep_vz[p] - batch_.coastal_vz[p];
+        batch_.dhx[p] += open * batch_.coastal_dhx[p] + deep * (s.j00 * batch_.coastal_deep_dhx[p] + s.j10 * batch_.coastal_deep_dhz[p]) - batch_.coastal_dhx[p];
+        batch_.dhz[p] += open * batch_.coastal_dhz[p] + deep * (s.j01 * batch_.coastal_deep_dhx[p] + s.j11 * batch_.coastal_deep_dhz[p]) - batch_.coastal_dhz[p];
+        batch_.dxx[p] += open * batch_.coastal_dxx[p] + deep * (batch_.coastal_deep_dxx[p] * s.j00 + batch_.coastal_deep_dxz[p] * s.j10) - batch_.coastal_dxx[p];
+        batch_.dxz[p] += open * batch_.coastal_dxz[p] + deep * (batch_.coastal_deep_dxx[p] * s.j01 + batch_.coastal_deep_dxz[p] * s.j11) - batch_.coastal_dxz[p];
+        batch_.dzx[p] += open * batch_.coastal_dzx[p] + deep * (batch_.coastal_deep_dzx[p] * s.j00 + batch_.coastal_deep_dzz[p] * s.j10) - batch_.coastal_dzx[p];
+        batch_.dzz[p] += open * batch_.coastal_dzz[p] + deep * (batch_.coastal_deep_dzx[p] * s.j01 + batch_.coastal_deep_dzz[p] * s.j11) - batch_.coastal_dzz[p];
+    }
+    if (coastal_profile.enabled) {
+        coastal_profile.combine_us += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+        coastal_profile.calls += active_count;
+    }
 }
 
 void OceanQueryCore::build_sample_from_fields_(size_t p, bool converged, double *out) const {
