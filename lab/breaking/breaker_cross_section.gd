@@ -5,76 +5,106 @@ extends RefCounted
 ## La silueta es una curva abierta EXPLÍCITA formada por dos tramos:
 ##   - outer curve: cara visible (agua trasera → subida → cresta → punta).
 ##   - inner curve: interior del labio/tubo (punta → baja por dentro → base → salida).
-## Ambas se unen en la punta y salen por delante casi a nivel del agua.
+## Ambas se unen en la punta (compartida) y salen por delante cerca del agua.
 ##
-## Cada tramo se define por PUNTOS DE CONTROL por keyframe; entre keyframes se
-## interpola por índice y se suaviza con Catmull-Rom CENTRÍPETO (sin overshoot).
-## `point(s, stage)` recorre la curva remuestreada por LONGITUD DE ARCO, de modo
-## que s ∈ [0,1] avanza uniformemente. La coordenada x deja de ser monótona tras
-## la punta (el labio pasa por delante y baja por dentro) => overhang real, sin
-## cerrar un círculo ni formar espiral.
+## Cada tramo se define por PUNTOS DE CONTROL por keyframe (13 OUTER + 14 INNER,
+## 26 únicos); entre keyframes se interpola por índice y se suaviza con
+## Catmull-Rom CENTRÍPETO (sin overshoot). `point(s, stage)` recorre la curva
+## remuestreada por LONGITUD DE ARCO (búsqueda binaria), uniforme en s.
 ##
-## Plano local: X = forward (hacia la costa), Y = up.
+## Plano local: X = forward (hacia la costa), Y = up. En stage alto la coordenada
+## X deja de ser monótona tras la punta (advance → reverse → advance) => overhang
+## real con forma de C abierta, sin círculo ni espiral.
 
 const _STAGE_KEYS: Array[float] = [0.0, 0.25, 0.5, 0.75, 1.0]
 
-# Puntos de control OUTER (7): agua trasera, subida1, subida2, media cara,
-# shoulder, cresta, punta.
+# OUTER (13): agua trasera, subida, cara, cresta (redondeada, casi plana arriba),
+# approach y punta/nose (máximo forward).
 const _OUTER_SHAPES: Array = [
-	# 0.0 — swell suave.
+	# 0.0 — swell suave (sin reverse).
 	[
-		Vector2(-8.0, 0.00), Vector2(-6.0, 0.02), Vector2(-4.0, 0.08),
-		Vector2(-2.0, 0.18), Vector2(-1.0, 0.24), Vector2(0.0, 0.26), Vector2(0.7, 0.22),
+		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.03),
+		Vector2(-3.70, 0.10), Vector2(-2.80, 0.20), Vector2(-1.90, 0.32),
+		Vector2(-1.00, 0.42), Vector2(-0.10, 0.48), Vector2(0.75, 0.52),
+		Vector2(1.55, 0.53), Vector2(2.15, 0.50), Vector2(2.55, 0.42),
+		Vector2(2.75, 0.34),
 	],
-	# 0.25 — cara baja, cresta redondeada.
+	# 0.25 — cara baja, cresta redondeada (sin reverse).
 	[
-		Vector2(-8.0, 0.00), Vector2(-6.0, 0.05), Vector2(-4.0, 0.20),
-		Vector2(-2.0, 0.50), Vector2(-0.8, 0.72), Vector2(0.0, 0.78), Vector2(0.7, 0.68),
+		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.08),
+		Vector2(-3.70, 0.25), Vector2(-2.80, 0.48), Vector2(-1.90, 0.72),
+		Vector2(-1.00, 0.92), Vector2(-0.10, 1.05), Vector2(0.75, 1.12),
+		Vector2(1.55, 1.14), Vector2(2.15, 1.08), Vector2(2.55, 0.94),
+		Vector2(2.75, 0.78),
 	],
-	# 0.5 — cara clara, cresta formada, inicio de proyección.
+	# 0.5 — cara clara, cresta formada (SIN overhang: X sigue avanzando).
 	[
-		Vector2(-8.0, 0.00), Vector2(-6.0, 0.12), Vector2(-4.0, 0.42),
-		Vector2(-2.0, 0.92), Vector2(-0.6, 1.28), Vector2(0.0, 1.34), Vector2(0.9, 1.12),
+		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.12),
+		Vector2(-3.70, 0.38), Vector2(-2.80, 0.72), Vector2(-1.90, 1.10),
+		Vector2(-1.00, 1.48), Vector2(-0.10, 1.78), Vector2(0.75, 1.95),
+		Vector2(1.55, 2.00), Vector2(2.15, 1.90), Vector2(2.55, 1.70),
+		Vector2(2.75, 1.50),
 	],
-	# 0.75 — labio proyectado, overhang claro, interior visible.
+	# 0.75 — labio proyectado, reverse moderado (overhang claro pero contenido).
 	[
-		Vector2(-8.0, 0.00), Vector2(-6.0, 0.16), Vector2(-4.0, 0.55),
-		Vector2(-2.0, 1.12), Vector2(-0.5, 1.45), Vector2(0.0, 1.52), Vector2(1.2, 1.38),
+		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.14),
+		Vector2(-3.70, 0.44), Vector2(-2.80, 0.88), Vector2(-1.90, 1.36),
+		Vector2(-1.00, 1.86), Vector2(-0.10, 2.24), Vector2(0.75, 2.48),
+		Vector2(1.55, 2.56), Vector2(2.15, 2.50), Vector2(2.55, 2.32),
+		Vector2(2.75, 2.10),
 	],
-	# 1.0 — plunging claro: cara larga, labio adelantado, interior que baja.
+	# 1.0 — plunging completo (C abierta).
 	[
-		Vector2(-8.0, 0.00), Vector2(-6.0, 0.20), Vector2(-4.0, 0.65),
-		Vector2(-2.0, 1.20), Vector2(-0.5, 1.52), Vector2(0.0, 1.60), Vector2(1.3, 1.32),
+		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.15),
+		Vector2(-3.70, 0.50), Vector2(-2.80, 1.05), Vector2(-1.90, 1.65),
+		Vector2(-1.00, 2.25), Vector2(-0.10, 2.65), Vector2(0.75, 2.85),
+		Vector2(1.55, 2.88), Vector2(2.15, 2.82), Vector2(2.55, 2.62),
+		Vector2(2.75, 2.38),
 	],
 ]
 
-# Puntos de control INNER (6): punta (compartida con outer), interior superior,
-# interior medio, base interior, base exterior, salida delantera.
+# INNER (14): punta (compartida), giro corto abajo, retorno interior amplio,
+# pared interior curva, bottom turn, salida delantera.
 const _INNER_SHAPES: Array = [
-	# 0.0 — interior casi degenerado (la ola aún no rompe).
+	# 0.0 — interior degenerado (sin reverse).
 	[
-		Vector2(0.7, 0.22), Vector2(1.0, 0.16), Vector2(1.3, 0.10),
-		Vector2(1.6, 0.05), Vector2(2.0, 0.02), Vector2(3.0, 0.00),
+		Vector2(2.75, 0.34), Vector2(2.90, 0.26), Vector2(3.05, 0.18),
+		Vector2(3.20, 0.12), Vector2(3.35, 0.08), Vector2(3.50, 0.05),
+		Vector2(3.65, 0.03), Vector2(3.80, 0.02), Vector2(3.95, 0.01),
+		Vector2(4.10, 0.00), Vector2(4.25, 0.00), Vector2(4.40, 0.00),
+		Vector2(4.55, 0.00), Vector2(4.70, 0.00),
 	],
-	# 0.25
+	# 0.25 — sin reverse.
 	[
-		Vector2(0.7, 0.68), Vector2(0.9, 0.50), Vector2(1.1, 0.32),
-		Vector2(1.4, 0.14), Vector2(1.9, 0.06), Vector2(3.0, 0.00),
+		Vector2(2.75, 0.78), Vector2(2.90, 0.62), Vector2(3.05, 0.46),
+		Vector2(3.20, 0.32), Vector2(3.35, 0.22), Vector2(3.50, 0.14),
+		Vector2(3.65, 0.09), Vector2(3.80, 0.05), Vector2(3.95, 0.03),
+		Vector2(4.10, 0.01), Vector2(4.25, 0.00), Vector2(4.40, 0.00),
+		Vector2(4.55, 0.00), Vector2(4.70, 0.00),
 	],
-	# 0.5
+	# 0.5 — SIN overhang: nose (x=2.75) ≤ inner1 (x=2.85).
 	[
-		Vector2(0.9, 1.12), Vector2(0.75, 0.75), Vector2(0.70, 0.40),
-		Vector2(1.00, 0.15), Vector2(1.60, 0.08), Vector2(3.0, 0.00),
+		Vector2(2.75, 1.50), Vector2(2.85, 1.30), Vector2(2.95, 1.05),
+		Vector2(3.05, 0.82), Vector2(3.15, 0.62), Vector2(3.25, 0.46),
+		Vector2(3.35, 0.33), Vector2(3.45, 0.23), Vector2(3.55, 0.15),
+		Vector2(3.65, 0.10), Vector2(3.75, 0.06), Vector2(3.90, 0.03),
+		Vector2(4.05, 0.01), Vector2(4.20, 0.00),
 	],
-	# 0.75
+	# 0.75 — reverse moderado.
 	[
-		Vector2(1.2, 1.38), Vector2(0.85, 0.85), Vector2(0.60, 0.45),
-		Vector2(0.75, 0.15), Vector2(1.40, 0.08), Vector2(3.0, 0.00),
+		Vector2(2.75, 2.10), Vector2(2.60, 1.90), Vector2(2.40, 1.80),
+		Vector2(2.15, 1.80), Vector2(1.95, 1.70), Vector2(1.80, 1.50),
+		Vector2(1.72, 1.25), Vector2(1.70, 1.00), Vector2(1.80, 0.78),
+		Vector2(2.00, 0.55), Vector2(2.30, 0.36), Vector2(2.70, 0.22),
+		Vector2(3.10, 0.18), Vector2(3.40, 0.20),
 	],
-	# 1.0
+	# 1.0 — retorno interior amplio + bottom turn (advance → reverse → advance).
 	[
-		Vector2(1.3, 1.32), Vector2(0.90, 0.72), Vector2(0.55, 0.28),
-		Vector2(0.75, 0.08), Vector2(1.50, 0.05), Vector2(3.0, 0.00),
+		Vector2(2.75, 2.38), Vector2(2.58, 2.30), Vector2(2.25, 2.34),
+		Vector2(1.85, 2.43), Vector2(1.35, 2.30), Vector2(0.95, 2.02),
+		Vector2(0.75, 1.65), Vector2(0.72, 1.20), Vector2(0.85, 0.82),
+		Vector2(1.15, 0.50), Vector2(1.65, 0.28), Vector2(2.35, 0.15),
+		Vector2(3.20, 0.15), Vector2(3.80, 0.32),
 	],
 ]
 
