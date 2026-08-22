@@ -1,6 +1,6 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene format=3 uid="uid://djm1uvoceufva"]
 
-[ext_resource type="Script" path="res://lab/coastal/phase_3b_2b_fft_demo.gd" id="1_demo"]
+[ext_resource type="Script" uid="uid://wosn42f6ydcq" path="res://lab/coastal/phase_3b_2b_fft_demo.gd" id="1_demo"]
 [ext_resource type="PackedScene" path="res://ocean_v3/ocean_v3.tscn" id="2_ocean"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
@@ -14,6 +14,7 @@ sky_material = SubResource("SkyMaterial")
 
 [sub_resource type="Environment" id="Environment"]
 background_mode = 2
+background_energy_multiplier = 6.21
 sky = SubResource("Sky")
 ambient_light_source = 3
 ambient_light_color = Color(0.62, 0.72, 0.9, 1)
@@ -25,37 +26,37 @@ font_color = Color(0.86, 0.95, 1, 1)
 outline_size = 4
 outline_color = Color(0.01, 0.02, 0.04, 0.9)
 
-[node name="Phase3B2BFFTDemo" type="Node3D"]
+[node name="Phase3B2BFFTDemo" type="Node3D" unique_id=857882372]
 script = ExtResource("1_demo")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=455948310]
 environment = SubResource("Environment")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-52, -28, 0)
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1708326626]
+transform = Transform3D(0.88294756, 0.36994863, -0.2890356, 0, 0.6156615, 0.7880107, 0.46947157, -0.6957722, 0.5435968, 0, 0, 0)
 light_energy = 1.25
 shadow_enabled = true
 
-[node name="OceanV3" parent="." instance=ExtResource("2_ocean")]
+[node name="OceanV3" parent="." unique_id=2027306094 instance=ExtResource("2_ocean")]
 
-[node name="SeabedActualDebug" type="MeshInstance3D" parent="."]
+[node name="SeabedActualDebug" type="MeshInstance3D" parent="." unique_id=666574877]
 
-[node name="SeabedOverlayDebug" type="MeshInstance3D" parent="."]
+[node name="SeabedOverlayDebug" type="MeshInstance3D" parent="." unique_id=1562669577]
 
-[node name="TopCamera" type="Camera3D" parent="."]
+[node name="TopCamera" type="Camera3D" parent="." unique_id=430889349]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 120, 0)
 current = true
 fov = 46.0
 far = 2000.0
 
-[node name="GrazingCamera" type="Camera3D" parent="."]
+[node name="GrazingCamera" type="Camera3D" parent="." unique_id=621556820]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.5, 118)
 fov = 62.0
 far = 2000.0
 
-[node name="HUD" type="CanvasLayer" parent="."]
+[node name="HUD" type="CanvasLayer" parent="." unique_id=1217234354]
 
-[node name="Status" type="Label" parent="HUD"]
+[node name="Status" type="Label" parent="HUD" unique_id=2056401026]
 unique_name_in_owner = true
 offset_left = 20.0
 offset_top = 18.0

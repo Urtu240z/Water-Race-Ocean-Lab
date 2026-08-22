@@ -33,6 +33,7 @@ func _initialize() -> void:
 		return
 	var cascades: Array = module.get("_cascades")
 	var coastal_metrics: Dictionary = module.coastal_energy_metrics()
+	var fft_diagnostics: Dictionary = module.coastal_fft_diagnostics()
 	print("3B.2B INTEG cascades=", cascades.size(), " dispatches=", module.dispatches_per_update, " weighted_h0_coastal=", coastal_metrics["weighted_h0_power_coastal"], " total_variance=", coastal_metrics["total_reconstructed_variance"])
 	_check(cascades.size() == 4, "integ: 4 cascadas de render (LONG_COASTAL/REMAINDER/MID/SHORT)")
 	var long_config = SeaStateScript.build_cascades(SeaStateScript.State.RACE)[0]
@@ -40,6 +41,15 @@ func _initialize() -> void:
 	_check(module.dispatches_per_update == 4 * long_config.compute_pass_count(), "integ: una IFFT LONG adicional (%d -> %d dispatches)" % [baseline_dispatches, module.dispatches_per_update])
 	_check(coastal_metrics["weighted_h0_power_coastal"] > 0.0 and coastal_metrics["weighted_h0_power_coastal"] < coastal_metrics["weighted_h0_power_total"], "integ: potencia H0 coastal ponderada expuesta")
 	_check(is_equal_approx(coastal_metrics["total_reconstructed_variance"], coastal_metrics["original_reconstructed_variance"]), "integ: varianza total reconstruida con covarianza")
+	if RenderingServer.get_rendering_device() == null:
+		print("SKIP: diagnósticos RID requieren RenderingDevice gráfico; headless no publica Texture2DRD.")
+	else:
+		_check(fft_diagnostics.get("ready", false), "integ: LONG_COASTAL y LONG_REMAINDER solver.ready")
+		_check(fft_diagnostics.get("distinct_solver_displacement_rid", false) and fft_diagnostics.get("distinct_solver_normal_rid", false), "integ: LONG_COASTAL no comparte RIDs solver con LONG_REMAINDER")
+		_check(fft_diagnostics.get("distinct_published_displacement_rid", false) and fft_diagnostics.get("distinct_published_normal_rid", false), "integ: Texture2DRD publicada por cascada LONG distinta")
+		var coastal_fft: Dictionary = fft_diagnostics.get("long_coastal", {})
+		var remainder_fft: Dictionary = fft_diagnostics.get("long_remainder", {})
+		_check(coastal_fft.get("h0_upload_bytes", 0) > 0 and remainder_fft.get("h0_upload_bytes", 0) > 0, "integ: H0 de ambas cascadas LONG subido")
 
 	# --- 4-5: reconstrucción CPU con warp identidad (flat). ---
 	_validate_flat_composition()

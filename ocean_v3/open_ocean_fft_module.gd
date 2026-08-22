@@ -401,6 +401,47 @@ func coastal_warp_data():
 	return _coastal_warp
 
 
+func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int,
+		forced_warp_enabled: bool, forced_warp_offset_xz: Vector2, debug_gain: float,
+		delta_heatmap_enabled: bool) -> void:
+	## Diagnóstico visual 3B.2B; delega al renderer sin tocar H0 ni dispatches.
+	surface.set_coastal_render_diagnostics(composition_mode, warp_effect_mode,
+		forced_warp_enabled, forced_warp_offset_xz, debug_gain, delta_heatmap_enabled)
+
+
+func coastal_fft_diagnostics() -> Dictionary:
+	## Estado de las dos cascadas LONG del renderer. No lee datos de GPU.
+	if _cascades.size() < 2:
+		return {"ready": false, "reason": "cascadas LONG no inicializadas"}
+	var coastal: Dictionary = _cascade_fft_diagnostic(_cascades[0])
+	var remainder: Dictionary = _cascade_fft_diagnostic(_cascades[1])
+	return {
+		"ready": coastal["solver_ready"] and remainder["solver_ready"],
+		"long_coastal": coastal,
+		"long_remainder": remainder,
+		"distinct_solver_displacement_rid": coastal["solver_displacement_rid"] != remainder["solver_displacement_rid"],
+		"distinct_solver_normal_rid": coastal["solver_normal_rid"] != remainder["solver_normal_rid"],
+		"distinct_published_displacement_rid": coastal["published_displacement_rid"] != remainder["published_displacement_rid"],
+		"distinct_published_normal_rid": coastal["published_normal_rid"] != remainder["published_normal_rid"],
+	}
+
+
+func _cascade_fft_diagnostic(cascade: Dictionary) -> Dictionary:
+	var solver_state: Dictionary = cascade["solver"].diagnostic_state()
+	var displacement_rid: RID = cascade["displacement"].texture_rd_rid
+	var normal_rid: RID = cascade["normal"].texture_rd_rid
+	return {
+		"id": cascade["config"].id,
+		"solver_ready": solver_state["ready"],
+		"h0_rid": solver_state["h0_rid"],
+		"h0_upload_bytes": solver_state["h0_upload_bytes"],
+		"solver_displacement_rid": solver_state["displacement_rid"],
+		"solver_normal_rid": solver_state["normal_rid"],
+		"published_displacement_rid": displacement_rid.get_id() if displacement_rid.is_valid() else -1,
+		"published_normal_rid": normal_rid.get_id() if normal_rid.is_valid() else -1,
+	}
+
+
 func set_coastal_debug_field(field: int) -> void:
 	surface.set_coastal_debug_field(field)
 

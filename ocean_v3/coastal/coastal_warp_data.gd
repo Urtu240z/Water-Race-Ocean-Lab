@@ -93,6 +93,27 @@ func sample_warp(world_xz: Vector2, reuse = null):
 	return result
 
 
+func shader_warp_confidence(world_xz: Vector2) -> float:
+	## Réplica CPU del confidence del shader: detJ bilineal, alpha de valid
+	## bilineal y cero fuera del rectángulo. Sólo para HUD/diagnóstico.
+	if width < 2 or height < 2 or cell_size_m <= 0.0:
+		return 0.0
+	var grid := (world_xz - world_origin_xz) / cell_size_m
+	if grid.x < 0.0 or grid.y < 0.0 or grid.x > float(width - 1) or grid.y > float(height - 1):
+		return 0.0
+	var x0 := mini(int(floor(grid.x)), width - 2)
+	var z0 := mini(int(floor(grid.y)), height - 2)
+	var tx := grid.x - float(x0)
+	var tz := grid.y - float(z0)
+	var i00 := z0 * width + x0
+	var i10 := i00 + 1
+	var i01 := i00 + width
+	var i11 := i01 + 1
+	var det_j := _bilinear(jacobian_det, i00, i10, i01, i11, tx, tz)
+	var valid_alpha := lerpf(lerpf(float(valid_mask[i00]), float(valid_mask[i10]), tx), lerpf(float(valid_mask[i01]), float(valid_mask[i11]), tx), tz)
+	return smoothstep(0.0, detj_safe_threshold, det_j) * valid_alpha
+
+
 func build_gpu_textures() -> Dictionary:
 	if not is_valid():
 		return {}

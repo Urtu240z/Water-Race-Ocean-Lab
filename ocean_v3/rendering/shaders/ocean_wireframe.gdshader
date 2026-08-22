@@ -24,6 +24,12 @@ uniform bool coastal_propagation_enabled = false;
 uniform bool coastal_transform_enabled = false;
 uniform bool coastal_monochromatic_debug = false;
 uniform bool coastal_warp_enabled = false;
+uniform int coastal_composition_debug = 0;
+uniform int coastal_warp_effect_debug = 0;
+uniform bool coastal_forced_warp_debug = false;
+uniform vec2 coastal_forced_warp_offset_xz = vec2(37.0, 23.0);
+uniform float coastal_debug_gain = 1.0;
+uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
 uniform float coastal_monochromatic_amplitude_m = 0.35;
 uniform vec2 coastal_origin_xz = vec2(0.0);
@@ -93,7 +99,9 @@ void vertex() {
 		coastal_metrics = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 		bool coast_active = has_coastal_data(coast_uv, coastal_field);
 		vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
-		if (coast_active && coastal_warp_enabled) {
+		if (coast_active && coastal_forced_warp_debug && coastal_warp_effect_debug != 2) {
+			warp_sample = vec4(world_xz + coastal_forced_warp_offset_xz, 1.0, 0.0);
+		} else if (coast_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
 			warp_sample = warp_deep_sample(world_xz);
 		}
 		vec2 deep_xz = warp_sample.xy;
@@ -101,11 +109,15 @@ void vertex() {
 		vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
-		if (coast_active) long_coastal *= coastal_field.g;
+		if (coast_active && coastal_warp_effect_debug != 1) long_coastal *= coastal_field.g;
 		vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
-		vec3 displacement = (long_coastal + long_remainder) * long_weight;
-		displacement += textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb * mid_weight;
-		displacement += textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb * short_weight;
+		float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+		float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+		float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+		float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+		vec3 displacement = long_coastal * coastal_weight * coastal_gain + long_remainder * remainder_weight;
+		displacement += textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb * mid_weight * mid_short_weight;
+		displacement += textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb * short_weight * mid_short_weight;
 		if (coastal_monochromatic_debug && coast_active) {
 			float phase = dot(world_xz, coastal_incoming_direction_xz) * coastal_k0_rad_m + coastal_field.r - coastal_omega_rad_s * coastal_time_s;
 			displacement = vec3(0.0, coastal_monochromatic_amplitude_m * coastal_field.g * cos(phase), 0.0);

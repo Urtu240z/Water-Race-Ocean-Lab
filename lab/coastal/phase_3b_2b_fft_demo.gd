@@ -1,8 +1,8 @@
 extends Node3D
 ## Demo de Fase 3B.2B: océano FFT REAL con LONG dividido en COASTAL/REMAINDER.
 ## Default: RACE, FFT real (sin MONO), Coastal ON, warp activo, debug OFF.
-## Controles: C = Coastal ON/OFF, W = warp debug, P = pause, V = cámara,
-##           H = campo coastal debug, J = seabed overlay.
+## Controles: C Coastal, M composición, F forced warp, G gain, O efecto,
+## D heatmap delta, P pausa, V cámara y J seabed.
 
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
 
@@ -13,6 +13,13 @@ const _ORIGIN_XZ := Vector2(-64.0, -48.0)
 
 enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
 enum CameraMode { TOP, GRAZING }
+enum CompositionMode { FULL, LONG_ONLY, LONG_COASTAL_ONLY, LONG_REMAINDER_ONLY, MID_SHORT_ONLY }
+enum WarpEffectMode { WARP_AND_SHOALING, WARP_ONLY, SHOALING_ONLY }
+
+const _COMPOSITION_NAMES := ["FULL", "LONG_ONLY", "LONG_COASTAL_ONLY", "LONG_REMAINDER_ONLY", "MID_SHORT_ONLY"]
+const _WARP_EFFECT_NAMES := ["WARP + SHOALING", "WARP ONLY", "SHOALING ONLY"]
+const _DEBUG_GAINS := [1.0, 4.0, 8.0]
+const _FORCED_WARP_OFFSET_XZ := Vector2(37.0, 23.0)
 
 @onready var _ocean = $OceanV3/OpenOceanFFT
 @onready var _seabed_actual: MeshInstance3D = $SeabedActualDebug
@@ -25,9 +32,15 @@ var _bathymetry = null
 var _seabed_mode := SeabedMode.HIDDEN
 var _camera_mode := CameraMode.TOP
 var _coastal_enabled := true
+var _composition_mode: int = CompositionMode.FULL
+var _warp_effect_mode: int = WarpEffectMode.WARP_AND_SHOALING
+var _forced_warp_enabled := false
+var _debug_gain_index := 0
+var _delta_heatmap_enabled := false
 
 
 func _ready() -> void:
+	get_window().title = "3B.2B FFT Composition Diagnostic"
 	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.FORWARD)
 	_grazing_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 	_bathymetry = _build_bank_bathymetry()
@@ -51,6 +64,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_camera_mode((_camera_mode + 1) % (CameraMode.GRAZING + 1))
 		KEY_J:
 			_set_seabed_mode((_seabed_mode + 1) % (SeabedMode.OVERLAY + 1))
+		KEY_M:
+			_composition_mode = (_composition_mode + 1) % _COMPOSITION_NAMES.size()
+			_apply_render_diagnostics()
+		KEY_F:
+			_forced_warp_enabled = not _forced_warp_enabled
+			_apply_render_diagnostics()
+		KEY_G:
+			_debug_gain_index = (_debug_gain_index + 1) % _DEBUG_GAINS.size()
+			_apply_render_diagnostics()
+		KEY_O:
+			_warp_effect_mode = (_warp_effect_mode + 1) % _WARP_EFFECT_NAMES.size()
+			_apply_render_diagnostics()
+		KEY_D:
+			_delta_heatmap_enabled = not _delta_heatmap_enabled
+			_apply_render_diagnostics()
 	_update_status()
 
 
@@ -63,12 +91,49 @@ func _apply_coastal_settings() -> void:
 	_ocean.coastal_eikonal_refraction_debug = true # Eikonal + warp (3B.2B).
 	_ocean.coastal_warp_enabled = true
 	_ocean.rebuild_coastal_propagation()
+	_apply_render_diagnostics()
+
+
+func _apply_render_diagnostics() -> void:
+	_ocean.set_coastal_render_diagnostics(_composition_mode, _warp_effect_mode,
+		_forced_warp_enabled, _FORCED_WARP_OFFSET_XZ, _DEBUG_GAINS[_debug_gain_index],
+		_delta_heatmap_enabled)
 
 
 func _update_status() -> void:
 	var warp: Variant = _ocean.coastal_warp_data()
 	var warp_text := "BAKING (una vez, ~7 s)..." if _coastal_enabled and warp == null else ("ON valid=%d" % warp.valid_mask.count(1) if warp != null else "OFF")
-	_status.text = "PHASE 3B.2B — FFT REAL + LONG COASTAL/REMAINDER (RACE)\nC  Coastal: %s\nP  Paused: %s\nV  Camera: %s\nJ  Seabed: %s\n\nWarp world->deep: %s\n\nEl mar es FFT real (LONG_COASTAL + LONG_REMAINDER + MID + SHORT).\nEl banco comprime/refracta LONG_COASTAL vía el warp; MID/SHORT intactos." % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), warp_text]
+	_status.text = "PHASE 3B.2B — FFT COMPOSITION DIAGNOSTIC\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\n\nWarp world->deep: %s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text()]
+
+
+func _split_metrics_text() -> String:
+	var metrics: Dictionary = _ocean.coastal_energy_metrics()
+	if metrics.is_empty():
+		return "Split metrics: pending"
+	return "Split H0 total=%.5f coastal=%.5f (%.2f%%) | variance C=%.7f R=%.7f cov=%.7f total=%.7f" % [metrics["weighted_h0_power_total"], metrics["weighted_h0_power_coastal"], 100.0 * metrics["weighted_h0_power_coastal_fraction"], metrics["reconstructed_spatial_variance_coastal"], metrics["reconstructed_spatial_variance_remainder"], metrics["coastal_remainder_covariance"], metrics["total_reconstructed_variance"]]
+
+
+func _warp_probes_text(warp) -> String:
+	if warp == null:
+		return "Warp probes: pending"
+	var propagation = _ocean.coastal_propagation_data()
+	var lines: PackedStringArray = []
+	for point in [Vector2(-20.0, 0.0), Vector2(0.0, 0.0), Vector2(10.0, 0.0), Vector2(20.0, 0.0)]:
+		var sample = warp.sample_warp(point)
+		var shoaling := 1.0
+		if propagation != null:
+			shoaling = propagation.sample_propagation(point).shoaling_scale
+		lines.append("p(%+.0f,%+.0f) deep(%+.2f,%+.2f) d(%+.2f,%+.2f) detJ=%.3f valid=%s conf=%.3f S=%.3f" % [point.x, point.y, sample.deep_xz.x, sample.deep_xz.y, sample.deep_xz.x - point.x, sample.deep_xz.y - point.y, sample.jacobian_det, "Y" if sample.valid else "N", warp.shader_warp_confidence(point), shoaling])
+	return "Warp probes (shader confidence): " + " | ".join(lines)
+
+
+func _fft_diagnostics_text() -> String:
+	var state: Dictionary = _ocean.coastal_fft_diagnostics()
+	if not state.get("ready", false):
+		return "FFT LONG: pending / not ready"
+	var coastal: Dictionary = state["long_coastal"]
+	var remainder: Dictionary = state["long_remainder"]
+	return "FFT LONG: C ready=%s H0=%d disp=%d norm=%d bytes=%d | R ready=%s H0=%d disp=%d norm=%d bytes=%d | distinct C/R disp=%s norm=%s" % ["Y" if coastal["solver_ready"] else "N", coastal["h0_rid"], coastal["published_displacement_rid"], coastal["published_normal_rid"], coastal["h0_upload_bytes"], "Y" if remainder["solver_ready"] else "N", remainder["h0_rid"], remainder["published_displacement_rid"], remainder["published_normal_rid"], remainder["h0_upload_bytes"], "Y" if state["distinct_published_displacement_rid"] else "N", "Y" if state["distinct_published_normal_rid"] else "N"]
 
 
 func _set_camera_mode(mode: int) -> void:

@@ -10,6 +10,7 @@ var ready := false
 var last_error := ""
 var displacement_rid := RID()
 var normal_rid := RID()
+var h0_upload_byte_count := 0
 
 var _rd: RenderingDevice
 var _config: Resource
@@ -40,6 +41,7 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 		return
 
 	_h0 = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".H0", h0_data, true)
+	h0_upload_byte_count = h0_data.size()
 	for index in 2:
 		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingA%d" % index)
 		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingB%d" % index)
@@ -58,6 +60,18 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 func upload_h0(h0_data: PackedByteArray) -> void:
 	if ready and _h0.is_valid():
 		_rd.texture_update(_h0, 0, h0_data)
+		h0_upload_byte_count = h0_data.size()
+
+
+func diagnostic_state() -> Dictionary:
+	## Sólo inspección: expone el estado que llega al renderer, sin readback.
+	return {
+		"ready": ready,
+		"h0_rid": _h0.get_id() if _h0.is_valid() else -1,
+		"h0_upload_bytes": h0_upload_byte_count,
+		"displacement_rid": displacement_rid.get_id() if displacement_rid.is_valid() else -1,
+		"normal_rid": normal_rid.get_id() if normal_rid.is_valid() else -1,
+	}
 
 
 func update_config(config: Resource) -> void:
@@ -108,6 +122,7 @@ func dispatch(render_time: float) -> void:
 
 func free_resources() -> void:
 	ready = false
+	h0_upload_byte_count = 0
 	if _rd == null:
 		return
 	for uniform_set in _uniform_sets:

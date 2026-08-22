@@ -25,6 +25,21 @@ enum CoastalDebugField {
 	REACHABILITY,
 }
 
+## Instrumentación temporal 3B.2B: selecciona contribuciones reales, no color.
+enum CoastalCompositionDebug {
+	FULL,
+	LONG_ONLY,
+	LONG_COASTAL_ONLY,
+	LONG_REMAINDER_ONLY,
+	MID_SHORT_ONLY,
+}
+
+enum CoastalWarpEffectDebug {
+	WARP_AND_SHOALING,
+	WARP_ONLY,
+	SHOALING_ONLY,
+}
+
 @export var clipmap_config := ClipmapConfigScript.new()
 
 var _surface_material := ShaderMaterial.new()
@@ -150,6 +165,19 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 		material.set_shader_parameter(&"coastal_warp_detj_safe", warp_data.detj_safe_threshold)
 
 
+func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int,
+		forced_warp_enabled: bool, forced_warp_offset_xz: Vector2, debug_gain: float,
+		delta_heatmap_enabled: bool) -> void:
+	## Sólo diagnóstico visual 3B.2B. No muta H0, la FFT ni los datos horneados.
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"coastal_composition_debug", clampi(composition_mode, CoastalCompositionDebug.FULL, CoastalCompositionDebug.MID_SHORT_ONLY))
+		material.set_shader_parameter(&"coastal_warp_effect_debug", clampi(warp_effect_mode, CoastalWarpEffectDebug.WARP_AND_SHOALING, CoastalWarpEffectDebug.SHOALING_ONLY))
+		material.set_shader_parameter(&"coastal_forced_warp_debug", forced_warp_enabled)
+		material.set_shader_parameter(&"coastal_forced_warp_offset_xz", forced_warp_offset_xz)
+		material.set_shader_parameter(&"coastal_debug_gain", clampf(debug_gain, 1.0, 8.0))
+		material.set_shader_parameter(&"coastal_delta_heatmap", delta_heatmap_enabled)
+
+
 func set_coastal_time(simulation_time_s: float) -> void:
 	_surface_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
 	_wireframe_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
@@ -207,6 +235,12 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_eikonal_phase_debug", false)
 		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
 		material.set_shader_parameter(&"coastal_warp_enabled", false)
+		material.set_shader_parameter(&"coastal_composition_debug", CoastalCompositionDebug.FULL)
+		material.set_shader_parameter(&"coastal_warp_effect_debug", CoastalWarpEffectDebug.WARP_AND_SHOALING)
+		material.set_shader_parameter(&"coastal_forced_warp_debug", false)
+		material.set_shader_parameter(&"coastal_forced_warp_offset_xz", Vector2(37.0, 23.0))
+		material.set_shader_parameter(&"coastal_debug_gain", 1.0)
+		material.set_shader_parameter(&"coastal_delta_heatmap", false)
 		for index in 4:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])

@@ -31,6 +31,14 @@ uniform bool coastal_transform_enabled = false;
 uniform bool coastal_monochromatic_debug = false;
 uniform bool coastal_eikonal_phase_debug = false;
 uniform bool coastal_warp_enabled = false;
+// 3B.2B diagnóstico: 0 FULL, 1 LONG, 2 COASTAL, 3 REMAINDER, 4 MID+SHORT.
+uniform int coastal_composition_debug = 0;
+// 0 WARP+SHOALING, 1 WARP_ONLY, 2 SHOALING_ONLY.
+uniform int coastal_warp_effect_debug = 0;
+uniform bool coastal_forced_warp_debug = false;
+uniform vec2 coastal_forced_warp_offset_xz = vec2(37.0, 23.0);
+uniform float coastal_debug_gain = 1.0;
+uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
 uniform float coastal_monochromatic_amplitude_m = 0.35;
 uniform vec2 coastal_origin_xz = vec2(0.0);
@@ -54,6 +62,7 @@ varying vec4 coastal_metrics;
 varying vec4 coastal_phase_data;
 varying float coastal_mono_phase;
 varying float coastal_mono_active;
+varying float coastal_warp_delta_m;
 
 vec2 spectrum_uv(vec2 world_xz, float domain_size_m) {
 	return fract(world_xz / domain_size_m + vec2(0.5));
@@ -108,6 +117,7 @@ void vertex() {
 	ocean_world_xz = world_xz;
 	coastal_mono_phase = 0.0;
 	coastal_mono_active = 0.0;
+	coastal_warp_delta_m = 0.0;
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -124,7 +134,10 @@ void vertex() {
 	// 3B.2B: LONG se compone de LONG_COASTAL (posiblemente warpeada) +
 	// LONG_REMAINDER (siempre open). El warp sólo aplica a LONG_COASTAL.
 	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
-	if (coast_transform_active && coastal_warp_enabled) {
+	if (coast_transform_active && coastal_forced_warp_debug && coastal_warp_effect_debug != 2) {
+		// Prueba de cadena de textura/binding: no es una solución física.
+		warp_sample = vec4(world_xz + coastal_forced_warp_offset_xz, 1.0, 0.0);
+	} else if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
 		warp_sample = warp_deep_sample(world_xz);
 	}
 	vec2 deep_xz = warp_sample.xy;
@@ -133,7 +146,8 @@ void vertex() {
 	vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
 	vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
 	vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
-	if (coast_transform_active) {
+	coastal_warp_delta_m = length(long_coastal_warped - long_coastal_open);
+	if (coast_transform_active && coastal_warp_effect_debug != 1) {
 		long_coastal *= shoaling;
 	}
 	// LONG_REMAINDER: siempre open-ocean.
@@ -141,17 +155,23 @@ void vertex() {
 	vec3 long_displacement = long_coastal + long_remainder;
 	vec3 mid_displacement = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb;
 	vec3 short_displacement = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb;
-	vec3 displacement = long_displacement * long_weight + mid_displacement * mid_weight + short_displacement * short_weight;
+	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+	vec3 displacement = long_coastal * coastal_weight * coastal_gain + long_remainder * remainder_weight;
+	displacement += mid_displacement * mid_weight * mid_short_weight + short_displacement * short_weight * mid_short_weight;
 
 	// Normales en slope space: slope_total = suma de slopes por banda.
 	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
 	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
 	vec3 long_coastal_normal = normalize(mix(long_coastal_normal_open, long_coastal_normal_warped, warp_confidence));
-	vec2 slope = slope_from_normal(long_coastal_normal) * long_weight * (coast_transform_active ? shoaling : 1.0);
+	float normal_shoaling = coast_transform_active && coastal_warp_effect_debug != 1 ? shoaling : 1.0;
+	vec2 slope = slope_from_normal(long_coastal_normal) * coastal_weight * normal_shoaling * coastal_gain;
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
-	slope += slope_from_normal(long_remainder_normal) * long_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight;
+	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight * mid_short_weight;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
 	if (coastal_monochromatic_debug) {
@@ -224,6 +244,10 @@ void fragment() {
 		else if (coastal_debug_field == 8) value = coastal_phase_data.a;
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
 	}
+	if (coastal_delta_heatmap) {
+		float delta_value = clamp(coastal_warp_delta_m * 8.0, 0.0, 1.0);
+		color = mix(vec3(0.0, 0.0, 0.02), vec3(1.0, 0.08, 0.0), delta_value);
+	}
 
 	if (clipmap_lod_debug) {
 		color = level_color(clipmap_level);
@@ -233,7 +257,7 @@ void fragment() {
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
 
-	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || coastal_mono_active > 0.5;
+	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
