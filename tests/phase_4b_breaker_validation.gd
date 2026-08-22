@@ -42,11 +42,10 @@ func _validate_shader_contract() -> void:
 	_check(not ribbon.contains("sample_water(") and not ribbon.contains("RenderingServer") and not ribbon.contains("get_image"), "breaker_lip no invoca OceanQuery ni readbacks")
 	_check(not pool.contains("get_image") and not pool.contains("read_pixels") and not pool.contains("RenderingServer"), "el pool no hace readback GPU->CPU")
 
-	# Los uniforms copiados desde el clipmap deben existir en el shader del labio
-	# (declarados en el inc compartido o en el propio breaker_lip).
-	var shared_source := ribbon + inc
+	# Los uniforms copiados desde el clipmap deben estar declarados en el shader
+	# del labio (los declara el propio breaker_lip, no el inc).
 	for uniform_name in PoolScript._UNIFORMS_TO_COPY:
-		_check(shared_source.contains(String(uniform_name)), "uniform compartido declarado en breaker_lip: %s" % uniform_name)
+		_check(ribbon.contains(String(uniform_name)), "uniform compartido declarado en breaker_lip: %s" % uniform_name)
 
 
 func _validate_lip_mirrors() -> void:

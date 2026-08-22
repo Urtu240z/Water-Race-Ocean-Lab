@@ -27,7 +27,7 @@ func _validate_shader_contract() -> void:
 	## (compartido con breaker_lip.gdshader); el comportamiento del clipmap no cambia.
 	var source := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	var inc := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc")
-	_check(inc.contains("displacement_long_coastal") and inc.contains("displacement_long_remainder"), "crestness samplea LONG_COASTAL + LONG_REMAINDER reales")
+	_check(source.contains("displacement_long_coastal") and source.contains("displacement_long_remainder"), "crestness samplea LONG_COASTAL + LONG_REMAINDER reales")
 	_check(inc.contains("warp_deep_sample") and inc.contains("field_data.g"), "LONG_COASTAL conserva warp y shoaling en las muestras de cresta")
 	_check(inc.contains("phase_data.gb") and inc.contains("wavelength / 16.0"), "crestness usa dirección local y separación lambda/16")
 	_check(source.contains("breaking_debug_mode > 0") and not source.contains("sample_water(") and not inc.contains("sample_water("), "ruta pre-break es opt-in GPU y no invoca OceanQuery")

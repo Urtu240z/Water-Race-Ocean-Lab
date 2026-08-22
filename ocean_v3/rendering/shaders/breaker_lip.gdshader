@@ -1,11 +1,6 @@
 shader_type spatial;
 render_mode cull_disabled, blend_mix, depth_draw_opaque, unshaded;
 
-// Detector GPU compartido (campo PREBREAK 4A + perfiles del labio 4B). Este
-// include se procesa al inicio y declara los uniforms compartidos (texturas
-// FFT/coastal/warp, fades, band_mask, modelo de energía 4A, composición).
-#include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
-
 // ===== Phase 4B: geometría local del labio (takeover geométrico) =====
 // El ribetón (ribbon) es una tira de malla reutilizable anclada a un slot del
 // pool (BreakerRibbonPool). TODO el cálculo vive aquí en GPU:
@@ -15,6 +10,48 @@ render_mode cull_disabled, blend_mix, depth_draw_opaque, unshaded;
 //   - el labio levanta y adelanta según la envolvente de takeover.
 // No hay readback GPU->CPU ni OceanQuery en esta ruta.
 
+uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
+uniform sampler2D displacement_mid : repeat_enable, filter_linear;
+uniform sampler2D displacement_short : repeat_enable, filter_linear;
+uniform sampler2D normal_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
+uniform sampler2D normal_mid : repeat_enable, filter_linear;
+uniform sampler2D normal_short : repeat_enable, filter_linear;
+uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
+uniform float domain_long_coastal_m = 512.0;
+uniform float domain_long_remainder_m = 512.0;
+uniform float domain_mid_m = 137.0;
+uniform float domain_short_m = 37.0;
+uniform vec2 camera_world_xz = vec2(0.0);
+uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
+uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
+uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
+uniform vec3 band_mask = vec3(1.0);
+uniform bool module_enabled = true;
+uniform bool coastal_propagation_enabled = false;
+uniform bool coastal_transform_enabled = false;
+uniform bool coastal_monochromatic_debug = false;
+uniform bool coastal_warp_enabled = false;
+uniform int coastal_composition_debug = 0;
+uniform float coastal_debug_gain = 1.0;
+uniform float breaking_long_hs_m = 0.50;
+uniform float breaking_coastal_energy_fraction = 0.50;
+uniform float breaking_depth_gamma = 0.78;
+uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
+uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
+uniform vec2 breaking_crest_spacing_lambda_range_m = vec2(0.25, 2.0);
+uniform vec2 coastal_origin_xz = vec2(0.0);
+uniform vec2 coastal_extent_m = vec2(1.0);
+uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
+uniform vec2 coastal_warp_origin_xz = vec2(0.0);
+uniform vec2 coastal_warp_extent_m = vec2(1.0);
+uniform float coastal_warp_detj_safe = 0.5;
+uniform float coastal_k0_rad_m = 0.392699;
 // Parámetros propios del takeover 4B.
 uniform float sea_level_y = 0.0;
 uniform float breaker_lift_fraction = 0.55;
@@ -34,6 +71,10 @@ varying float breaker_alpha;
 varying float breaker_env;
 varying float breaker_u;
 varying float breaker_v;
+
+// Detector GPU compartido (campo PREBREAK 4A + perfiles del labio 4B). Incluido
+// después de los uniforms para que las funciones compartidas puedan referenciarlos.
+#include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
 
 vec3 breaker_heat(float value) {
 	vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));
