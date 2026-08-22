@@ -504,6 +504,22 @@ func breaker_debug_name() -> String:
 	return _breaker_pool.breaker_debug_name()
 
 
+func set_breaker_debug_slot(slot: int) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_debug_slot(slot)
+
+
+func cycle_breaker_debug_slot() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.cycle_debug_slot()
+
+
+func breaker_debug_slot_name() -> String:
+	if _breaker_pool == null:
+		return "ALL"
+	return _breaker_pool.debug_slot_name()
+
+
 func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}

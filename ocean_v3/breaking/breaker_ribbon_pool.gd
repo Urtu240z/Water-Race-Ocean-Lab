@@ -92,6 +92,7 @@ var _template_mesh: ArrayMesh = null
 var _ribbons: Array[MeshInstance3D] = []
 var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
+var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
 var _last_fingerprint := ""
 
 
@@ -168,10 +169,35 @@ func set_debug_mode(mode: int) -> void:
 	_debug_mode = clampi(mode, DebugMode.LIP, DebugMode.OFF)
 	if _material != null:
 		_material.set_shader_parameter(&"breaker_debug_mode", _debug_mode)
+	_apply_visibility()
 
 
 func cycle_debug_mode() -> void:
 	set_debug_mode((_debug_mode + 1) % (DebugMode.OFF + 1))
+
+
+func set_debug_slot(slot: int) -> void:
+	## slot -1 => ALL. Sólo filtra visibilidad en REGION/FORCE_LIP; no recrea mesh.
+	_debug_slot = slot
+	_apply_visibility()
+
+
+func cycle_debug_slot() -> void:
+	## 0 -> 1 -> ... -> (N-1) -> ALL -> 0, con N = slots activos.
+	var count := _anchors.size()
+	if count == 0:
+		_debug_slot = -1
+	elif _debug_slot < 0:
+		_debug_slot = 0
+	else:
+		_debug_slot += 1
+		if _debug_slot >= count:
+			_debug_slot = -1
+	_apply_visibility()
+
+
+func debug_slot_name() -> String:
+	return "ALL" if _debug_slot < 0 else str(_debug_slot)
 
 
 func breaker_debug_name() -> String:
@@ -333,6 +359,17 @@ func _rebuild_instances() -> void:
 		instance.set_instance_shader_parameter(&"ribbon_width_m", ribbon_width_m)
 		add_child(instance)
 		_ribbons.append(instance)
+	_apply_visibility()
+
+
+func _apply_visibility() -> void:
+	## Debug: en REGION/FORCE_LIP oculta los slots no seleccionados (sin recrear
+	## meshes). Producción (LIP/TAKEOVER/OFF) deja todos visibles; OFF ya hace
+	## alpha 0 en el shader.
+	var filter_active: bool = _debug_mode == DebugMode.REGION or _debug_mode == DebugMode.FORCE_LIP
+	for index in _ribbons.size():
+		var ribbon: MeshInstance3D = _ribbons[index]
+		ribbon.visible = not (filter_active and _debug_slot >= 0 and index != _debug_slot)
 
 
 func _build_ribbon_mesh() -> ArrayMesh:

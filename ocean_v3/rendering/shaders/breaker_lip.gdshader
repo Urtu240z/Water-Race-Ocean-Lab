@@ -205,6 +205,10 @@ void fragment() {
 	}
 	ALBEDO = vec3(0.0);
 	EMISSION = color;
+	if (breaker_debug_mode == 2 || breaker_debug_mode == 3) {
+		// REGION / FORCE_LIP (debug): color inequívocamente visible.
+		ALBEDO = color;
+	}
 	ALPHA = alpha * 0.92;
 	ROUGHNESS = 0.3;
 	SPECULAR = 0.0;
