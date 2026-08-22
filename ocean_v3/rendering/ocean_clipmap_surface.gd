@@ -25,6 +25,15 @@ enum CoastalDebugField {
 	REACHABILITY,
 }
 
+## Phase 4A — instrumentación GPU de pre-break. No crea entidades persistentes.
+enum BreakingDebug {
+	OFF,
+	DEPTH,
+	STEEPNESS,
+	CRESTNESS,
+	PREBREAK,
+}
+
 ## Instrumentación temporal 3B.2B: selecciona contribuciones reales, no color.
 enum CoastalCompositionDebug {
 	FULL,
@@ -50,6 +59,7 @@ var _module_enabled := true
 var _lod_debug := false
 var _periodicity_debug := false
 var _coastal_debug_field: int = CoastalDebugField.OFF
+var _breaking_debug: int = BreakingDebug.OFF
 var _tracking_camera: Camera3D
 var _triangle_count := 0
 
@@ -190,6 +200,25 @@ func set_coastal_debug_field(field: int) -> void:
 	_wireframe_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 
 
+func set_breaking_debug(mode: int) -> void:
+	## Activa la ruta de fetches extra sólo para el debug 4A / futuro takeover 4B.
+	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.PREBREAK)
+	_surface_material.set_shader_parameter(&"breaking_debug_mode", _breaking_debug)
+	_wireframe_material.set_shader_parameter(&"breaking_debug_mode", _breaking_debug)
+
+
+func set_breaking_energy_model(long_hs_m: float, coastal_energy_fraction: float) -> void:
+	## Hs del LONG completo y fracción de varianza de LONG_COASTAL. El shader
+	## estima Hs local desde energía + shoaling; nunca usa eta instantánea como H.
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"breaking_long_hs_m", maxf(long_hs_m, 0.0))
+		material.set_shader_parameter(&"breaking_coastal_energy_fraction", clampf(coastal_energy_fraction, 0.0, 1.0))
+
+
+func breaking_debug_name() -> String:
+	return BreakingDebug.keys()[_breaking_debug]
+
+
 func debug_mode_name() -> String:
 	match _debug_mode:
 		DebugMode.FULL_DISPLACEMENT: return "DX + HEIGHT + DZ"
@@ -235,6 +264,9 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_monochromatic_debug", false)
 		material.set_shader_parameter(&"coastal_eikonal_phase_debug", false)
 		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
+		material.set_shader_parameter(&"breaking_debug_mode", BreakingDebug.OFF)
+		material.set_shader_parameter(&"breaking_long_hs_m", configs[0].target_hs_m)
+		material.set_shader_parameter(&"breaking_coastal_energy_fraction", 0.5)
 		material.set_shader_parameter(&"coastal_warp_enabled", false)
 		material.set_shader_parameter(&"coastal_composition_debug", CoastalCompositionDebug.FULL)
 		material.set_shader_parameter(&"coastal_warp_effect_debug", CoastalWarpEffectDebug.WARP_AND_SHOALING)

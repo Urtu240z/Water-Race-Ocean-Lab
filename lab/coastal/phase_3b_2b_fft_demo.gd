@@ -2,7 +2,7 @@ extends Node3D
 ## Demo de Fase 3B.2B: océano FFT REAL con LONG dividido en COASTAL/REMAINDER.
 ## Default: RACE, FFT real (sin MONO), Coastal ON, warp activo, debug OFF.
 ## Controles: C Coastal, M composición, F forced warp, G gain, O efecto,
-## D heatmap delta, P pausa, V cámara y J seabed.
+## D heatmap delta, B pre-break, P pausa, V cámara y J seabed.
 
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
 
@@ -15,11 +15,13 @@ enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
 enum CameraMode { TOP, GRAZING }
 enum CompositionMode { FULL, LONG_ONLY, LONG_COASTAL_ONLY, LONG_REMAINDER_ONLY, MID_SHORT_ONLY }
 enum WarpEffectMode { WARP_AND_SHOALING, WARP_ONLY, SHOALING_ONLY }
+enum BreakingDebug { OFF, DEPTH, STEEPNESS, CRESTNESS, PREBREAK }
 
 const _COMPOSITION_NAMES := ["FULL", "LONG_ONLY", "LONG_COASTAL_ONLY", "LONG_REMAINDER_ONLY", "MID_SHORT_ONLY"]
 const _WARP_EFFECT_NAMES := ["WARP + SHOALING", "WARP ONLY", "SHOALING ONLY"]
 const _DEBUG_GAINS := [1.0, 4.0, 8.0]
 const _FORCED_WARP_OFFSET_XZ := Vector2(37.0, 23.0)
+const _BREAKING_DEBUG_NAMES := ["OFF", "DEPTH", "STEEPNESS", "CRESTNESS", "PREBREAK"]
 
 @onready var _ocean = $OceanV3/OpenOceanFFT
 @onready var _seabed_actual: MeshInstance3D = $SeabedActualDebug
@@ -37,6 +39,7 @@ var _warp_effect_mode: int = WarpEffectMode.WARP_AND_SHOALING
 var _forced_warp_enabled := false
 var _debug_gain_index := 0
 var _delta_heatmap_enabled := false
+var _breaking_debug: int = BreakingDebug.OFF
 
 
 func _ready() -> void:
@@ -79,6 +82,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_D:
 			_delta_heatmap_enabled = not _delta_heatmap_enabled
 			_apply_render_diagnostics()
+		KEY_B:
+			_breaking_debug = (_breaking_debug + 1) % _BREAKING_DEBUG_NAMES.size()
+			_ocean.set_breaking_debug(_breaking_debug)
 	_update_status()
 
 
@@ -99,6 +105,7 @@ func _apply_render_diagnostics() -> void:
 	_ocean.set_coastal_render_diagnostics(_composition_mode, _warp_effect_mode,
 		_forced_warp_enabled, _FORCED_WARP_OFFSET_XZ, _DEBUG_GAINS[_debug_gain_index],
 		_delta_heatmap_enabled)
+	_ocean.set_breaking_debug(_breaking_debug)
 
 
 func _update_status() -> void:
@@ -107,7 +114,7 @@ func _update_status() -> void:
 	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
 	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
 	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
-	_status.text = "PHASE 3B.2B / 3B.3 — FFT + QUERY COASTAL\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nWarp world->deep: %s\n%s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text()]
+	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s" % [_BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text()]
 
 
 func _split_metrics_text() -> String:

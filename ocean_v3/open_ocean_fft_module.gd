@@ -142,6 +142,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
+	_update_breaking_energy_model()
 	rebuild_coastal_propagation()
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
@@ -499,6 +500,26 @@ func set_coastal_debug_field(field: int) -> void:
 	surface.set_coastal_debug_field(field)
 
 
+func set_breaking_debug(mode: int) -> void:
+	## Phase 4A: debug GPU opt-in; no modifica FFT, propagation ni OceanQuery.
+	surface.set_breaking_debug(mode)
+
+
+func breaking_debug_name() -> String:
+	return surface.breaking_debug_name()
+
+
+func _update_breaking_energy_model() -> void:
+	if configs.is_empty() or _coastal_energy_metrics.is_empty():
+		return
+	var total_variance: float = float(_coastal_energy_metrics.get("total_reconstructed_variance", 0.0))
+	var coastal_variance: float = float(_coastal_energy_metrics.get("reconstructed_spatial_variance_coastal", 0.0))
+	# Las dos partes del split pueden estar correlacionadas; para la proxy de
+	# energía local de 4A usamos la fracción positiva de varianza propia, acotada.
+	var coastal_fraction := clampf(coastal_variance / maxf(total_variance, 1.0e-8), 0.0, 1.0)
+	surface.set_breaking_energy_model(configs[0].target_hs_m, coastal_fraction)
+
+
 func is_fft_enabled() -> bool:
 	return _enabled
 
@@ -606,6 +627,8 @@ func _rebuild_h0_all(simulation_seed: int) -> void:
 		h0_datas.append(_build_h0(config, simulation_seed))
 	var long_config: OpenOceanFFTConfig = configs[0]
 	var split: Dictionary = SpectrumScript.build_h0_split_rgba32f(long_config, SpectrumScript.derive_cascade_seed(simulation_seed, long_config.id), coastal_split_inner_deg, coastal_split_outer_deg)
+	_coastal_energy_metrics = split["coastal_energy_metrics"]
+	_update_breaking_energy_model()
 	var render_h0 := [split["coastal"], split["remainder"], h0_datas[1], h0_datas[2]]
 	for index in _cascades.size():
 		RenderingServer.call_on_render_thread(_cascades[index]["solver"].upload_h0.bind(render_h0[index]))
