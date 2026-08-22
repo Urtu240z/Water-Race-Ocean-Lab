@@ -1,13 +1,14 @@
 shader_type spatial;
 render_mode cull_disabled, blend_mix, depth_draw_opaque, diffuse_burley, specular_schlick_ggx;
 
-// ===== Phase 4B: geometría local del labio (takeover geométrico) =====
+// ===== Phase 4B/4C: geometría local del labio (takeover + overturn/plunge) =====
 // El ribetón (ribbon) es una tira de malla reutilizable anclada a un slot del
 // pool (BreakerRibbonPool). TODO el cálculo vive aquí en GPU:
 //   - el trigger es el campo PREBREAK de 4A (LONG_COASTAL + LONG_REMAINDER;
 //     MID/SHORT jamás deciden el nacimiento);
 //   - la superficie base se integra con el clipmap (mismas cascadas/fades);
-//   - el labio levanta y adelanta según la envolvente de takeover.
+//   - 4B: el labio levanta y adelanta según la envolvente de takeover;
+//   - 4C: el frente vuelca (overturn) y la nariz baja (plunge).
 // No hay readback GPU->CPU ni OceanQuery en esta ruta.
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
@@ -57,6 +58,9 @@ uniform float sea_level_y = 0.0;
 uniform float breaker_lift_fraction = 0.55;
 uniform float breaker_advance_fraction = 0.45;
 uniform float breaker_lip_slope = 0.7;
+// 4C: vuelco y plunge delanteros (fracción de local_hs, como lift/advance).
+uniform float breaker_overturn_fraction = 0.45;
+uniform float breaker_plunge_fraction = 0.35;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
@@ -134,19 +138,34 @@ void vertex() {
 	vec3 disp = surface_displacement_break(P0, coast_uv, field_data, dist);
 	vec2 slope = surface_slope_break(P0, coast_uv, field_data, dist);
 
-	// Takeover: levantar y ADELANTAR (desplazamiento horizontal, no sólo Y).
+	// Takeover 4B + 4C: levantar, adelantar, volcar y hundir la nariz.
 	// REGION (debug) no deforma: muestra la plantilla pegada a la superficie
 	// base para inspeccionar posición/tamaño/orientación/solapamientos.
 	float lift = 0.0;
 	float advance = 0.0;
+	float overturn_forward = 0.0;
+	float plunge_down = 0.0;
+	float overturn_strength = 0.0;
+	float plunge_strength = 0.0;
 	if (breaker_debug_mode != 2) {
-		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
-		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
-		// FORCE_LIP (debug): exagera 4x para inspeccionar la geometría; la
+		// Fases continuas de la envolvente (sin booleano): lift ~ env,
+		// overturn ~ env^1.5, plunge ~ env^2. PREBREAK débil => sólo lift.
+		float lift_env = envelope;
+		float overturn_env = pow(envelope, 1.5);
+		float plunge_env = envelope * envelope;
+		lift = lift_env * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
+		advance = lift_env * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
+		overturn_forward = overturn_env * local_hs * breaker_overturn_fraction * breaker_overturn_profile(u);
+		plunge_down = plunge_env * local_hs * breaker_plunge_fraction * breaker_plunge_profile(u);
+		overturn_strength = overturn_env * breaker_overturn_fraction;
+		plunge_strength = plunge_env * breaker_plunge_fraction;
+		// FORCE_LIP (debug): exagera 4x para inspeccionar la sección; la
 		// producción (LIP/TAKEOVER) se queda en 1x.
 		if (breaker_debug_mode == 3) {
 			lift *= 4.0;
 			advance *= 4.0;
+			overturn_forward *= 4.0;
+			plunge_down *= 4.0;
 		}
 	}
 
@@ -154,20 +173,31 @@ void vertex() {
 	// océano base, sin alterar la superficie muestreada ni PREBREAK.
 	float region_debug_offset = (breaker_debug_mode == 2) ? 0.15 : 0.0;
 
+	// Forma paramétrica direction/Y: el frente (overturn) se proyecta hacia
+	// delante y la nariz (plunge) baja; deja de ser un heightfield puro.
+	float forward = advance + overturn_forward;
 	vec3 world_pos = vec3(
-		P0.x + disp.x + direction.x * advance,
-		sea_level_y + disp.y + lift + region_debug_offset,
-		P0.y + disp.z + direction.y * advance
+		P0.x + disp.x + direction.x * forward,
+		sea_level_y + disp.y + lift - plunge_down + region_debug_offset,
+		P0.y + disp.z + direction.y * forward
 	);
-	// Inclinación del labio hacia la costa, localizada alrededor/de delante de
-	// la cresta (sin pendiente artificial extendida por toda la malla).
+
+	// Normal: base del océano + inclinación 4B (localizada) + vuelco/plunge 4C.
+	// El vuelco inclina la cara hacia atrás; el plunge hunde la nariz (la
+	// normal del frente baja, más horizontal).
 	if (breaker_debug_mode != 2) {
 		float slope_profile = max(breaker_lift_profile(u), breaker_advance_profile(u));
 		slope += direction * (envelope * breaker_lip_slope * slope_profile);
+		slope += direction * (overturn_strength * breaker_lip_slope * breaker_overturn_profile(u));
+		slope -= direction * (plunge_strength * breaker_lip_slope * breaker_plunge_profile(u));
+	}
+	float normal_y = 1.0;
+	if (breaker_debug_mode != 2) {
+		normal_y = 1.0 - plunge_strength * breaker_plunge_profile(u);
 	}
 
 	VERTEX = world_pos;
-	NORMAL = normalize(vec3(-slope.x, 1.0, -slope.y));
+	NORMAL = normalize(vec3(-slope.x, normal_y, -slope.y));
 
 	// REGION (debug): siempre visible (independiente de PREBREAK/envelope) para
 	// inspeccionar los slots; el resto conserva la envolvente de takeover.

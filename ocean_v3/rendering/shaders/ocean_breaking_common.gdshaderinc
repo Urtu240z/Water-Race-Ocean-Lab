@@ -269,6 +269,22 @@ float breaker_advance_profile(float u) {
 	return rise * fall;
 }
 
+float breaker_overturn_profile(float u) {
+	// 4C: vuelco delantero. Proyecta el frente hacia delante tras el pico de
+	// advance (~0.63); activo ~0.58..0.80, máximo ~0.70, 0 fuera. Suave.
+	float rise = smoothstep(0.58, 0.70, u);
+	float fall = 1.0 - smoothstep(0.70, 0.80, u);
+	return rise * fall;
+}
+
+float breaker_plunge_profile(float u) {
+	// 4C: plunge delantero. Hunde la nariz (desplaza hacia ABAJO), aún más
+	// adelantado; activo ~0.66..0.88, máximo ~0.78, 0 fuera. No levanta.
+	float rise = smoothstep(0.66, 0.78, u);
+	float fall = 1.0 - smoothstep(0.78, 0.88, u);
+	return rise * fall;
+}
+
 float breaker_edge_fade(float u, float v) {
 	float uf = smoothstep(0.02, 0.12, u) * (1.0 - smoothstep(0.88, 0.98, u));
 	float vf = smoothstep(0.04, 0.22, v) * (1.0 - smoothstep(0.78, 0.96, v));
