@@ -147,7 +147,6 @@ func _build_warp_grid_mesh() -> void:
 	var origin: Vector2 = _warp_debug.world_origin_xz
 	var cell: float = _warp_debug.cell_size_m
 	var d0: Vector2 = _warp_debug.incoming_direction_xz
-	var n0 := Vector2(-d0.y, d0.x)
 	var deep_origin: Vector2 = _warp_debug.deep_origin_xz
 	var s_step := 16.0
 	var r_step := 8.0

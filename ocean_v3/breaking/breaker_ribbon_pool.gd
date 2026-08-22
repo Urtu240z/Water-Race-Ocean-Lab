@@ -99,14 +99,14 @@ var _last_fingerprint := ""
 # Mismas fórmulas, para validación y HUD; el shader es la fuente de verdad. ---
 
 static func lip_lift_profile(u: float) -> float:
-	var rise := _smoothstep(0.06, BREAKER_CREST_U, u)
-	var fall := 1.0 - _smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.26, u)
+	var rise := _smoothstep(0.40, BREAKER_CREST_U, u)
+	var fall := 1.0 - _smoothstep(BREAKER_CREST_U, 0.68, u)
 	return rise * fall
 
 
 static func lip_advance_profile(u: float) -> float:
-	var rise := _smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.16, u)
-	var fall := 1.0 - _smoothstep(BREAKER_CREST_U + 0.16, 0.90, u)
+	var rise := _smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.08, u)
+	var fall := 1.0 - _smoothstep(BREAKER_CREST_U + 0.08, BREAKER_CREST_U + 0.20, u)
 	return rise * fall
 
 

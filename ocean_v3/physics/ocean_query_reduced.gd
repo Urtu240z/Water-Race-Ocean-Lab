@@ -423,14 +423,6 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		var ev_hi_arr := cascade.ev_h_im
 		var ev_vr_arr := cascade.ev_v_re
 		var ev_vi_arr := cascade.ev_v_im
-		var ev_ahr_arr := cascade.ev_a_h_re
-		var ev_ahi_arr := cascade.ev_a_h_im
-		var ev_bhr_arr := cascade.ev_b_h_re
-		var ev_bhi_arr := cascade.ev_b_h_im
-		var ev_avr_arr := cascade.ev_a_v_re
-		var ev_avi_arr := cascade.ev_a_v_im
-		var ev_bvr_arr := cascade.ev_b_v_re
-		var ev_bvi_arr := cascade.ev_b_v_im
 		var lh := 0.0
 		var ldx := 0.0
 		var ldz := 0.0

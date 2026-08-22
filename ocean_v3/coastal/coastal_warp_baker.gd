@@ -137,7 +137,7 @@ func debug_backtrace(prop_data, direction: Vector2, origin: Vector2, cell: float
 		width, height, grid_local, step_h, max_steps)
 
 
-func _backtrace(prop_data, direction: Vector2, _normal: Vector2, origin: Vector2, cell: float,
+func _backtrace(prop_data, direction: Vector2, _normal: Vector2, _origin: Vector2, _cell: float,
 		width: int, height: int, grid_local: Vector2, step_h: float, max_steps: int) -> Dictionary:
 	## Integra p' = -local_direction(p) desde grid_local (en celdas, local al
 	## grid) hacia aguas arriba hasta tocar la frontera upstream.

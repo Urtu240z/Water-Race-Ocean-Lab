@@ -239,16 +239,19 @@ vec2 surface_slope_break(vec2 world_xz, vec2 coast_uv, vec4 field_data, float di
 const float BREAKER_CREST_U = 0.545;
 
 float breaker_lift_profile(float u) {
-	float rise = smoothstep(0.06, BREAKER_CREST_U, u);
-	float fall = 1.0 - smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.26, u);
+	// Proto-labio localizado: sube rápido justo antes de la cresta, máximo en
+	// u=0.545 y cae rápido justo después. Activo ~0.40..0.68, energía ~0.48..0.62.
+	float rise = smoothstep(0.40, BREAKER_CREST_U, u);
+	float fall = 1.0 - smoothstep(BREAKER_CREST_U, 0.68, u);
 	return rise * fall;
 }
 
 float breaker_advance_profile(float u) {
-	// El adelantamiento horizontal nace en la cresta y pica justo delante de
-	// ella (labio que empieza a volcarse); 0 detrás y en el borde final.
-	float rise = smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.16, u);
-	float fall = 1.0 - smoothstep(BREAKER_CREST_U + 0.16, 0.90, u);
+	// Adelantamiento horizontal localizado DELANTE de la cresta: 0 detrás,
+	// pequeño en la cresta, pico justo delante (~0.63) y de vuelta a 0 antes
+	// del borde final. No adelanta toda la cinta.
+	float rise = smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.08, u);
+	float fall = 1.0 - smoothstep(BREAKER_CREST_U + 0.08, BREAKER_CREST_U + 0.20, u);
 	return rise * fall;
 }
 

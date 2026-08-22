@@ -157,9 +157,11 @@ void vertex() {
 		sea_level_y + disp.y + lift + region_debug_offset,
 		P0.y + disp.z + direction.y * advance
 	);
-	// Inclinación del labio hacia la costa (frente más empinado/volcable).
+	// Inclinación del labio hacia la costa, localizada alrededor/de delante de
+	// la cresta (sin pendiente artificial extendida por toda la malla).
 	if (breaker_debug_mode != 2) {
-		slope += direction * (envelope * breaker_lip_slope);
+		float slope_profile = max(breaker_lift_profile(u), breaker_advance_profile(u));
+		slope += direction * (envelope * breaker_lip_slope * slope_profile);
 	}
 
 	VERTEX = world_pos;

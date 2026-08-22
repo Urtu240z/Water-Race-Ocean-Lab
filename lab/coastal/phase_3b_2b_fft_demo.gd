@@ -13,7 +13,7 @@ const _CELL_SIZE_M := 1.0
 const _ORIGIN_XZ := Vector2(-64.0, -48.0)
 
 enum SeabedMode { HIDDEN, ACTUAL_DEPTH, OVERLAY }
-enum CameraMode { TOP, GRAZING }
+enum CameraMode { TOP, GRAZING, BREAKER_CLOSE }
 enum CompositionMode { FULL, LONG_ONLY, LONG_COASTAL_ONLY, LONG_REMAINDER_ONLY, MID_SHORT_ONLY }
 enum WarpEffectMode { WARP_AND_SHOALING, WARP_ONLY, SHOALING_ONLY }
 enum BreakingDebug { OFF, DEPTH, STEEPNESS, CRESTNESS, PREBREAK }
@@ -30,6 +30,7 @@ const _BREAKING_DEBUG_NAMES := ["OFF", "DEPTH", "STEEPNESS", "CRESTNESS", "PREBR
 @onready var _status: Label = %Status
 @onready var _top_camera: Camera3D = $TopCamera
 @onready var _grazing_camera: Camera3D = $GrazingCamera
+@onready var _breaker_close_camera: Camera3D = $BreakerCloseCamera
 
 var _bathymetry = null
 var _seabed_mode := SeabedMode.HIDDEN
@@ -48,6 +49,7 @@ func _ready() -> void:
 	get_window().title = "3B.2B FFT Composition Diagnostic"
 	_top_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.FORWARD)
 	_grazing_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
+	_breaker_close_camera.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 	_bathymetry = _build_bank_bathymetry()
 	_build_seabed_debugs(_bathymetry)
 	_set_seabed_mode(_seabed_mode)
@@ -66,7 +68,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_P:
 			SimulationClock.toggle_paused()
 		KEY_V:
-			_set_camera_mode((_camera_mode + 1) % (CameraMode.GRAZING + 1))
+			_set_camera_mode((_camera_mode + 1) % (CameraMode.BREAKER_CLOSE + 1))
 		KEY_J:
 			_set_seabed_mode((_seabed_mode + 1) % (SeabedMode.OVERLAY + 1))
 		KEY_M:
@@ -178,15 +180,21 @@ func _breaker_text() -> String:
 
 
 func _set_camera_mode(mode: int) -> void:
-	_camera_mode = clampi(mode, CameraMode.TOP, CameraMode.GRAZING) as CameraMode
+	_camera_mode = clampi(mode, CameraMode.TOP, CameraMode.BREAKER_CLOSE) as CameraMode
 	if _camera_mode == CameraMode.TOP:
 		_top_camera.make_current()
-	else:
+	elif _camera_mode == CameraMode.GRAZING:
 		_grazing_camera.make_current()
+	else:
+		_breaker_close_camera.make_current()
 
 
 func _camera_mode_name() -> String:
-	return "TOP" if _camera_mode == CameraMode.TOP else "GRAZING"
+	match _camera_mode:
+		CameraMode.TOP: return "TOP"
+		CameraMode.GRAZING: return "GRAZING"
+		CameraMode.BREAKER_CLOSE: return "BREAKER_CLOSE"
+	return "UNKNOWN"
 
 
 func _set_seabed_mode(mode: int) -> void:

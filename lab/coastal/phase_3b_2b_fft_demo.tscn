@@ -54,6 +54,11 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.5, 118)
 fov = 62.0
 far = 2000.0
 
+[node name="BreakerCloseCamera" type="Camera3D" parent="." unique_id=733101337]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 2, 16)
+fov = 55.0
+far = 2000.0
+
 [node name="HUD" type="CanvasLayer" parent="." unique_id=1217234354]
 
 [node name="Status" type="Label" parent="HUD" unique_id=2056401026]
