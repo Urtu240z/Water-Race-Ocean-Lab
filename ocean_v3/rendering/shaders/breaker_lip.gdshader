@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_disabled, blend_mix, depth_draw_opaque, unshaded;
+render_mode cull_disabled, blend_mix, depth_draw_opaque, diffuse_burley, specular_schlick_ggx;
 
 // ===== Phase 4B: geometría local del labio (takeover geométrico) =====
 // El ribetón (ribbon) es una tira de malla reutilizable anclada a un slot del
@@ -60,6 +60,8 @@ uniform float breaker_lip_slope = 0.7;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
+// Apariencia de agua para LIP (idéntica a ocean_surface).
+uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
 // Por instancia: cada slot del pool tiene su anchor, dirección, longitud y ancho.
 instance uniform vec2 anchor_xz;
 instance uniform vec2 direction_xz;
@@ -186,30 +188,34 @@ void vertex() {
 
 void fragment() {
 	float alpha = breaker_alpha;
-	vec3 color = vec3(0.02, 0.06, 0.12);
+	vec3 albedo = vec3(0.0);
+	vec3 emission = vec3(0.0);
+	float roughness = 0.3;
+	float specular = 0.0;
+
 	if (breaker_debug_mode == 0) {
-		// LIP: agua con la cresta del labio resaltada.
-		color = mix(vec3(0.05, 0.14, 0.26), vec3(0.82, 0.95, 1.0), breaker_env * breaker_env);
+		// LIP (producción): aspecto de agua equivalente al océano normal.
+		// Iluminación real sobre la NORMAL ya calculada por el breaker.
+		albedo = base_color;
+		emission = vec3(0.0);
+		roughness = 0.42;
+		specular = 0.35;
 	} else if (breaker_debug_mode == 1) {
-		// TAKEOVER: calor por intensidad de takeover.
-		color = breaker_heat(breaker_env);
+		// TAKEOVER: heatmap por intensidad de takeover (emisivo).
+		emission = breaker_heat(breaker_env);
 	} else if (breaker_debug_mode == 2) {
-		// REGION: color por slot + nariz blanca (dirección); siempre visible.
-		color = breaker_region_color(ribbon_id, breaker_u);
+		// REGION: color por slot + nariz blanca (dirección); emisivo.
+		emission = breaker_region_color(ribbon_id, breaker_u);
 	} else if (breaker_debug_mode == 3) {
-		// FORCE_LIP: geometría de takeover forzada (env=1) con color emisivo
-		// heat muy evidente para separarla del océano base.
-		color = breaker_heat(breaker_env);
+		// FORCE_LIP: heat emisivo muy evidente.
+		emission = breaker_heat(breaker_env);
 	} else {
 		alpha = 0.0; // OFF.
 	}
-	ALBEDO = vec3(0.0);
-	EMISSION = color;
-	if (breaker_debug_mode == 2 || breaker_debug_mode == 3) {
-		// REGION / FORCE_LIP (debug): color inequívocamente visible.
-		ALBEDO = color;
-	}
+
+	ALBEDO = albedo;
+	EMISSION = emission;
 	ALPHA = alpha * 0.92;
-	ROUGHNESS = 0.3;
-	SPECULAR = 0.0;
+	ROUGHNESS = roughness;
+	SPECULAR = specular;
 }
