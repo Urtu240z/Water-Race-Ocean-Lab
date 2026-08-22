@@ -1,0 +1,55 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+[   0% ] first_scan_filesystem | Started Inicialización del proyecto (5 steps)
+[   0% ] first_scan_filesystem | Escaneando la estructura del archivo...
+WARNING: Detected another project.godot at res://lab/coastal/empty_proj. The folder will be ignored.
+   at: _should_skip_directory (editor/file_system/editor_file_system.cpp:3497)
+ERROR: Cannot go into subdir 'pip-build-tracker-oocpcw8v'.
+   at: _scan_new_dir (editor/file_system/editor_file_system.cpp:1219)
+ERROR: Cannot go into subdir 'pip-ephem-wheel-cache-6m45c1qi'.
+   at: _scan_new_dir (editor/file_system/editor_file_system.cpp:1219)
+ERROR: Cannot go into subdir 'pip-install-trbpcbld'.
+   at: _scan_new_dir (editor/file_system/editor_file_system.cpp:1219)
+ERROR: Cannot go into subdir 'pip-unpack-er_72vuu'.
+   at: _scan_new_dir (editor/file_system/editor_file_system.cpp:1219)
+[  16% ] first_scan_filesystem | Cargando nombres de clases globales...
+[  33% ] first_scan_filesystem | Verificando GDExtensions...
+[  50% ] first_scan_filesystem | Creando scripts de carga automática...
+[  66% ] first_scan_filesystem | Inicializando plugins...
+[  83% ] first_scan_filesystem | Iniciando escaneo de archivos...
+[ DONE ] first_scan_filesystem
+
+[   0% ] _update_scan_actions | Started Escaneando acciones... (16 steps)
+[   0% ] _update_scan_actions | bench_main.obj
+[   5% ] _update_scan_actions | ocean_query_core_scalar.obj
+[  11% ] _update_scan_actions | ocean_query_simd_avx2.obj
+[  17% ] _update_scan_actions | ocean_query_core.windows.template_release.x86_64.obj
+[  23% ] _update_scan_actions | ocean_query_native.windows.template_release.x86_64.obj
+[  29% ] _update_scan_actions | ocean_query_patch_core.windows.template_release.x86_64.obj
+[  35% ] _update_scan_actions | ocean_query_simd_avx2.windows.template_release.x86_64.obj
+[  41% ] _update_scan_actions | register_types.windows.template_release.x86_64.obj
+[  47% ] _update_scan_actions | bench_main.obj
+[  52% ] _update_scan_actions | bench_patch_main.obj
+[  58% ] _update_scan_actions | ocean_query_core.obj
+[  64% ] _update_scan_actions | ocean_query_patch_core.obj
+[  70% ] _update_scan_actions | test_fb2.obj
+[  76% ] _update_scan_actions | test_fb.obj
+[  82% ] _update_scan_actions | test_node.obj
+[  88% ] _update_scan_actions | test_phase.obj
+[ DONE ] _update_scan_actions
+
+[   0% ] loading_editor_layout | Started Cargando editor (5 steps)
+[   0% ] loading_editor_layout | Cargando diseño del editor...
+[  16% ] loading_editor_layout | Cargando docks...
+[  33% ] loading_editor_layout | Reabriendo escenas...
+[  50% ] loading_editor_layout | Cargando el diseño del editor central...
+[  66% ] loading_editor_layout | Cargando Layout de la ventana del plugin...
+[  83% ] loading_editor_layout | Diseño del editor listo.
+[ DONE ] loading_editor_layout
+
+ERROR: Cannot save file 'C:/Users/ehort/AppData/Roaming/Godot/editor_settings-4.7.tres'.
+   at: save (scene/resources/resource_format_text.cpp:1768)
+ERROR: Error saving editor settings to C:/Users/ehort/AppData/Roaming/Godot/editor_settings-4.7.tres
+   at: save (editor/settings/editor_settings.cpp:1525)

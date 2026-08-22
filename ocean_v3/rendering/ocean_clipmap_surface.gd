@@ -89,6 +89,13 @@ func set_tracking_camera(camera: Camera3D) -> void:
 	_tracking_camera = camera
 
 
+## Phase 4B: expone el material del clipmap como fuente única de los uniforms
+## compartidos (texturas coastal/warp/FFT, fades, band_mask, composición, ...).
+## El pool de breakers copia desde aquí; no duplica el plomería de parámetros.
+func get_surface_material() -> ShaderMaterial:
+	return _surface_material
+
+
 ## 3B.2B: reaplica los rangos de fade (la demo ajusta long_fade para ver el
 ## warp sobre el banco local). No altera el campo FFT.
 func apply_fade_ranges(config) -> void:

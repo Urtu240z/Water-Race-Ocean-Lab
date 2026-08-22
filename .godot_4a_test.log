@@ -1,0 +1,23 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+PASS: crestness samplea LONG_COASTAL + LONG_REMAINDER reales
+PASS: LONG_COASTAL conserva warp y shoaling en las muestras de cresta
+PASS: crestness usa dirección local y separación lambda/16
+PASS: ruta pre-break es opt-in GPU y no invoca OceanQuery
+PASS: Coastal OFF/fuera del campo no inventa rotura por el banco
+PASS: el clipmap incluye el detector compartido (refactor 4B sin cambio de comportamiento
+4A DEEP_FLAT depth=0.000000 steep=0.000000 crest=1.000000 prebreak=0.000000
+PASS: deep/flat: depth pressure prácticamente cero
+PASS: deep/flat: no activa prebreak aunque haya cresta
+4A BANK deep_prebreak=0.000000 bank depth=1.000000 steep=0.979219 crest=1.000000 prebreak=0.986492
+PASS: bank: H/h eleva la presión de profundidad
+PASS: bank: k_local*a aporta steepness continuo
+PASS: bank: una cresta LONG candidata produce prebreak móvil
+4A CREST crest=1.000000 trough=0.000000 shoulder=0.000000
+PASS: crest real: máximo local y curvatura negativa -> crestness alta
+PASS: valle: no se confunde con cresta
+PASS: hombro: crestness suave, no banda fija de fondo
+PASS: misma ola/campos -> prebreak idéntico al pausar o mover cámara
+PHASE_4A_PREBREAK: PASS

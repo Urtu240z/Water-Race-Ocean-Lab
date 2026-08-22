@@ -13,6 +13,7 @@ const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd
 const CoastalBakerScript := preload("res://ocean_v3/coastal/coastal_propagation_baker.gd")
 const CoastalEikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 const WarpBakerScript := preload("res://ocean_v3/coastal/coastal_warp_baker.gd")
+const BreakerPoolScript := preload("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
 
 enum BandDebug {
 	ALL,
@@ -44,6 +45,9 @@ enum BandDebug {
 @export_range(0.0, 60.0, 1.0) var coastal_split_inner_deg := 20.0
 @export_range(20.0, 90.0, 1.0) var coastal_split_outer_deg := 35.0
 @export var coastal_warp_enabled := true
+# Phase 4B: pool de geometría local de breaker. ON por defecto; la visibilidad
+# real depende del campo PREBREAK (Coastal OFF / sin batimetría => sin breakers).
+@export var breaker_enabled := true
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -63,6 +67,8 @@ var _sea_state_initialized := false
 var _coastal_propagation = null
 var _coastal_warp = null
 var _coastal_energy_metrics: Dictionary = {}
+var _breaker_pool: BreakerRibbonPool = null
+var _breaking_coastal_fraction := 0.0
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -142,6 +148,12 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
+	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
+	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
+	# inactivo y no renderiza nada.
+	_breaker_pool = BreakerPoolScript.new()
+	_breaker_pool.name = &"BreakerRibbonPool"
+	add_child(_breaker_pool)
 	_update_breaking_energy_model()
 	rebuild_coastal_propagation()
 	surface.set_module_enabled(_enabled)
@@ -404,10 +416,12 @@ func rebuild_coastal_propagation() -> bool:
 	# (ambos flags false) conserva el camino abierto y no hornea nada.
 	if not coastal_propagation_enabled and not coastal_monochromatic_debug:
 		surface.set_coastal_propagation(null)
+		_configure_breaker_pool()
 		return false
 	if coastal_bathymetry_data == null or not coastal_bathymetry_data.is_valid():
 		push_warning("3B coastal: BathymetryData no asignado o inválido; LONG queda abierto.")
 		surface.set_coastal_propagation(null)
+		_configure_breaker_pool()
 		return false
 	if coastal_eikonal_refraction_debug:
 		var eikonal_baker := CoastalEikonalBakerScript.new()
@@ -425,6 +439,7 @@ func rebuild_coastal_propagation() -> bool:
 		_coastal_propagation = straight_baker.bake()
 	if _coastal_propagation == null:
 		surface.set_coastal_propagation(null)
+		_configure_breaker_pool()
 		return false
 	# 3B.2B: construir el warp world->deep a partir del campo Eikonal. El eikonal
 	# ES la base del warp (propagation_kind==1); el transform visual del FFT se
@@ -444,7 +459,55 @@ func rebuild_coastal_propagation() -> bool:
 				coastal_split_inner_deg, coastal_split_outer_deg, coastal_long_reference_direction())
 	# El campo 2D no se aplica al FFT: sólo el shader mono consume phi(x,z).
 	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, fft_transform_enabled, coastal_eikonal_refraction_debug and coastal_propagation_enabled)
+	_configure_breaker_pool()
 	return coastal_propagation_enabled
+
+
+func _configure_breaker_pool() -> void:
+	## Phase 4B: activa el pool sólo con Coastal ON + propagación válida; en
+	## cualquier otro caso (Coastal OFF, sin batimetría, PREBREAK inválido) no
+	## hay ningún breaker. Nunca se ejecuta por frame.
+	if _breaker_pool == null:
+		return
+	var coastal_ok: bool = coastal_propagation_enabled and _coastal_propagation != null and _coastal_propagation.is_valid()
+	if not breaker_enabled or not coastal_ok:
+		_breaker_pool.disable()
+		return
+	_breaker_pool.configure(
+		_coastal_propagation,
+		_coastal_warp,
+		configs[0].target_hs_m,
+		_breaking_coastal_fraction,
+		surface.clipmap_config.sea_level_y,
+		surface.get_surface_material(),
+	)
+
+
+func set_breakers_enabled(enabled: bool) -> void:
+	breaker_enabled = enabled
+	_configure_breaker_pool()
+
+
+func set_breaker_debug(mode: int) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_debug_mode(mode)
+
+
+func cycle_breaker_debug() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.cycle_debug_mode()
+
+
+func breaker_debug_name() -> String:
+	if _breaker_pool == null:
+		return "UNAVAILABLE"
+	return _breaker_pool.breaker_debug_name()
+
+
+func breaker_pool_summary() -> Dictionary:
+	if _breaker_pool == null:
+		return {}
+	return _breaker_pool.summary()
 
 
 func coastal_propagation_data():
@@ -516,8 +579,11 @@ func _update_breaking_energy_model() -> void:
 	var coastal_variance: float = float(_coastal_energy_metrics.get("reconstructed_spatial_variance_coastal", 0.0))
 	# Las dos partes del split pueden estar correlacionadas; para la proxy de
 	# energía local de 4A usamos la fracción positiva de varianza propia, acotada.
-	var coastal_fraction := clampf(coastal_variance / maxf(total_variance, 1.0e-8), 0.0, 1.0)
-	surface.set_breaking_energy_model(configs[0].target_hs_m, coastal_fraction)
+	_breaking_coastal_fraction = clampf(coastal_variance / maxf(total_variance, 1.0e-8), 0.0, 1.0)
+	surface.set_breaking_energy_model(configs[0].target_hs_m, _breaking_coastal_fraction)
+	# 4B: el pool recoloca sus anchors con el mismo modelo de energía (Hs + fracción).
+	if _breaker_pool != null:
+		_breaker_pool.set_energy_model(configs[0].target_hs_m, _breaking_coastal_fraction)
 
 
 func is_fft_enabled() -> bool:

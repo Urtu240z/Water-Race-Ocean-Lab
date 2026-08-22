@@ -23,12 +23,16 @@ func _initialize() -> void:
 
 
 func _validate_shader_contract() -> void:
+	## Phase 4B refactorizó las funciones del detector a ocean_breaking_common.gdshaderinc
+	## (compartido con breaker_lip.gdshader); el comportamiento del clipmap no cambia.
 	var source := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
-	_check(source.contains("displacement_long_coastal") and source.contains("displacement_long_remainder"), "crestness samplea LONG_COASTAL + LONG_REMAINDER reales")
-	_check(source.contains("warp_deep_sample") and source.contains("field_data.g"), "LONG_COASTAL conserva warp y shoaling en las muestras de cresta")
-	_check(source.contains("phase_data.gb") and source.contains("wavelength / 16.0"), "crestness usa dirección local y separación lambda/16")
-	_check(source.contains("breaking_debug_mode > 0") and not source.contains("sample_water("), "ruta pre-break es opt-in GPU y no invoca OceanQuery")
-	_check(source.contains("if (!has_coastal_data(coast_uv, field_data)) return vec4(0.0)"), "Coastal OFF/fuera del campo no inventa rotura por el banco")
+	var inc := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc")
+	_check(inc.contains("displacement_long_coastal") and inc.contains("displacement_long_remainder"), "crestness samplea LONG_COASTAL + LONG_REMAINDER reales")
+	_check(inc.contains("warp_deep_sample") and inc.contains("field_data.g"), "LONG_COASTAL conserva warp y shoaling en las muestras de cresta")
+	_check(inc.contains("phase_data.gb") and inc.contains("wavelength / 16.0"), "crestness usa dirección local y separación lambda/16")
+	_check(source.contains("breaking_debug_mode > 0") and not source.contains("sample_water(") and not inc.contains("sample_water("), "ruta pre-break es opt-in GPU y no invoca OceanQuery")
+	_check(inc.contains("if (!has_coastal_data(coast_uv, field_data)) return vec4(0.0)"), "Coastal OFF/fuera del campo no inventa rotura por el banco")
+	_check(source.contains("ocean_breaking_common.gdshaderinc"), "el clipmap incluye el detector compartido (refactor 4B sin cambio de comportamiento")
 
 
 func _validate_deep_flat() -> void:

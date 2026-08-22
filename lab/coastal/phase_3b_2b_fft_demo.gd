@@ -2,7 +2,8 @@ extends Node3D
 ## Demo de Fase 3B.2B: océano FFT REAL con LONG dividido en COASTAL/REMAINDER.
 ## Default: RACE, FFT real (sin MONO), Coastal ON, warp activo, debug OFF.
 ## Controles: C Coastal, M composición, F forced warp, G gain, O efecto,
-## D heatmap delta, B pre-break, P pausa, V cámara y J seabed.
+## D heatmap delta, B pre-break, P pausa, V cámara, J seabed,
+## K breakers on/off, N debug de geometría breaker (LIP/TAKEOVER/REGION/OFF).
 
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
 
@@ -40,6 +41,7 @@ var _forced_warp_enabled := false
 var _debug_gain_index := 0
 var _delta_heatmap_enabled := false
 var _breaking_debug: int = BreakingDebug.OFF
+var _breakers_enabled := true
 
 
 func _ready() -> void:
@@ -85,6 +87,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			_breaking_debug = (_breaking_debug + 1) % _BREAKING_DEBUG_NAMES.size()
 			_ocean.set_breaking_debug(_breaking_debug)
+		KEY_K:
+			_breakers_enabled = not _breakers_enabled
+			_ocean.set_breakers_enabled(_breakers_enabled)
+		KEY_N:
+			_ocean.cycle_breaker_debug()
 	_update_status()
 
 
@@ -114,7 +121,7 @@ func _update_status() -> void:
 	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
 	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
 	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
-	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s" % [_BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text()]
+	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s\n%s" % [_BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text(), _breaker_text()]
 
 
 func _split_metrics_text() -> String:
@@ -152,6 +159,22 @@ func _query_coastal_text() -> String:
 	var coastal = _ocean.sample_water(point, SimulationClock.simulation_time)
 	var open = _ocean.sample_water_open_reference(point, SimulationClock.simulation_time)
 	return "Query Coastal: %s | probe q=(%+.0f,%+.0f) height coastal=%.5f open=%.5f delta=%+.6f" % ["ON" if _coastal_enabled else "OFF", point.x, point.z, coastal.height, open.height, coastal.height - open.height]
+
+
+func _breaker_text() -> String:
+	## Phase 4B: estado del pool de geometría local (datos CPU deterministas;
+	## el trigger real vive en GPU, sin readback).
+	var summary: Dictionary = _ocean.breaker_pool_summary()
+	var enabled_text := "ON" if _breakers_enabled else "OFF"
+	if summary.is_empty() or not summary.get("configured", false):
+		return "Breakers (K): %s | debug (N): %s | sin coastal válido -> 0 slots" % [enabled_text, _ocean.breaker_debug_name()]
+	var lines: PackedStringArray = []
+	for index in summary["anchors"].size():
+		var anchor: Dictionary = summary["anchors"][index]
+		var direction: Vector2 = anchor["direction"]
+		lines.append("slot %d p=(%+.1f,%+.1f) d=(%+.2f,%+.2f) h=%.2fm lam=%.1fm" % [index, anchor["xz"].x, anchor["xz"].y, direction.x, direction.y, anchor["depth_m"], anchor["wavelength_m"]])
+	var body := " | ".join(lines)
+	return "Breakers (K): %s | debug (N): %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), summary["slots"], summary["max_slots"], body]
 
 
 func _set_camera_mode(mode: int) -> void:

@@ -1,65 +1,26 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
-uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
-uniform sampler2D displacement_mid : repeat_enable, filter_linear;
-uniform sampler2D displacement_short : repeat_enable, filter_linear;
-uniform sampler2D normal_long_coastal : repeat_enable, filter_linear;
-uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
-uniform sampler2D normal_mid : repeat_enable, filter_linear;
-uniform sampler2D normal_short : repeat_enable, filter_linear;
-uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
-uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
-uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
-uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
-uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
-uniform float domain_long_coastal_m = 512.0;
-uniform float domain_long_remainder_m = 512.0;
-uniform float domain_mid_m = 137.0;
-uniform float domain_short_m = 37.0;
-uniform vec2 camera_world_xz = vec2(0.0);
-uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
-uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
-uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
-uniform vec3 band_mask = vec3(1.0);
+// Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B.
+// Este include se procesa al inicio del archivo y declara los uniforms
+// compartidos (texturas FFT/coastal/warp, fades, band_mask, modelo de energía
+// 4A, composición) además de las funciones. No redeclarar esos uniforms aquí.
+#include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
+
 uniform int debug_mode = 0;
-uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
-uniform bool coastal_propagation_enabled = false;
-uniform bool coastal_transform_enabled = false;
-uniform bool coastal_monochromatic_debug = false;
 uniform bool coastal_eikonal_phase_debug = false;
-uniform bool coastal_warp_enabled = false;
-// 3B.2B diagnóstico: 0 FULL, 1 LONG, 2 COASTAL, 3 REMAINDER, 4 MID+SHORT.
-uniform int coastal_composition_debug = 0;
 // 0 WARP+SHOALING, 1 WARP_ONLY, 2 SHOALING_ONLY.
 uniform int coastal_warp_effect_debug = 0;
 uniform bool coastal_forced_warp_debug = false;
 uniform vec2 coastal_forced_warp_offset_xz = vec2(37.0, 23.0);
-uniform float coastal_debug_gain = 1.0;
 uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
-// Phase 4A: detector GPU de pre-break. Apagado salvo instrumento debug / 4B.
-// 0 OFF, 1 DEPTH, 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK.
+// Phase 4A: instrumento GPU opt-in del detector. 0 OFF, 1 DEPTH, 2 STEEPNESS,
+// 3 CRESTNESS, 4 PREBREAK.
 uniform int breaking_debug_mode = 0;
-// Hs de LONG completo en deep water y fracción de energía del split COASTAL.
-// Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
-uniform float breaking_long_hs_m = 0.50;
-uniform float breaking_coastal_energy_fraction = 0.50;
-uniform float breaking_depth_gamma = 0.78;
-uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
-uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
-uniform vec2 breaking_crest_spacing_lambda_range_m = vec2(0.25, 2.0);
 uniform float coastal_monochromatic_amplitude_m = 0.35;
-uniform vec2 coastal_origin_xz = vec2(0.0);
-uniform vec2 coastal_extent_m = vec2(1.0);
-uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
-uniform vec2 coastal_warp_origin_xz = vec2(0.0);
-uniform vec2 coastal_warp_extent_m = vec2(1.0);
-uniform float coastal_warp_detj_safe = 0.5;
-uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
 uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
@@ -77,19 +38,7 @@ varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 
-vec2 spectrum_uv(vec2 world_xz, float domain_size_m) {
-	return fract(world_xz / domain_size_m + vec2(0.5));
-}
-
-float distance_fade(vec2 fade_range, float distance_to_camera) {
-	return 1.0 - smoothstep(fade_range.x, fade_range.y, distance_to_camera);
-}
-
-vec2 slope_from_normal(vec3 ocean_normal) {
-	return -ocean_normal.xz / max(ocean_normal.y, 0.0001);
-}
-
-vec3 level_color(float level) {
+float level_color(float level) {
 	float wave = fract(level * 0.61803398875);
 	return mix(vec3(0.12, 0.85, 0.95), vec3(0.95, 0.25, 0.12), wave);
 }
@@ -97,103 +46,6 @@ vec3 level_color(float level) {
 float periodic_grid(vec2 world_xz, float domain_size_m) {
 	vec2 cell = abs(fract(world_xz / domain_size_m + 0.5) - 0.5);
 	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
-}
-
-vec2 coastal_uv(vec2 world_xz) {
-	return (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
-}
-
-bool has_coastal_data(vec2 uv, vec4 field_data) {
-	return coastal_propagation_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
-}
-
-// 3B.2B: warp world -> deep con blend de confianza.
-// Devuelve vec4(deep_x, deep_z, confidence, 0). confidence = 1 en SAFE,
-// suave 0..1 en NEAR_CAUSTIC, 0 en inválido/fuera/folded.
-vec4 warp_deep_sample(vec2 world_xz) {
-	vec2 uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
-	vec2 uv_clamped = clamp(uv, vec2(0.0), vec2(1.0));
-	vec4 warp = textureLod(coastal_warp_texture, uv_clamped, 0.0);
-	float det_j = warp.b;
-	// Blend suave según el Jacobiano: SAFE -> 1, NEAR_CAUSTIC -> 0..1, folded -> 0.
-	// warp.a (valid 0/1, interpolado en bordes por filter_linear) apaga el warp
-	// fuera de la zona válida con fade natural (evita seams).
-	float confidence = smoothstep(0.0, coastal_warp_detj_safe, det_j);
-	confidence *= warp.a;
-	// Fuera del rectángulo del warp: sin warp (confidence 0).
-	confidence *= step(uv.x, 1.0) * step(uv.y, 1.0) * step(0.0, uv.x) * step(0.0, uv.y);
-	return vec4(warp.xy, confidence, 0.0);
-}
-
-vec4 warp_jacobian_sample(vec2 world_xz) {
-	vec2 uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
-	return textureLod(coastal_warp_jacobian_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
-}
-
-// Estado costero mínimo para re-samplear LONG alrededor de una cresta. Mantiene
-// exactamente la misma cadena visual: world -> deep (warp/confianza) + shoaling.
-vec4 coastal_long_state(vec2 world_xz) {
-	vec2 uv = coastal_uv(world_xz);
-	vec4 field_data = textureLod(coastal_field_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
-	bool active = has_coastal_data(uv, field_data) && coastal_transform_enabled;
-	vec4 warp = vec4(world_xz, 0.0, 0.0);
-	if (active && coastal_warp_enabled) {
-		warp = warp_deep_sample(world_xz);
-	}
-	float shoaling = active ? mix(1.0, field_data.g, warp.z) : 1.0;
-	return vec4(warp.xy, warp.z, shoaling);
-}
-
-float long_height_at(vec2 world_xz) {
-	vec4 state = coastal_long_state(world_xz);
-	float coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).y;
-	float coastal_deep = textureLod(displacement_long_coastal, spectrum_uv(state.xy, domain_long_coastal_m), 0.0).y;
-	float coastal_height = mix(coastal_open, coastal_deep, state.z) * state.w;
-	float remainder_height = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).y;
-	return coastal_height + remainder_height;
-}
-
-vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
-	// El alcance de 4A es rompiente costera: sin propagation/batimetría válida
-	// no existe una profundidad local que pueda inventar un trigger. Esto hace
-	// que Coastal OFF elimine por completo la influencia del banco.
-	if (!has_coastal_data(coast_uv, field_data)) return vec4(0.0);
-	// Aproximación documentada de Phase 4A: Hs_LONG local se obtiene de la
-	// energía espectral LONG de deep water, repartida por el split y escalada
-	// por shoaling. H = Hs (no eta instantánea); a = H / 2 para ka.
-	float coastal_fraction = clamp(breaking_coastal_energy_fraction, 0.0, 1.0);
-	float confidence = coastal_long_state(world_xz).z;
-	float shoaling = mix(1.0, field_data.g, confidence);
-	float local_hs = breaking_long_hs_m * sqrt(max(0.0, (1.0 - coastal_fraction) + coastal_fraction * shoaling * shoaling));
-	float amplitude = max(0.5 * local_hs, 0.01);
-	float k_deep = max(coastal_k0_rad_m, 0.0001);
-	float k_coastal = max(field_data.b, k_deep);
-	float local_k = mix(k_deep, k_coastal, coastal_fraction * confidence);
-	float depth_m = max(metrics_data.r, 0.001);
-	float depth_ratio = local_hs / max(breaking_depth_gamma * depth_m, 0.001);
-	float depth_pressure = smoothstep(breaking_depth_ratio_range.x, breaking_depth_ratio_range.y, depth_ratio);
-	float steepness_pressure = smoothstep(breaking_steepness_range.x, breaking_steepness_range.y, local_k * amplitude);
-
-	// La cresta sí procede de las muestras dinámicas del FFT real LONG:
-	// LONG_COASTAL warped + shoaled, más LONG_REMAINDER open. MID/SHORT no entran.
-	vec2 propagation = phase_data.gb;
-	if (dot(propagation, propagation) < 0.25) propagation = coastal_incoming_direction_xz;
-	propagation = normalize(propagation);
-	float wavelength = TAU / local_k;
-	float spacing = clamp(wavelength / 16.0, breaking_crest_spacing_lambda_range_m.x, breaking_crest_spacing_lambda_range_m.y);
-	float eta_minus = long_height_at(world_xz - propagation * spacing);
-	float eta_0 = long_height_at(world_xz);
-	float eta_plus = long_height_at(world_xz + propagation * spacing);
-	float neighbor_rise = min(eta_0 - eta_minus, eta_0 - eta_plus);
-	float curvature_down = 2.0 * eta_0 - eta_minus - eta_plus;
-	float crest_rise = smoothstep(0.012 * amplitude, 0.075 * amplitude, neighbor_rise);
-	float crest_curve = smoothstep(0.025 * amplitude, 0.15 * amplitude, curvature_down);
-	float crestness = crest_rise * crest_curve;
-
-	// Sólo pre-break costero en 4A: steepness modula el potencial de profundidad,
-	// pero no habilita whitecaps en mar profundo.
-	float prebreak = crestness * depth_pressure * mix(0.35, 1.0, steepness_pressure);
-	return vec4(depth_pressure, steepness_pressure, crestness, prebreak);
 }
 
 void vertex() {
