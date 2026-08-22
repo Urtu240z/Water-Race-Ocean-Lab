@@ -1,6 +1,6 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene format=3 uid="uid://ehi7td7y1k3m"]
 
-[ext_resource type="Script" path="res://lab/breaking/breaker_prototype.gd" id="1_proto"]
+[ext_resource type="Script" uid="uid://dge76l7tgmyn4" path="res://lab/breaking/breaker_prototype.gd" id="1_proto"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
 sky_top_color = Color(0.02, 0.05, 0.1, 1)
@@ -13,6 +13,7 @@ sky_material = SubResource("SkyMaterial")
 
 [sub_resource type="Environment" id="Environment"]
 background_mode = 2
+background_energy_multiplier = 7.18
 sky = SubResource("Sky")
 ambient_light_source = 3
 ambient_light_color = Color(0.62, 0.72, 0.9, 1)
@@ -24,40 +25,40 @@ font_color = Color(0.86, 0.95, 1, 1)
 outline_size = 5
 outline_color = Color(0.01, 0.02, 0.04, 0.9)
 
-[node name="BreakerPrototype" type="Node3D"]
+[node name="BreakerPrototype" type="Node3D" unique_id=1311921167]
 script = ExtResource("1_proto")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1059295440]
 environment = SubResource("Environment")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.8, 0.45, -0.35, 0, 0.6, 0.78, 0.5, -0.65, 0.55, 0, 0, 0)
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1549595602]
+transform = Transform3D(-0.12313818, 0.7837702, -0.60935485, 0, 0.60004747, 0.80972266, 0.93532723, 0.103185326, -0.080223106, 0, 0, 0)
 light_energy = 1.3
 shadow_enabled = true
 
-[node name="WaterPlane" type="MeshInstance3D" parent="."]
+[node name="WaterPlane" type="MeshInstance3D" parent="." unique_id=1793059189]
 
-[node name="BreakerMesh" type="MeshInstance3D" parent="."]
+[node name="BreakerMesh" type="MeshInstance3D" parent="." unique_id=280446106]
 
-[node name="SideCamera" type="Camera3D" parent="."]
+[node name="SideCamera" type="Camera3D" parent="." unique_id=1072662582]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, -10)
 fov = 40.0
 far = 200.0
 
-[node name="ThreeQuarterCamera" type="Camera3D" parent="."]
+[node name="ThreeQuarterCamera" type="Camera3D" parent="." unique_id=1261712381]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -7, 3, -8)
 current = true
 fov = 50.0
 far = 200.0
 
-[node name="CloseCamera" type="Camera3D" parent="."]
+[node name="CloseCamera" type="Camera3D" parent="." unique_id=1052272489]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1.8, -3.5)
 fov = 55.0
 far = 200.0
 
-[node name="HUD" type="CanvasLayer" parent="."]
+[node name="HUD" type="CanvasLayer" parent="." unique_id=1960785294]
 
-[node name="Status" type="Label" parent="HUD"]
+[node name="Status" type="Label" parent="HUD" unique_id=328842856]
 unique_name_in_owner = true
 offset_left = 18.0
 offset_top = 16.0
