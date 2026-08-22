@@ -138,15 +138,29 @@ vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 met
 	vec2 propagation = phase_data.gb;
 	if (dot(propagation, propagation) < 0.25) propagation = coastal_incoming_direction_xz;
 	propagation = normalize(propagation);
-	float spacing = clamp(wavelength / 16.0, breaking_crest_spacing_lambda_range_m.x, breaking_crest_spacing_lambda_range_m.y);
-	float eta_minus = long_height_at(world_xz - propagation * spacing);
 	float eta_0 = long_height_at(world_xz);
-	float eta_plus = long_height_at(world_xz + propagation * spacing);
-	float neighbor_rise = min(eta_0 - eta_minus, eta_0 - eta_plus);
-	float curvature_down = 2.0 * eta_0 - eta_minus - eta_plus;
-	float crest_rise = smoothstep(0.012 * amplitude, 0.075 * amplitude, neighbor_rise);
-	float crest_curve = smoothstep(0.025 * amplitude, 0.15 * amplitude, curvature_down);
-	float crestness = crest_rise * crest_curve;
+	// Crestness MULTIESCALA: el LONG real es de banda ancha y una única escala
+	// lambda/16 sólo capta crestas de ese ancho. Tres espaciados (lambda/16,
+	// lambda/8, lambda/4) con el MISMO criterio; se toma el máximo.
+	// Umbrales sin reescalar por escala: ya están normalizados por amplitude
+	// (fracción de a_local) y en una sinusoidal la respuesta 1-cos(k*s) alcanza
+	// el mismo rango [0.012, 0.075] en la cresta coincidente de cada escala.
+	float crestness = 0.0;
+	for (int scale = 0; scale < 3; scale++) {
+		float spacing = clamp(wavelength / 16.0, breaking_crest_spacing_lambda_range_m.x, breaking_crest_spacing_lambda_range_m.y);
+		if (scale == 1) {
+			spacing = clamp(wavelength / 8.0, 0.5, 4.0);
+		} else if (scale == 2) {
+			spacing = clamp(wavelength / 4.0, 1.0, 8.0);
+		}
+		float eta_minus = long_height_at(world_xz - propagation * spacing);
+		float eta_plus = long_height_at(world_xz + propagation * spacing);
+		float neighbor_rise = min(eta_0 - eta_minus, eta_0 - eta_plus);
+		float curvature_down = 2.0 * eta_0 - eta_minus - eta_plus;
+		float crest_rise = smoothstep(0.012 * amplitude, 0.075 * amplitude, neighbor_rise);
+		float crest_curve = smoothstep(0.025 * amplitude, 0.15 * amplitude, curvature_down);
+		crestness = max(crestness, crest_rise * crest_curve);
+	}
 
 	// Sólo pre-break costero en 4A: steepness modula el potencial de profundidad,
 	// pero no habilita whitecaps en mar profundo.
