@@ -140,11 +140,21 @@ void vertex() {
 	if (breaker_debug_mode != 2) {
 		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
 		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
+		// FORCE_LIP (debug): exagera 4x para inspeccionar la geometría; la
+		// producción (LIP/TAKEOVER) se queda en 1x.
+		if (breaker_debug_mode == 3) {
+			lift *= 4.0;
+			advance *= 4.0;
+		}
 	}
+
+	// REGION (debug): offset vertical fijo para eliminar z-fighting con el
+	// océano base, sin alterar la superficie muestreada ni PREBREAK.
+	float region_debug_offset = (breaker_debug_mode == 2) ? 0.15 : 0.0;
 
 	vec3 world_pos = vec3(
 		P0.x + disp.x + direction.x * advance,
-		sea_level_y + disp.y + lift,
+		sea_level_y + disp.y + lift + region_debug_offset,
 		P0.y + disp.z + direction.y * advance
 	);
 	// Inclinación del labio hacia la costa (frente más empinado/volcable).
@@ -185,8 +195,9 @@ void fragment() {
 		// REGION: color por slot + nariz blanca (dirección); siempre visible.
 		color = breaker_region_color(ribbon_id, breaker_u);
 	} else if (breaker_debug_mode == 3) {
-		// FORCE_LIP: geometría de takeover forzada (env=1), mismo look que LIP.
-		color = mix(vec3(0.05, 0.14, 0.26), vec3(0.82, 0.95, 1.0), breaker_env * breaker_env);
+		// FORCE_LIP: geometría de takeover forzada (env=1) con color emisivo
+		// heat muy evidente para separarla del océano base.
+		color = breaker_heat(breaker_env);
 	} else {
 		alpha = 0.0; // OFF.
 	}
