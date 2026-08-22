@@ -20,9 +20,9 @@ extends Node3D
 
 const LipShader := preload("res://ocean_v3/rendering/shaders/breaker_lip.gdshader")
 
-enum DebugMode { LIP, TAKEOVER, REGION, OFF }
+enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, OFF }
 
-const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "OFF"]
+const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "OFF"]
 const BREAKER_GAMMA := 0.78
 const BREAKER_CREST_U := 0.545
 

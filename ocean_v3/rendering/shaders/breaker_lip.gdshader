@@ -58,7 +58,7 @@ uniform float breaker_lift_fraction = 0.55;
 uniform float breaker_advance_fraction = 0.45;
 uniform float breaker_lip_slope = 0.7;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
-// 0 LIP, 1 TAKEOVER, 2 REGION, 3 OFF.
+// 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
 // Por instancia: cada slot del pool tiene su anchor, dirección, longitud y ancho.
 instance uniform vec2 anchor_xz;
@@ -120,6 +120,11 @@ void vertex() {
 	vec4 local_state = breaking_local_state_at(P0, coast_uv, field_data);
 	float envelope = breaker_envelope(indices.w);
 	float local_hs = local_state.w;
+	// FORCE_LIP (debug): envelope fijado a 1 sólo para ver la geometría de
+	// takeover; no modifica el campo PREBREAK ni es ruta de producción.
+	if (breaker_debug_mode == 3) {
+		envelope = 1.0;
+	}
 
 	// Superficie base: idéntica al clipmap (4 cascadas, warp, shoaling, fades,
 	// composición y band_mask). Con envelope 0 el ribetón queda pegado a la ola
@@ -128,8 +133,14 @@ void vertex() {
 	vec2 slope = surface_slope_break(P0, coast_uv, field_data, dist);
 
 	// Takeover: levantar y ADELANTAR (desplazamiento horizontal, no sólo Y).
-	float lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
-	float advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
+	// REGION (debug) no deforma: muestra la plantilla pegada a la superficie
+	// base para inspeccionar posición/tamaño/orientación/solapamientos.
+	float lift = 0.0;
+	float advance = 0.0;
+	if (breaker_debug_mode != 2) {
+		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
+		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
+	}
 
 	vec3 world_pos = vec3(
 		P0.x + disp.x + direction.x * advance,
@@ -137,12 +148,21 @@ void vertex() {
 		P0.y + disp.z + direction.y * advance
 	);
 	// Inclinación del labio hacia la costa (frente más empinado/volcable).
-	slope += direction * (envelope * breaker_lip_slope);
+	if (breaker_debug_mode != 2) {
+		slope += direction * (envelope * breaker_lip_slope);
+	}
 
 	VERTEX = world_pos;
 	NORMAL = normalize(vec3(-slope.x, 1.0, -slope.y));
 
-	float alpha = envelope * breaker_edge_fade(u, v) * distance_fade(breaker_fade_range_m, dist);
+	// REGION (debug): siempre visible (independiente de PREBREAK/envelope) para
+	// inspeccionar los slots; el resto conserva la envolvente de takeover.
+	float alpha;
+	if (breaker_debug_mode == 2) {
+		alpha = breaker_edge_fade(u, v) * distance_fade(breaker_fade_range_m, dist) * 0.75;
+	} else {
+		alpha = envelope * breaker_edge_fade(u, v) * distance_fade(breaker_fade_range_m, dist);
+	}
 	if (coastal_monochromatic_debug || !module_enabled) {
 		alpha = 0.0; // instrumento mono / módulo apagado: ningún breaker.
 	}
@@ -162,8 +182,11 @@ void fragment() {
 		// TAKEOVER: calor por intensidad de takeover.
 		color = breaker_heat(breaker_env);
 	} else if (breaker_debug_mode == 2) {
-		// REGION: color por slot + nariz blanca (dirección).
+		// REGION: color por slot + nariz blanca (dirección); siempre visible.
 		color = breaker_region_color(ribbon_id, breaker_u);
+	} else if (breaker_debug_mode == 3) {
+		// FORCE_LIP: geometría de takeover forzada (env=1), mismo look que LIP.
+		color = mix(vec3(0.05, 0.14, 0.26), vec3(0.82, 0.95, 1.0), breaker_env * breaker_env);
 	} else {
 		alpha = 0.0; // OFF.
 	}
