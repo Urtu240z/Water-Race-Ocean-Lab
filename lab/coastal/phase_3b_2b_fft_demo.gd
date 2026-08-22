@@ -107,7 +107,7 @@ func _update_status() -> void:
 	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
 	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
 	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
-	_status.text = "PHASE 3B.2B — FFT COMPOSITION DIAGNOSTIC\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nWarp world->deep: %s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text()]
+	_status.text = "PHASE 3B.2B / 3B.3 — FFT + QUERY COASTAL\nC Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nWarp world->deep: %s\n%s\n%s\n%s\n%s" % ["ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text()]
 
 
 func _split_metrics_text() -> String:
@@ -138,6 +138,13 @@ func _fft_diagnostics_text() -> String:
 	var coastal: Dictionary = state["long_coastal"]
 	var remainder: Dictionary = state["long_remainder"]
 	return "FFT LONG: C ready=%s H0=%d disp=%d norm=%d bytes=%d | R ready=%s H0=%d disp=%d norm=%d bytes=%d | distinct C/R disp=%s norm=%s" % ["Y" if coastal["solver_ready"] else "N", coastal["h0_rid"], coastal["published_displacement_rid"], coastal["published_normal_rid"], coastal["h0_upload_bytes"], "Y" if remainder["solver_ready"] else "N", remainder["h0_rid"], remainder["published_displacement_rid"], remainder["published_normal_rid"], remainder["h0_upload_bytes"], "Y" if state["distinct_published_displacement_rid"] else "N", "Y" if state["distinct_published_normal_rid"] else "N"]
+
+
+func _query_coastal_text() -> String:
+	var point := Vector3(-5.0, 0.0, 0.0)
+	var coastal = _ocean.sample_water(point, SimulationClock.simulation_time)
+	var open = _ocean.sample_water_open_reference(point, SimulationClock.simulation_time)
+	return "Query Coastal: %s | probe q=(%+.0f,%+.0f) height coastal=%.5f open=%.5f delta=%+.6f" % ["ON" if _coastal_enabled else "OFF", point.x, point.z, coastal.height, open.height, coastal.height - open.height]
 
 
 func _set_camera_mode(mode: int) -> void:

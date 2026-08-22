@@ -17,6 +17,7 @@ extends RefCounted
 ## acumuladores son miembros reutilizados).
 
 const SampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
+const CoastalRuntimeScript := preload("res://ocean_v3/physics/ocean_query_coastal_runtime.gd")
 
 const MODE_FULL_PAIRS := 0
 const MODE_REDUCED := 1
@@ -50,6 +51,10 @@ class _CascadeData:
 	var f_parity := PackedFloat64Array()
 	var f_weight := PackedFloat64Array()
 	var f_importance := PackedFloat64Array()
+	# 3B.3: pesos de H0 para las dos mitades canónicas +k/-k. No se promedian:
+	# el renderer aplica w(k) a A y w(-k) a B por separado.
+	var f_coastal_weight_pos := PackedFloat64Array()
+	var f_coastal_weight_neg := PackedFloat64Array()
 	# Índices de los pares ordenados por importancia DESC (una vez por espectro).
 	var sorted_indices := PackedInt32Array()
 	# Conjunto compacto seleccionado (usa el evaluador).
@@ -68,11 +73,22 @@ class _CascadeData:
 	var h0_im := PackedFloat64Array()
 	var h0n_re := PackedFloat64Array()
 	var h0n_im := PackedFloat64Array()
+	var coastal_weight_pos := PackedFloat64Array()
+	var coastal_weight_neg := PackedFloat64Array()
 	# Tiempo preparado (ev_h/ev_v por modo).
 	var ev_h_re := PackedFloat64Array()
 	var ev_h_im := PackedFloat64Array()
 	var ev_v_re := PackedFloat64Array()
 	var ev_v_im := PackedFloat64Array()
+	# A/B evolucionados por separado: necesarios para C(q) con w(k),w(-k).
+	var ev_a_h_re := PackedFloat64Array()
+	var ev_a_h_im := PackedFloat64Array()
+	var ev_b_h_re := PackedFloat64Array()
+	var ev_b_h_im := PackedFloat64Array()
+	var ev_a_v_re := PackedFloat64Array()
+	var ev_a_v_im := PackedFloat64Array()
+	var ev_b_v_re := PackedFloat64Array()
+	var ev_b_v_im := PackedFloat64Array()
 	var count := 0
 
 
@@ -83,6 +99,10 @@ var _prepared_time := 0.0
 var _mode := MODE_REDUCED
 var _budgets: Array[int] = [DEFAULT_BUDGET, DEFAULT_BUDGET, DEFAULT_BUDGET]
 var _native_backend: RefCounted = null
+var _coastal_runtime = null
+var _coastal_wind_direction := Vector2.RIGHT
+var _coastal_inner_deg := 20.0
+var _coastal_outer_deg := 35.0
 
 # Diagnóstico (sin push_warning por query).
 var diagnostic_non_converged := 0
@@ -103,13 +123,59 @@ var _acc_vh := 0.0
 var _acc_vx := 0.0
 var _acc_vz := 0.0
 
+# Acumulador reutilizado para C(q) / C(F(q)); no se aloca por query.
+var _coastal_h := 0.0
+var _coastal_dx := 0.0
+var _coastal_dz := 0.0
+var _coastal_dhx := 0.0
+var _coastal_dhz := 0.0
+var _coastal_dxx := 0.0
+var _coastal_dxz := 0.0
+var _coastal_dzx := 0.0
+var _coastal_dzz := 0.0
+var _coastal_vh := 0.0
+var _coastal_vx := 0.0
+var _coastal_vz := 0.0
+
 
 func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByteArray]) -> void:
 	assert(configs.size() == h0_datas.size())
 	_cascades.clear()
 	for index in configs.size():
 		_cascades.append(_decode_cascade(configs[index], h0_datas[index]))
+	if not configs.is_empty():
+		_coastal_wind_direction = configs[0].wind_direction.normalized()
+		_refresh_coastal_long_weights()
 	_rebuild_selection()
+
+
+func configure_coastal(warp_data, propagation_data, inner_deg: float, outer_deg: float,
+		long_wind_direction: Vector2) -> bool:
+	## Se llama sólo tras bake/rebuild coastal; guarda referencias a los arrays
+	## horneados y recalcula pesos sin RNG ni H0 nuevos.
+	var runtime = CoastalRuntimeScript.new()
+	if not runtime.configure(warp_data, propagation_data):
+		clear_coastal()
+		return false
+	_coastal_runtime = runtime
+	_coastal_inner_deg = inner_deg
+	_coastal_outer_deg = outer_deg
+	_coastal_wind_direction = long_wind_direction.normalized()
+	if _coastal_wind_direction.length_squared() <= 1.0e-8:
+		_coastal_wind_direction = Vector2.RIGHT
+	_refresh_coastal_long_weights()
+	_rebuild_selection()
+	return true
+
+
+func clear_coastal() -> void:
+	_coastal_runtime = null
+	_refresh_coastal_long_weights()
+	_rebuild_selection()
+
+
+func coastal_enabled() -> bool:
+	return _coastal_runtime != null and _coastal_runtime.enabled
 
 
 func set_sea_level(sea_level_y: float) -> void:
@@ -209,6 +275,16 @@ func sample_water_prepared(world_position: Vector3):
 	return _sample_world(Vector2(world_position.x, world_position.z))
 
 
+func sample_water_open_reference(world_position: Vector3, simulation_time: float):
+	## Sólo Lab/debug 3B.3: compara la misma query sin corrección coastal, sin
+	## tocar H0 ni el target world. No se usa en la ruta de producción.
+	var saved_runtime = _coastal_runtime
+	_coastal_runtime = null
+	var result = sample_water(world_position, simulation_time)
+	_coastal_runtime = saved_runtime
+	return result
+
+
 func sample_parametric(parametric_position: Vector3, simulation_time: float):
 	## Helper de tests/debug: evalúa en la coordenada paramétrica q directamente
 	## (sin inversión world-space).
@@ -292,6 +368,26 @@ func _build_sample(residual: float, iterations: int, converged: bool):
 ## --- Evaluación paramétrica (acumuladores miembro) ----------------------------
 
 func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: float) -> void:
+	# El sampler se evalúa sobre q, dentro de Newton. c=0 conserva el hot path
+	# open-ocean: no se evalúa C(q) ni C(F(q)).
+	var coastal_confidence := 0.0
+	var coastal_shoaling := 1.0
+	var coastal_deep_x := qx
+	var coastal_deep_z := qz
+	var coastal_j00 := 1.0
+	var coastal_j01 := 0.0
+	var coastal_j10 := 0.0
+	var coastal_j11 := 1.0
+	if _coastal_runtime != null and _coastal_runtime.enabled:
+		coastal_confidence = _coastal_runtime.sample(qx, qz)
+		if coastal_confidence > 0.0:
+			coastal_shoaling = _coastal_runtime.effective_shoaling
+			coastal_deep_x = _coastal_runtime.deep_sample_x
+			coastal_deep_z = _coastal_runtime.deep_sample_z
+			coastal_j00 = _coastal_runtime.sample_j00
+			coastal_j01 = _coastal_runtime.sample_j01
+			coastal_j10 = _coastal_runtime.sample_j10
+			coastal_j11 = _coastal_runtime.sample_j11
 	var total_h := 0.0
 	var total_dx := 0.0
 	var total_dz := 0.0
@@ -327,6 +423,14 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		var ev_hi_arr := cascade.ev_h_im
 		var ev_vr_arr := cascade.ev_v_re
 		var ev_vi_arr := cascade.ev_v_im
+		var ev_ahr_arr := cascade.ev_a_h_re
+		var ev_ahi_arr := cascade.ev_a_h_im
+		var ev_bhr_arr := cascade.ev_b_h_re
+		var ev_bhi_arr := cascade.ev_b_h_im
+		var ev_avr_arr := cascade.ev_a_v_re
+		var ev_avi_arr := cascade.ev_a_v_im
+		var ev_bvr_arr := cascade.ev_b_v_re
+		var ev_bvi_arr := cascade.ev_b_v_im
 		var lh := 0.0
 		var ldx := 0.0
 		var ldz := 0.0
@@ -394,6 +498,42 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		total_vx += lvx * inv_n2
 		total_vz += lvz * inv_n2
 
+	if coastal_confidence > 0.0:
+		# LONG_eff = LONG + S_eff*((1-c) C(q) + c C(F(q))) - C(q).
+		# c/S se tratan constantes en la derivada local (misma aproximación
+		# explícita del renderer); la posición sí los remuestrea por iteración.
+		_accumulate_coastal_long(qx, qz, use_prepared, simulation_time)
+		var cq_h := _coastal_h
+		var cq_dx := _coastal_dx
+		var cq_dz := _coastal_dz
+		var cq_dhx := _coastal_dhx
+		var cq_dhz := _coastal_dhz
+		var cq_dxx := _coastal_dxx
+		var cq_dxz := _coastal_dxz
+		var cq_dzx := _coastal_dzx
+		var cq_dzz := _coastal_dzz
+		var cq_vh := _coastal_vh
+		var cq_vx := _coastal_vx
+		var cq_vz := _coastal_vz
+		_accumulate_coastal_long(coastal_deep_x, coastal_deep_z, use_prepared, simulation_time)
+		var blend_open := 1.0 - coastal_confidence
+		var blend_deep := coastal_confidence
+		var scaled_open := coastal_shoaling * blend_open
+		var scaled_deep := coastal_shoaling * blend_deep
+		total_h += scaled_open * cq_h + scaled_deep * _coastal_h - cq_h
+		total_dx += scaled_open * cq_dx + scaled_deep * _coastal_dx - cq_dx
+		total_dz += scaled_open * cq_dz + scaled_deep * _coastal_dz - cq_dz
+		total_vh += scaled_open * cq_vh + scaled_deep * _coastal_vh - cq_vh
+		total_vx += scaled_open * cq_vx + scaled_deep * _coastal_vx - cq_vx
+		total_vz += scaled_open * cq_vz + scaled_deep * _coastal_vz - cq_vz
+		# grad h_world = J^T grad h_deep; derivative D_world = derivative D_deep * J.
+		total_dhx += scaled_open * cq_dhx + scaled_deep * (coastal_j00 * _coastal_dhx + coastal_j10 * _coastal_dhz) - cq_dhx
+		total_dhz += scaled_open * cq_dhz + scaled_deep * (coastal_j01 * _coastal_dhx + coastal_j11 * _coastal_dhz) - cq_dhz
+		total_dxx += scaled_open * cq_dxx + scaled_deep * (_coastal_dxx * coastal_j00 + _coastal_dxz * coastal_j10) - cq_dxx
+		total_dxz += scaled_open * cq_dxz + scaled_deep * (_coastal_dxx * coastal_j01 + _coastal_dxz * coastal_j11) - cq_dxz
+		total_dzx += scaled_open * cq_dzx + scaled_deep * (_coastal_dzx * coastal_j00 + _coastal_dzz * coastal_j10) - cq_dzx
+		total_dzz += scaled_open * cq_dzz + scaled_deep * (_coastal_dzx * coastal_j01 + _coastal_dzz * coastal_j11) - cq_dzz
+
 	_acc_h = total_h
 	_acc_dx = total_dx
 	_acc_dz = total_dz
@@ -406,6 +546,106 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 	_acc_vh = total_vh
 	_acc_vx = total_vx
 	_acc_vz = total_vz
+
+
+func _accumulate_coastal_long(qx: float, qz: float, use_prepared: bool, simulation_time: float) -> void:
+	## Evalúa sólo C de LONG. A/B se ponderan individualmente con w(k), w(-k),
+	## igual que build_h0_split_rgba32f antes de reconstruir los pares canónicos.
+	_coastal_h = 0.0
+	_coastal_dx = 0.0
+	_coastal_dz = 0.0
+	_coastal_dhx = 0.0
+	_coastal_dhz = 0.0
+	_coastal_dxx = 0.0
+	_coastal_dxz = 0.0
+	_coastal_dzx = 0.0
+	_coastal_dzz = 0.0
+	_coastal_vh = 0.0
+	_coastal_vx = 0.0
+	_coastal_vz = 0.0
+	if _cascades.is_empty():
+		return
+	var cascade: _CascadeData = _cascades[0]
+	var lh := 0.0
+	var ldx := 0.0
+	var ldz := 0.0
+	var ldhx := 0.0
+	var ldhz := 0.0
+	var ldxx := 0.0
+	var ldxz := 0.0
+	var ldzx := 0.0
+	var ldzz := 0.0
+	var lvh := 0.0
+	var lvx := 0.0
+	var lvz := 0.0
+	for idx in cascade.count:
+		var a_hr := 0.0
+		var a_hi := 0.0
+		var b_hr := 0.0
+		var b_hi := 0.0
+		var a_vr := 0.0
+		var a_vi := 0.0
+		var b_vr := 0.0
+		var b_vi := 0.0
+		if use_prepared:
+			a_hr = cascade.ev_a_h_re[idx]
+			a_hi = cascade.ev_a_h_im[idx]
+			b_hr = cascade.ev_b_h_re[idx]
+			b_hi = cascade.ev_b_h_im[idx]
+			a_vr = cascade.ev_a_v_re[idx]
+			a_vi = cascade.ev_a_v_im[idx]
+			b_vr = cascade.ev_b_v_re[idx]
+			b_vi = cascade.ev_b_v_im[idx]
+		else:
+			var wt := cascade.omega[idx] * simulation_time
+			var c := cos(wt)
+			var sn := sin(wt)
+			a_hr = cascade.h0_re[idx] * c - cascade.h0_im[idx] * sn
+			a_hi = cascade.h0_re[idx] * sn + cascade.h0_im[idx] * c
+			b_hr = cascade.h0n_re[idx] * c + cascade.h0n_im[idx] * sn
+			b_hi = -cascade.h0n_re[idx] * sn + cascade.h0n_im[idx] * c
+			a_vr = -cascade.omega[idx] * a_hi
+			a_vi = cascade.omega[idx] * a_hr
+			b_vr = cascade.omega[idx] * b_hi
+			b_vi = -cascade.omega[idx] * b_hr
+		var wp := cascade.coastal_weight_pos[idx]
+		var wn := cascade.coastal_weight_neg[idx]
+		var h_re := wp * a_hr + wn * b_hr
+		var h_im := wp * a_hi + wn * b_hi
+		var v_re := wp * a_vr + wn * b_vr
+		var v_im := wp * a_vi + wn * b_vi
+		var phi := cascade.kx[idx] * qx + cascade.ky[idx] * qz
+		var cp := cos(phi)
+		var sp := sin(phi)
+		var p_re := h_re * cp - h_im * sp
+		var p_im := h_re * sp + h_im * cp
+		var q_re := v_re * cp - v_im * sp
+		var q_im := v_re * sp + v_im * cp
+		var sig := cascade.parity[idx] * cascade.weight[idx]
+		lh += sig * p_re
+		ldx += sig * cascade.a1[idx] * p_im
+		ldz += sig * cascade.a2[idx] * p_im
+		ldhx += sig * -cascade.kx[idx] * p_im
+		ldhz += sig * -cascade.ky[idx] * p_im
+		ldxx += sig * cascade.c11[idx] * p_re
+		ldxz += sig * cascade.c12[idx] * p_re
+		ldzx += sig * cascade.c21[idx] * p_re
+		ldzz += sig * cascade.c22[idx] * p_re
+		lvh += sig * q_re
+		lvx += sig * cascade.a1[idx] * q_im
+		lvz += sig * cascade.a2[idx] * q_im
+	_coastal_h = lh * cascade.inv_n2
+	_coastal_dx = ldx * cascade.inv_n2
+	_coastal_dz = ldz * cascade.inv_n2
+	_coastal_dhx = ldhx * cascade.inv_n2
+	_coastal_dhz = ldhz * cascade.inv_n2
+	_coastal_dxx = ldxx * cascade.inv_n2
+	_coastal_dxz = ldxz * cascade.inv_n2
+	_coastal_dzx = ldzx * cascade.inv_n2
+	_coastal_dzz = ldzz * cascade.inv_n2
+	_coastal_vh = lvh * cascade.inv_n2
+	_coastal_vx = lvx * cascade.inv_n2
+	_coastal_vz = lvz * cascade.inv_n2
 
 
 func _prepare_time(simulation_time: float) -> void:
@@ -422,6 +662,14 @@ func _prepare_time(simulation_time: float) -> void:
 		var ev_hi_arr := cascade.ev_h_im
 		var ev_vr_arr := cascade.ev_v_re
 		var ev_vi_arr := cascade.ev_v_im
+		var ev_ahr_arr := cascade.ev_a_h_re
+		var ev_ahi_arr := cascade.ev_a_h_im
+		var ev_bhr_arr := cascade.ev_b_h_re
+		var ev_bhi_arr := cascade.ev_b_h_im
+		var ev_avr_arr := cascade.ev_a_v_re
+		var ev_avi_arr := cascade.ev_a_v_im
+		var ev_bvr_arr := cascade.ev_b_v_re
+		var ev_bvi_arr := cascade.ev_b_v_im
 		for idx in count:
 			var wt := om_arr[idx] * simulation_time
 			var c := cos(wt)
@@ -434,9 +682,44 @@ func _prepare_time(simulation_time: float) -> void:
 			ev_hi_arr[idx] = a_im + b_im
 			ev_vr_arr[idx] = om_arr[idx] * (-a_im + b_im)
 			ev_vi_arr[idx] = om_arr[idx] * (a_re - b_re)
+			ev_ahr_arr[idx] = a_re
+			ev_ahi_arr[idx] = a_im
+			ev_bhr_arr[idx] = b_re
+			ev_bhi_arr[idx] = b_im
+			ev_avr_arr[idx] = -om_arr[idx] * a_im
+			ev_avi_arr[idx] = om_arr[idx] * a_re
+			ev_bvr_arr[idx] = om_arr[idx] * b_im
+			ev_bvi_arr[idx] = -om_arr[idx] * b_re
 
 
 ## --- Selección ----------------------------------------------------------------
+
+func _refresh_coastal_long_weights() -> void:
+	if _cascades.is_empty():
+		return
+	var long_cascade: _CascadeData = _cascades[0]
+	var active: bool = _coastal_runtime != null and _coastal_runtime.enabled
+	for index in long_cascade.f_kx.size():
+		if active:
+			long_cascade.f_coastal_weight_pos[index] = _coastal_angular_weight(long_cascade.f_kx[index], long_cascade.f_ky[index])
+			long_cascade.f_coastal_weight_neg[index] = _coastal_angular_weight(-long_cascade.f_kx[index], -long_cascade.f_ky[index])
+		else:
+			long_cascade.f_coastal_weight_pos[index] = 0.0
+			long_cascade.f_coastal_weight_neg[index] = 0.0
+
+
+func _coastal_angular_weight(kx: float, ky: float) -> float:
+	var k_len := sqrt(kx * kx + ky * ky)
+	if k_len <= 1.0e-6:
+		return 1.0
+	var dot_wind := clampf((kx * _coastal_wind_direction.x + ky * _coastal_wind_direction.y) / k_len, -1.0, 1.0)
+	var angle_deg := rad_to_deg(acos(dot_wind))
+	if angle_deg <= _coastal_inner_deg:
+		return 1.0
+	if angle_deg >= _coastal_outer_deg:
+		return 0.0
+	var t := (angle_deg - _coastal_inner_deg) / maxf(_coastal_outer_deg - _coastal_inner_deg, 1.0e-6)
+	return 1.0 - smoothstep(0.0, 1.0, t)
 
 func _rebuild_selection() -> void:
 	for index in _cascades.size():
@@ -474,6 +757,8 @@ func get_cascades_compact() -> Array:
 			"parity": cascade.parity, "weight": cascade.weight,
 			"h0_re": cascade.h0_re, "h0_im": cascade.h0_im,
 			"h0n_re": cascade.h0n_re, "h0n_im": cascade.h0n_im,
+			"coastal_weight_pos": cascade.coastal_weight_pos,
+			"coastal_weight_neg": cascade.coastal_weight_neg,
 		})
 	return result
 
@@ -491,6 +776,17 @@ func _sync_native() -> void:
 			cascade.c11, cascade.c12, cascade.c21, cascade.c22,
 			cascade.parity, cascade.weight,
 			cascade.h0_re, cascade.h0_im, cascade.h0n_re, cascade.h0n_im)
+	if _coastal_runtime != null and _coastal_runtime.enabled and not _cascades.is_empty() and _native_backend.has_method(&"set_coastal_runtime"):
+		var long_cascade: _CascadeData = _cascades[0]
+		_native_backend.set_coastal_long_weights(long_cascade.coastal_weight_pos, long_cascade.coastal_weight_neg)
+		_native_backend.set_coastal_runtime(
+			_coastal_runtime.origin_x, _coastal_runtime.origin_z, _coastal_runtime.width, _coastal_runtime.height,
+			_coastal_runtime.cell_size, _coastal_runtime.detj_safe_threshold,
+			_coastal_runtime.deep_x, _coastal_runtime.deep_z, _coastal_runtime.det_j,
+			_coastal_runtime.j00, _coastal_runtime.j01, _coastal_runtime.j10, _coastal_runtime.j11,
+			_coastal_runtime.warp_valid, _coastal_runtime.shoaling, _coastal_runtime.propagation_valid)
+	elif _native_backend.has_method(&"clear_coastal"):
+		_native_backend.clear_coastal()
 	_native_backend.finalize_spectrum()
 
 
@@ -523,10 +819,20 @@ func _compact_cascade(cascade: _CascadeData, budget: int) -> void:
 	cascade.h0_im.resize(count)
 	cascade.h0n_re.resize(count)
 	cascade.h0n_im.resize(count)
+	cascade.coastal_weight_pos.resize(count)
+	cascade.coastal_weight_neg.resize(count)
 	cascade.ev_h_re.resize(count)
 	cascade.ev_h_im.resize(count)
 	cascade.ev_v_re.resize(count)
 	cascade.ev_v_im.resize(count)
+	cascade.ev_a_h_re.resize(count)
+	cascade.ev_a_h_im.resize(count)
+	cascade.ev_b_h_re.resize(count)
+	cascade.ev_b_h_im.resize(count)
+	cascade.ev_a_v_re.resize(count)
+	cascade.ev_a_v_im.resize(count)
+	cascade.ev_b_v_re.resize(count)
+	cascade.ev_b_v_im.resize(count)
 	var lambda := cascade.lambda
 	for s in count:
 		var i := selected[s]
@@ -552,6 +858,8 @@ func _compact_cascade(cascade: _CascadeData, budget: int) -> void:
 		cascade.h0_im[s] = cascade.f_h0_im[i]
 		cascade.h0n_re[s] = cascade.f_h0n_re[i]
 		cascade.h0n_im[s] = cascade.f_h0n_im[i]
+		cascade.coastal_weight_pos[s] = cascade.f_coastal_weight_pos[i]
+		cascade.coastal_weight_neg[s] = cascade.f_coastal_weight_neg[i]
 	cascade.count = count
 
 
@@ -609,6 +917,8 @@ func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _
 			result.f_h0n_im.append(h0n_im)
 			result.f_parity.append(parity)
 			result.f_weight.append(weight)
+			result.f_coastal_weight_pos.append(0.0)
+			result.f_coastal_weight_neg.append(0.0)
 	_compute_importance(result)
 	return result
 

@@ -8,6 +8,8 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 #include <godot_cpp/variant/string.hpp>
@@ -48,6 +50,16 @@ public:
         const PackedFloat64Array &h0n_re, const PackedFloat64Array &h0n_im);
 
     void finalize_spectrum();
+    void set_coastal_long_weights(const PackedFloat64Array &pos, const PackedFloat64Array &neg);
+    void set_coastal_runtime(double origin_x, double origin_z, int width, int height,
+                             double cell_size, double detj_safe,
+                             const PackedFloat32Array &deep_x, const PackedFloat32Array &deep_z,
+                             const PackedFloat32Array &det_j,
+                             const PackedFloat32Array &j00, const PackedFloat32Array &j01,
+                             const PackedFloat32Array &j10, const PackedFloat32Array &j11,
+                             const PackedByteArray &warp_valid, const PackedFloat32Array &shoaling,
+                             const PackedByteArray &propagation_valid);
+    void clear_coastal();
     void ensure_prepared(double simulation_time);
 
     PackedFloat64Array sample_world(double wx, double wz, double simulation_time);

@@ -242,7 +242,7 @@ func sea_state_name() -> String:
 func sample_water(world_position: Vector3, simulation_time: float):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		return _native_to_sample(_query_native.sample_world(world_position.x, world_position.z, simulation_time))
 	if _query_reduced != null:
 		return _query_reduced.sample_water(world_position, simulation_time)
@@ -252,7 +252,7 @@ func sample_water(world_position: Vector3, simulation_time: float):
 func sample_water_physics_time(world_position: Vector3):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		_query_native.ensure_prepared(SimulationClock.simulation_time)
 		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
 	if _query_reduced != null:
@@ -269,7 +269,7 @@ func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
 		for index in positions.size():
 			flat_result[index] = flat
 		return flat_result
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		_query_native.ensure_prepared(SimulationClock.simulation_time)
 		var packed := PackedVector3Array()
 		packed.resize(positions.size())
@@ -288,7 +288,7 @@ func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
 
 
 func prepare_query_time(simulation_time: float) -> void:
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		_query_native.ensure_prepared(simulation_time)
 	if _query_reduced != null:
 		_query_reduced.prepare_time(simulation_time)
@@ -299,10 +299,17 @@ func prepare_query_time(simulation_time: float) -> void:
 func sample_water_prepared(world_position: Vector3):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
 	if _query_reduced != null:
 		return _query_reduced.sample_water_prepared(world_position)
+	return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+
+
+func sample_water_open_reference(world_position: Vector3, simulation_time: float):
+	## Instrumento de Lab 3B.3; la producción usa sample_water().
+	if _query_reduced != null:
+		return _query_reduced.sample_water_open_reference(world_position, simulation_time)
 	return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
 
 
@@ -322,9 +329,20 @@ func sample_water_golden_prepared(world_position: Vector3):
 
 
 func query_backend_name() -> String:
-	if _query_native != null:
+	if _native_query_can_sample_coastal():
 		return "NATIVE"
 	return "REDUCED_GDSCRIPT"
+
+
+func _native_query_can_sample_coastal() -> bool:
+	## Durante un hot reload con una DLL anterior, coastal conserva corrección
+	## GDScript en vez de declarar falsamente paridad native. Tras rebuild la
+	## DLL expone el método y vuelve a NATIVE+AVX2 sin cambiar API pública.
+	if _query_native == null:
+		return false
+	if _query_reduced == null or not _query_reduced.coastal_enabled():
+		return true
+	return _query_native.has_method(&"set_coastal_runtime")
 
 
 func _try_create_native_backend():
@@ -377,6 +395,8 @@ func rebuild_coastal_propagation() -> bool:
 	## Operación explícita/development-time; nunca se ejecuta por query ni frame.
 	_coastal_propagation = null
 	_coastal_warp = null
+	if _query_reduced != null:
+		_query_reduced.clear_coastal()
 	surface.set_coastal_warp(null)
 	# El mono de diagnóstico necesita k0/omega aun con la transformación OFF:
 	# así C compara la misma onda profunda contra la onda costeña. En uso normal
@@ -416,6 +436,11 @@ func rebuild_coastal_propagation() -> bool:
 		warp_baker.backtrace_step_cells = 0.5
 		_coastal_warp = warp_baker.bake()
 		surface.set_coastal_warp(_coastal_warp, _coastal_warp != null)
+		# 3B.3: la query física configura la misma superficie paramétrica que el
+		# renderer. El sampler se evalúa sobre q durante Newton, nunca sobre world.
+		if _coastal_warp != null and _query_reduced != null:
+			_query_reduced.configure_coastal(_coastal_warp, _coastal_propagation,
+				coastal_split_inner_deg, coastal_split_outer_deg, coastal_long_reference_direction())
 	# El campo 2D no se aplica al FFT: sólo el shader mono consume phi(x,z).
 	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, fft_transform_enabled, coastal_eikonal_refraction_debug and coastal_propagation_enabled)
 	return coastal_propagation_enabled

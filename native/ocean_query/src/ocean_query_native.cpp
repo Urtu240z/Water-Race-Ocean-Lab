@@ -6,6 +6,8 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
@@ -24,6 +26,9 @@ void OceanQueryNative::_bind_methods() {
                                   "h0_re", "h0_im", "h0n_re", "h0n_im"),
                          &OceanQueryNative::set_cascade_data);
     ClassDB::bind_method(D_METHOD("finalize_spectrum"), &OceanQueryNative::finalize_spectrum);
+    ClassDB::bind_method(D_METHOD("set_coastal_long_weights", "pos", "neg"), &OceanQueryNative::set_coastal_long_weights);
+    ClassDB::bind_method(D_METHOD("set_coastal_runtime", "origin_x", "origin_z", "width", "height", "cell_size", "detj_safe", "deep_x", "deep_z", "det_j", "j00", "j01", "j10", "j11", "warp_valid", "shoaling", "propagation_valid"), &OceanQueryNative::set_coastal_runtime);
+    ClassDB::bind_method(D_METHOD("clear_coastal"), &OceanQueryNative::clear_coastal);
     ClassDB::bind_method(D_METHOD("ensure_prepared", "simulation_time"), &OceanQueryNative::ensure_prepared);
     ClassDB::bind_method(D_METHOD("sample_world", "wx", "wz", "simulation_time"), &OceanQueryNative::sample_world);
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
@@ -72,6 +77,41 @@ void OceanQueryNative::set_cascade_data(
 void OceanQueryNative::finalize_spectrum() {
     core_.finalize_spectrum();
 }
+
+void OceanQueryNative::set_coastal_long_weights(const PackedFloat64Array &pos, const PackedFloat64Array &neg) {
+    if (pos.size() != neg.size()) { core_.clear_coastal(); return; }
+    core_.set_coastal_long_weights(pos.ptr(), neg.ptr(), static_cast<size_t>(pos.size()));
+}
+
+void OceanQueryNative::set_coastal_runtime(double origin_x, double origin_z, int width, int height,
+                                           double cell_size, double detj_safe,
+                                           const PackedFloat32Array &deep_x, const PackedFloat32Array &deep_z,
+                                           const PackedFloat32Array &det_j,
+                                           const PackedFloat32Array &j00, const PackedFloat32Array &j01,
+                                           const PackedFloat32Array &j10, const PackedFloat32Array &j11,
+                                           const PackedByteArray &warp_valid, const PackedFloat32Array &shoaling,
+                                           const PackedByteArray &propagation_valid) {
+    const size_t count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (width < 2 || height < 2 || deep_x.size() != static_cast<int64_t>(count) || deep_z.size() != static_cast<int64_t>(count)
+        || det_j.size() != static_cast<int64_t>(count) || j00.size() != static_cast<int64_t>(count)
+        || j01.size() != static_cast<int64_t>(count) || j10.size() != static_cast<int64_t>(count) || j11.size() != static_cast<int64_t>(count)
+        || shoaling.size() != static_cast<int64_t>(count) || warp_valid.size() != static_cast<int64_t>(count)
+        || propagation_valid.size() != static_cast<int64_t>(count)) { core_.clear_coastal(); return; }
+    const auto copy_f32 = [count](const PackedFloat32Array &src) {
+        std::vector<double> dst(count);
+        const float *in = src.ptr();
+        for (size_t i = 0; i < count; ++i) { dst[i] = static_cast<double>(in[i]); }
+        return dst;
+    };
+    const std::vector<double> dx = copy_f32(deep_x), dz = copy_f32(deep_z), det = copy_f32(det_j);
+    const std::vector<double> a = copy_f32(j00), b = copy_f32(j01), c = copy_f32(j10), d = copy_f32(j11), sh = copy_f32(shoaling);
+    core_.set_coastal_runtime(origin_x, origin_z, width, height, cell_size, detj_safe,
+                              dx.data(), dz.data(), det.data(), a.data(), b.data(), c.data(), d.data(),
+                              reinterpret_cast<const uint8_t *>(warp_valid.ptr()), sh.data(),
+                              reinterpret_cast<const uint8_t *>(propagation_valid.ptr()), count);
+}
+
+void OceanQueryNative::clear_coastal() { core_.clear_coastal(); }
 
 void OceanQueryNative::ensure_prepared(double simulation_time) {
     core_.ensure_prepared(simulation_time);

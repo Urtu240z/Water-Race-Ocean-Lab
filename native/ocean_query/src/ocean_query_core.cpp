@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 #if defined(_M_X64) || defined(_M_IX86)
 #include <intrin.h>
@@ -15,6 +16,20 @@
 namespace oq {
 
 namespace {
+
+inline double smoothstep01(double edge0, double edge1, double x) {
+    if (edge1 <= edge0) { return x > edge0 ? 1.0 : 0.0; }
+    const double t = std::max(0.0, std::min(1.0, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+inline double bilinear(const std::vector<double> &values, size_t i00, size_t i10, size_t i01, size_t i11, double tx, double tz) {
+    return (1.0 - tz) * ((1.0 - tx) * values[i00] + tx * values[i10]) + tz * ((1.0 - tx) * values[i01] + tx * values[i11]);
+}
+
+inline double bilinear_byte(const std::vector<uint8_t> &values, size_t i00, size_t i10, size_t i01, size_t i11, double tx, double tz) {
+    return (1.0 - tz) * ((1.0 - tx) * static_cast<double>(values[i00]) + tx * static_cast<double>(values[i10])) + tz * ((1.0 - tx) * static_cast<double>(values[i01]) + tx * static_cast<double>(values[i11]));
+}
 
 // Compilado en la TU scalar: esta función no contiene AVX y es segura antes
 // del dispatch. AVX requiere CPU, OSXSAVE y XMM/YMM habilitados por el SO.
@@ -37,6 +52,34 @@ bool detect_avx2_runtime() {
 }
 
 } // namespace
+
+bool CoastalRuntime::sample(double qx, double qz, CoastalSample &out) const {
+    out.deep_x = qx; out.deep_z = qz; out.confidence = 0.0; out.effective_shoaling = 1.0;
+    out.j00 = 1.0; out.j01 = 0.0; out.j10 = 0.0; out.j11 = 1.0;
+    if (!enabled || width < 2 || height < 2 || cell_size <= 0.0) { return false; }
+    const double gx = (qx - origin_x) / cell_size, gz = (qz - origin_z) / cell_size;
+    if (gx < 0.0 || gz < 0.0 || gx > static_cast<double>(width - 1) || gz > static_cast<double>(height - 1)) { return false; }
+    const int x0 = std::min(static_cast<int>(std::floor(gx)), width - 2);
+    const int z0 = std::min(static_cast<int>(std::floor(gz)), height - 2);
+    const double tx = gx - static_cast<double>(x0), tz = gz - static_cast<double>(z0);
+    const size_t i00 = static_cast<size_t>(z0 * width + x0), i10 = i00 + 1, i01 = i00 + static_cast<size_t>(width), i11 = i01 + 1;
+    // has_coastal_data(): alpha linear del field > 0.5, igual que shader.
+    if (bilinear_byte(propagation_valid, i00, i10, i01, i11, tx, tz) <= 0.5) { return false; }
+    out.deep_x = bilinear(deep_x, i00, i10, i01, i11, tx, tz);
+    out.deep_z = bilinear(deep_z, i00, i10, i01, i11, tx, tz);
+    out.j00 = bilinear(j00, i00, i10, i01, i11, tx, tz);
+    out.j01 = bilinear(j01, i00, i10, i01, i11, tx, tz);
+    out.j10 = bilinear(j10, i00, i10, i01, i11, tx, tz);
+    out.j11 = bilinear(j11, i00, i10, i01, i11, tx, tz);
+    out.confidence = smoothstep01(0.0, detj_safe, bilinear(det_j, i00, i10, i01, i11, tx, tz));
+    out.confidence *= bilinear_byte(warp_valid, i00, i10, i01, i11, tx, tz);
+    if (out.confidence <= 0.0) {
+        out.deep_x = qx; out.deep_z = qz; out.j00 = 1.0; out.j01 = 0.0; out.j10 = 0.0; out.j11 = 1.0;
+        return false;
+    }
+    out.effective_shoaling = 1.0 + (bilinear(shoaling, i00, i10, i01, i11, tx, tz) - 1.0) * out.confidence;
+    return true;
+}
 
 void BatchWorkspace::ensure_capacity(size_t required) {
     if (required <= capacity) {
@@ -96,8 +139,37 @@ void OceanQueryCore::finalize_spectrum() {
         c.ev_h_im.assign(count, 0.0);
         c.ev_v_re.assign(count, 0.0);
         c.ev_v_im.assign(count, 0.0);
+        c.ev_a_h_re.assign(count, 0.0); c.ev_a_h_im.assign(count, 0.0);
+        c.ev_b_h_re.assign(count, 0.0); c.ev_b_h_im.assign(count, 0.0);
+        c.ev_a_v_re.assign(count, 0.0); c.ev_a_v_im.assign(count, 0.0);
+        c.ev_b_v_re.assign(count, 0.0); c.ev_b_v_im.assign(count, 0.0);
     }
     prepared_valid = false;
+}
+
+void OceanQueryCore::set_coastal_long_weights(const double *pos, const double *neg, size_t count) {
+    if (cascades.empty()) { return; }
+    Cascade &c = cascades[0];
+    if (count != c.kx.size()) { coastal.clear(); return; }
+    c.coastal_weight_pos.assign(pos, pos + count);
+    c.coastal_weight_neg.assign(neg, neg + count);
+}
+
+void OceanQueryCore::set_coastal_runtime(double origin_x, double origin_z, int width, int height,
+                                         double cell_size, double detj_safe,
+                                         const double *deep_x, const double *deep_z, const double *det_j,
+                                         const double *j00, const double *j01, const double *j10, const double *j11,
+                                         const uint8_t *warp_valid, const double *shoaling,
+                                         const uint8_t *propagation_valid, size_t count) {
+    if (width < 2 || height < 2 || cell_size <= 0.0 || count != static_cast<size_t>(width * height)) { coastal.clear(); return; }
+    coastal.origin_x = origin_x; coastal.origin_z = origin_z; coastal.width = width; coastal.height = height;
+    coastal.cell_size = cell_size; coastal.detj_safe = detj_safe;
+    coastal.deep_x.assign(deep_x, deep_x + count); coastal.deep_z.assign(deep_z, deep_z + count);
+    coastal.det_j.assign(det_j, det_j + count); coastal.j00.assign(j00, j00 + count);
+    coastal.j01.assign(j01, j01 + count); coastal.j10.assign(j10, j10 + count); coastal.j11.assign(j11, j11 + count);
+    coastal.warp_valid.assign(warp_valid, warp_valid + count); coastal.shoaling.assign(shoaling, shoaling + count);
+    coastal.propagation_valid.assign(propagation_valid, propagation_valid + count);
+    coastal.enabled = true;
 }
 
 void OceanQueryCore::ensure_prepared(double simulation_time) {
@@ -120,6 +192,10 @@ void OceanQueryCore::ensure_prepared(double simulation_time) {
             c.ev_h_im[idx] = a_im + b_im;
             c.ev_v_re[idx] = c.omega[idx] * (-a_im + b_im);
             c.ev_v_im[idx] = c.omega[idx] * (a_re - b_re);
+            c.ev_a_h_re[idx] = a_re; c.ev_a_h_im[idx] = a_im;
+            c.ev_b_h_re[idx] = b_re; c.ev_b_h_im[idx] = b_im;
+            c.ev_a_v_re[idx] = -c.omega[idx] * a_im; c.ev_a_v_im[idx] = c.omega[idx] * a_re;
+            c.ev_b_v_re[idx] = c.omega[idx] * b_im; c.ev_b_v_im[idx] = -c.omega[idx] * b_re;
         }
     }
 }
@@ -196,6 +272,9 @@ void OceanQueryCore::accumulate_(double qx, double qz, bool use_prepared, double
         total_vz += lvz * inv_n2;
     }
 
+    apply_coastal_correction_(qx, qz, use_prepared, sim_time, total_h, total_dx, total_dz,
+                              total_dhx, total_dhz, total_dxx, total_dxz, total_dzx, total_dzz,
+                              total_vh, total_vx, total_vz);
     h = total_h;
     dx = total_dx;
     dz = total_dz;
@@ -208,6 +287,71 @@ void OceanQueryCore::accumulate_(double qx, double qz, bool use_prepared, double
     vh = total_vh;
     vx = total_vx;
     vz = total_vz;
+}
+
+void OceanQueryCore::accumulate_coastal_long_(double qx, double qz, bool use_prepared, double sim_time,
+                                              double &h, double &dx, double &dz,
+                                              double &dhx, double &dhz,
+                                              double &dxx, double &dxz, double &dzx, double &dzz,
+                                              double &vh, double &vx, double &vz) const {
+    h = dx = dz = dhx = dhz = dxx = dxz = dzx = dzz = vh = vx = vz = 0.0;
+    if (cascades.empty()) { return; }
+    const Cascade &c = cascades[0];
+    if (c.coastal_weight_pos.size() != c.kx.size() || c.coastal_weight_neg.size() != c.kx.size()) { return; }
+    double lh = 0.0, ldx = 0.0, ldz = 0.0, ldhx = 0.0, ldhz = 0.0;
+    double ldxx = 0.0, ldxz = 0.0, ldzx = 0.0, ldzz = 0.0, lvh = 0.0, lvx = 0.0, lvz = 0.0;
+    for (size_t idx = 0; idx < c.kx.size(); ++idx) {
+        double ahr, ahi, bhr, bhi, avr, avi, bvr, bvi;
+        if (use_prepared) {
+            ahr = c.ev_a_h_re[idx]; ahi = c.ev_a_h_im[idx]; bhr = c.ev_b_h_re[idx]; bhi = c.ev_b_h_im[idx];
+            avr = c.ev_a_v_re[idx]; avi = c.ev_a_v_im[idx]; bvr = c.ev_b_v_re[idx]; bvi = c.ev_b_v_im[idx];
+        } else {
+            const double wt = c.omega[idx] * sim_time, cw = std::cos(wt), sw = std::sin(wt);
+            ahr = c.h0_re[idx] * cw - c.h0_im[idx] * sw; ahi = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+            bhr = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw; bhi = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+            avr = -c.omega[idx] * ahi; avi = c.omega[idx] * ahr;
+            bvr = c.omega[idx] * bhi; bvi = -c.omega[idx] * bhr;
+        }
+        const double hr = c.coastal_weight_pos[idx] * ahr + c.coastal_weight_neg[idx] * bhr;
+        const double hi = c.coastal_weight_pos[idx] * ahi + c.coastal_weight_neg[idx] * bhi;
+        const double vr = c.coastal_weight_pos[idx] * avr + c.coastal_weight_neg[idx] * bvr;
+        const double vi = c.coastal_weight_pos[idx] * avi + c.coastal_weight_neg[idx] * bvi;
+        const double phi = c.kx[idx] * qx + c.ky[idx] * qz, cp = std::cos(phi), sp = std::sin(phi);
+        const double pre = hr * cp - hi * sp, pim = hr * sp + hi * cp;
+        const double qre = vr * cp - vi * sp, qim = vr * sp + vi * cp;
+        const double sig = c.parity[idx] * c.weight[idx];
+        lh += sig * pre; ldx += sig * c.a1[idx] * pim; ldz += sig * c.a2[idx] * pim;
+        ldhx += sig * -c.kx[idx] * pim; ldhz += sig * -c.ky[idx] * pim;
+        ldxx += sig * c.c11[idx] * pre; ldxz += sig * c.c12[idx] * pre;
+        ldzx += sig * c.c21[idx] * pre; ldzz += sig * c.c22[idx] * pre;
+        lvh += sig * qre; lvx += sig * c.a1[idx] * qim; lvz += sig * c.a2[idx] * qim;
+    }
+    h = lh * c.inv_n2; dx = ldx * c.inv_n2; dz = ldz * c.inv_n2;
+    dhx = ldhx * c.inv_n2; dhz = ldhz * c.inv_n2;
+    dxx = ldxx * c.inv_n2; dxz = ldxz * c.inv_n2; dzx = ldzx * c.inv_n2; dzz = ldzz * c.inv_n2;
+    vh = lvh * c.inv_n2; vx = lvx * c.inv_n2; vz = lvz * c.inv_n2;
+}
+
+void OceanQueryCore::apply_coastal_correction_(double qx, double qz, bool use_prepared, double sim_time,
+                                               double &h, double &dx, double &dz,
+                                               double &dhx, double &dhz,
+                                               double &dxx, double &dxz, double &dzx, double &dzz,
+                                               double &vh, double &vx, double &vz) const {
+    CoastalSample s;
+    if (!coastal.sample(qx, qz, s)) { return; }
+    double oh, odx, odz, odhx, odhz, odxx, odxz, odzx, odzz, ovh, ovx, ovz;
+    double dh, ddx, ddz, ddhx, ddhz, ddxx, ddxz, ddzx, ddzz, dvh, dvx, dvz;
+    accumulate_coastal_long_(qx, qz, use_prepared, sim_time, oh, odx, odz, odhx, odhz, odxx, odxz, odzx, odzz, ovh, ovx, ovz);
+    accumulate_coastal_long_(s.deep_x, s.deep_z, use_prepared, sim_time, dh, ddx, ddz, ddhx, ddhz, ddxx, ddxz, ddzx, ddzz, dvh, dvx, dvz);
+    const double open = s.effective_shoaling * (1.0 - s.confidence), deep = s.effective_shoaling * s.confidence;
+    h += open * oh + deep * dh - oh; dx += open * odx + deep * ddx - odx; dz += open * odz + deep * ddz - odz;
+    vh += open * ovh + deep * dvh - ovh; vx += open * ovx + deep * dvx - ovx; vz += open * ovz + deep * dvz - ovz;
+    dhx += open * odhx + deep * (s.j00 * ddhx + s.j10 * ddhz) - odhx;
+    dhz += open * odhz + deep * (s.j01 * ddhx + s.j11 * ddhz) - odhz;
+    dxx += open * odxx + deep * (ddxx * s.j00 + ddxz * s.j10) - odxx;
+    dxz += open * odxz + deep * (ddxx * s.j01 + ddxz * s.j11) - odxz;
+    dzx += open * odzx + deep * (ddzx * s.j00 + ddzz * s.j10) - odzx;
+    dzz += open * odzz + deep * (ddzx * s.j01 + ddzz * s.j11) - odzz;
 }
 
 void OceanQueryCore::sample_prepared_(double wx, double wz, double *out) {
@@ -392,6 +536,15 @@ void OceanQueryCore::evaluate_true_batch_(const size_t *indices, size_t active_c
             batch_.vz[p] += batch_.cascade_vz[p] * inv_n2;
         }
     }
+    // Coastal se evalúa por punto (sampler escalar) después del kernel base.
+    // La suma base permanece mode-major; sólo C(q), C(F(q)) es adicional.
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        apply_coastal_correction_(batch_.qx[p], batch_.qz[p], true, prepared_time,
+                                  batch_.h[p], batch_.dx[p], batch_.dz[p], batch_.dhx[p], batch_.dhz[p],
+                                  batch_.dxx[p], batch_.dxz[p], batch_.dzx[p], batch_.dzz[p],
+                                  batch_.vh[p], batch_.vx[p], batch_.vz[p]);
+    }
     diag_last_spectral_point_evaluations += active_count;
 }
 
@@ -405,6 +558,15 @@ void OceanQueryCore::evaluate_avx2_batch_(const size_t *indices, size_t active_c
         batch_.vh[p] = batch_.vx[p] = batch_.vz[p] = 0.0;
     }
     evaluate_batch_avx2(cascades, batch_, indices, active_count, vector_sincos);
+    // AVX2 conserva el kernel de LONG/MID/SHORT base; la corrección C es un
+    // segundo evaluador LONG escalar, sin branch por pair y sólo in-field.
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        apply_coastal_correction_(batch_.qx[p], batch_.qz[p], true, prepared_time,
+                                  batch_.h[p], batch_.dx[p], batch_.dz[p], batch_.dhx[p], batch_.dhz[p],
+                                  batch_.dxx[p], batch_.dxz[p], batch_.dzx[p], batch_.dzz[p],
+                                  batch_.vh[p], batch_.vx[p], batch_.vz[p]);
+    }
     diag_last_spectral_point_evaluations += active_count;
 }
 

@@ -16,8 +16,31 @@ struct Cascade {
     std::vector<double> a1, a2, c11, c12, c21, c22;
     std::vector<double> parity, weight;
     std::vector<double> h0_re, h0_im, h0n_re, h0n_im;
+    // 3B.3: pesos independientes de las mitades canónicas A=+k y B=-k.
+    std::vector<double> coastal_weight_pos, coastal_weight_neg;
     std::vector<double> ev_h_re, ev_h_im, ev_v_re, ev_v_im;
+    std::vector<double> ev_a_h_re, ev_a_h_im, ev_b_h_re, ev_b_h_im;
+    std::vector<double> ev_a_v_re, ev_a_v_im, ev_b_v_re, ev_b_v_im;
     double inv_n2 = 0.0;
+};
+
+struct CoastalSample {
+    double deep_x = 0.0, deep_z = 0.0;
+    double confidence = 0.0, effective_shoaling = 1.0;
+    double j00 = 1.0, j01 = 0.0, j10 = 0.0, j11 = 1.0;
+};
+
+// Datos CPU horneados de 3B.2B. Se copian sólo al configurar/rebuild, nunca
+// por query. El sampler replica filter_linear del shader para campos/máscaras.
+struct CoastalRuntime {
+    bool enabled = false;
+    double origin_x = 0.0, origin_z = 0.0, cell_size = 1.0, detj_safe = 0.5;
+    int width = 0, height = 0;
+    std::vector<double> deep_x, deep_z, det_j, j00, j01, j10, j11, shoaling;
+    std::vector<uint8_t> warp_valid, propagation_valid;
+
+    void clear() { enabled = false; }
+    bool sample(double qx, double qz, CoastalSample &out) const;
 };
 
 // Stride del buffer de salida (mismo contrato que la API nativa GDExtension).
@@ -65,6 +88,7 @@ struct BatchWorkspace {
 class OceanQueryCore {
 public:
     std::vector<Cascade> cascades;
+    CoastalRuntime coastal;
     double sea_level = 0.0;
     bool prepared_valid = false;
     double prepared_time = 0.0;
@@ -90,6 +114,15 @@ public:
                           size_t count);
 
     void finalize_spectrum();
+
+    void set_coastal_long_weights(const double *pos, const double *neg, size_t count);
+    void set_coastal_runtime(double origin_x, double origin_z, int width, int height,
+                             double cell_size, double detj_safe,
+                             const double *deep_x, const double *deep_z, const double *det_j,
+                             const double *j00, const double *j01, const double *j10, const double *j11,
+                             const uint8_t *warp_valid, const double *shoaling,
+                             const uint8_t *propagation_valid, size_t count);
+    void clear_coastal() { coastal.clear(); }
 
     void ensure_prepared(double simulation_time);
 
@@ -143,6 +176,16 @@ private:
                      double &dhx, double &dhz,
                      double &dxx, double &dxz, double &dzx, double &dzz,
                      double &vh, double &vx, double &vz);
+    void accumulate_coastal_long_(double qx, double qz, bool use_prepared, double sim_time,
+                                  double &h, double &dx, double &dz,
+                                  double &dhx, double &dhz,
+                                  double &dxx, double &dxz, double &dzx, double &dzz,
+                                  double &vh, double &vx, double &vz) const;
+    void apply_coastal_correction_(double qx, double qz, bool use_prepared, double sim_time,
+                                   double &h, double &dx, double &dz,
+                                   double &dhx, double &dhz,
+                                   double &dxx, double &dxz, double &dzx, double &dzz,
+                                   double &vh, double &vx, double &vz) const;
 
     void sample_prepared_(double wx, double wz, double *out);
 
