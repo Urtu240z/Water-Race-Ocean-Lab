@@ -269,20 +269,17 @@ float breaker_advance_profile(float u) {
 	return rise * fall;
 }
 
-float breaker_overturn_profile(float u) {
-	// 4C: vuelco delantero. Proyecta el frente hacia delante tras el pico de
-	// advance (~0.63); activo ~0.58..0.80, máximo ~0.70, 0 fuera. Suave.
-	float rise = smoothstep(0.58, 0.70, u);
-	float fall = 1.0 - smoothstep(0.70, 0.80, u);
-	return rise * fall;
-}
+const float BREAKER_HINGE_U = 0.58;
+const float BREAKER_TIP_U = 0.74;
+const float BREAKER_RETURN_U = 0.88;
 
-float breaker_plunge_profile(float u) {
-	// 4C: plunge delantero. Hunde la nariz (desplaza hacia ABAJO), aún más
-	// adelantado; activo ~0.66..0.88, máximo ~0.78, 0 fuera. No levanta.
-	float rise = smoothstep(0.66, 0.78, u);
-	float fall = 1.0 - smoothstep(0.78, 0.88, u);
-	return rise * fall;
+float breaker_curl_profile(float u) {
+	// 4C: perfil de curl paramétrico. 0 en el hinge (u=0.58), rampa suave hasta
+	// 1 en la punta (u=0.74) y +15% extra hasta el retorno (u=0.88), de modo
+	// que la punta sobre-rote e inicie el retorno (dx/du<0 => overhang real).
+	float ramp = smoothstep(BREAKER_HINGE_U, BREAKER_TIP_U, u);
+	float over = smoothstep(BREAKER_TIP_U, BREAKER_RETURN_U, u);
+	return ramp * (1.0 + 0.15 * over);
 }
 
 float breaker_edge_fade(float u, float v) {
