@@ -152,17 +152,21 @@ static func _build_h0_vector(config: OpenOceanFFTConfig, simulation_seed: int) -
 				h0[index] = Vector2.ZERO
 				continue
 
-			var k_dot_w := k.normalized().dot(wind)
-			var directional := pow(maxf(k_dot_w, 0.0), config.directional_spread)
-			directional += 0.05 * pow(maxf(-k_dot_w, 0.0), config.directional_spread)
 			var k2 := k_length * k_length
-			var phillips: float = config.energy * exp(-1.0 / maxf(k2 * largest_wave * largest_wave, 0.000001))
-			phillips *= directional / maxf(k2 * k2, 0.000001)
-			phillips *= exp(-k2 * config.short_wave_damping_m * config.short_wave_damping_m)
 			var wavelength := TWO_PI / k_length
 			var band_weight := _band_weight(wavelength, config)
+			var spectral_density := 0.0
+			if config.spectrum_model == OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN:
+				spectral_density = _jonswap_hasselmann_density(config, k_length, k.normalized(), wind)
+			else:
+				var k_dot_w := k.normalized().dot(wind)
+				var directional := pow(maxf(k_dot_w, 0.0), config.directional_spread)
+				directional += 0.05 * pow(maxf(-k_dot_w, 0.0), config.directional_spread)
+				spectral_density = config.energy * exp(-1.0 / maxf(k2 * largest_wave * largest_wave, 0.000001))
+				spectral_density *= directional / maxf(k2 * k2, 0.000001)
+				spectral_density *= exp(-k2 * config.short_wave_damping_m * config.short_wave_damping_m)
 			var gaussian := _gaussian_pair(simulation_seed, index)
-			var amplitude := sqrt(maxf(phillips, 0.0) * 0.5) * discrete_scale * band_weight
+			var amplitude := sqrt(maxf(spectral_density, 0.0) * 0.5) * discrete_scale * band_weight
 			h0[index] = gaussian * amplitude
 			var sample_energy := h0[index].length_squared()
 			total_energy += sample_energy
@@ -177,6 +181,64 @@ static func _build_h0_vector(config: OpenOceanFFTConfig, simulation_seed: int) -
 	config.measured_hs_m = estimate_hs_from_h0(h0, n)
 	config.out_of_band_energy_ratio = outside_energy / total_energy if total_energy > 0.0 else 0.0
 	return h0
+
+
+# --- JONSWAP + Hasselmann (alternativa A/B a Phillips) ------------------------
+# Espectro direccional deep/open-ocean. La altura final la fija target_hs_m en
+# _build_h0_vector (misma normalización que Phillips), por lo que la densidad es
+# relativa. Sin TMA: la profundidad finita ya la gestiona nuestro sistema
+# coastal/warp/shoaling espacial.
+
+static func _jonswap_peak_frequency(config: OpenOceanFFTConfig) -> float:
+	## Frecuencia pico estándar JONSWAP derivada de viento + fetch.
+	var u := maxf(config.wind_speed_mps, 0.1)
+	var fetch := maxf(config.fetch_length_m, 1.0)
+	var g := config.gravity_mps2
+	var non_dim_fetch := g * fetch / (u * u)
+	return 3.5 * (g / u) * pow(non_dim_fetch, -0.33)
+
+
+static func _jonswap_hasselmann_density(config: OpenOceanFFTConfig, k_length: float, k_hat: Vector2, wind: Vector2) -> float:
+	var g := config.gravity_mps2
+	if k_length <= 0.000001:
+		return 0.0
+	var w := sqrt(g * k_length) # deep-water: coherente con evolve_spectrum (sin tanh(kh)).
+	var wp := _jonswap_peak_frequency(config)
+	if wp <= 0.000001:
+		return 0.0
+	var p := w / wp
+	# JONSWAP S(w) = alpha·g²·w⁻⁵·exp(-1.25·(wp/w)⁴)·gamma^r.
+	var sigma := 0.07 if w <= wp else 0.09
+	var r := exp(-((w - wp) * (w - wp)) / (2.0 * sigma * sigma * wp * wp))
+	var s_w := config.jonswap_alpha * g * g / pow(w, 5.0) * exp(-1.25 * pow(wp / w, 4.0)) * pow(3.3, r)
+	# Hasselmann directional spreading + swell shaping.
+	var s_dir: float
+	if w <= wp:
+		s_dir = 6.97 * pow(p, 4.06)
+	else:
+		s_dir = 9.77 * pow(p, -2.33 - 1.45 * (config.wind_speed_mps * wp / g - 1.17))
+	var s_xi := 16.0 * tanh(wp / w) * config.swell * config.swell
+	var s_total := s_dir + s_xi
+	var theta := absf(k_hat.angle_to(wind))
+	var d_theta := _longuet_higgins(s_total, theta)
+	# E(k,theta) = S(w)·D(theta)·(dw/dk)/k ; dw/dk = g/(2·w).
+	var dw_dk := g / (2.0 * w)
+	var density := s_w * d_theta * (dw_dk / k_length)
+	# Detalle de onda corta (no-op con detail=1.0; las bandas ya limitan lambda).
+	density *= exp(-(1.0 - config.detail) * (1.0 - config.detail) * k_length * k_length)
+	return maxf(density, 0.0)
+
+
+static func _longuet_higgins(s: float, theta: float) -> float:
+	var q := _jonswap_q(s)
+	return q * pow(cos(theta * 0.5), 2.0 * s)
+
+
+static func _jonswap_q(s: float) -> float:
+	if s < 0.4:
+		return 0.5 / PI + s * (0.220636 + s * (-0.109 + s * 0.090))
+	var a := sqrt(s)
+	return (1.0 / sqrt(PI)) * (0.5 * a + 0.0625 / a)
 
 
 static func derive_cascade_seed(simulation_seed: int, cascade_id: StringName) -> int:

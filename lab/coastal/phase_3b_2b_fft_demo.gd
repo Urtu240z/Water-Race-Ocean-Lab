@@ -96,6 +96,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ocean.cycle_breaker_debug()
 		KEY_H:
 			_ocean.cycle_breaker_debug_slot()
+		KEY_T:
+			_ocean.cycle_spectrum_model()
 	_update_status()
 
 
@@ -125,7 +127,7 @@ func _update_status() -> void:
 	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
 	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
 	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
-	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s\n%s" % [_BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text(), _breaker_text()]
+	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD — Spectrum: %s\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s\n%s" % [_ocean.spectrum_model_name(), _BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text(), _breaker_text()]
 
 
 func _split_metrics_text() -> String:

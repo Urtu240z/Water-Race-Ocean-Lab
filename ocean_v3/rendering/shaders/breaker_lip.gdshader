@@ -155,7 +155,7 @@ void vertex() {
 		if (breaker_debug_mode == 3) {
 			curl_angle_max = curl_env * radians(115.0);
 		}
-		curl_angle = curl_angle_max * breaker_curl_profile(u);
+		curl_angle = -curl_angle_max * breaker_curl_profile(u);
 	}
 
 	// Curva paramétrica del frente: la sección delantera gira alrededor del

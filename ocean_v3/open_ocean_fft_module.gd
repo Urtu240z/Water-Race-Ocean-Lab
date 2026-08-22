@@ -69,6 +69,7 @@ var _coastal_warp = null
 var _coastal_energy_metrics: Dictionary = {}
 var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
+var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.PHILLIPS
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -109,6 +110,7 @@ func _ready() -> void:
 	_sea_state = SeaStateScript.State.RACE
 	_sea_state_initialized = true
 	configs = SeaStateScript.build_cascades(_sea_state)
+	_apply_spectrum_model()
 	var h0_datas: Array[PackedByteArray] = []
 	for config in configs:
 		if not config.is_valid():
@@ -230,6 +232,7 @@ func set_sea_state(state: int) -> void:
 	_sea_state = state
 	_sea_state_initialized = true
 	configs = SeaStateScript.build_cascades(state)
+	_apply_spectrum_model()
 	# 3B.2B: las dos primeras cascadas de render (COASTAL/REMAINDER) comparten el
 	# config LONG; MID/SHORT usan configs[1]/configs[2].
 	for index in _cascades.size():
@@ -245,6 +248,31 @@ func set_sea_state(state: int) -> void:
 
 func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
+
+
+## --- A/B de espectro: PHILLIPS <-> JONSWAP_HASSELMANN. ---
+## Regenera H0 conservando seed, tiempo, cámara, sea state y coastal; target_hs_m
+## sigue siendo la autoridad de amplitud en ambos modelos.
+
+func cycle_spectrum_model() -> void:
+	_spectrum_model = 1 - _spectrum_model
+	_apply_spectrum_model()
+	_rebuild_h0_all(SimulationClock.simulation_seed)
+
+
+func set_spectrum_model(model: int) -> void:
+	_spectrum_model = clampi(model, OpenOceanFFTConfig.SpectrumModel.PHILLIPS, OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN)
+	_apply_spectrum_model()
+	_rebuild_h0_all(SimulationClock.simulation_seed)
+
+
+func spectrum_model_name() -> String:
+	return "JONSWAP_HASSELMANN" if _spectrum_model == OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN else "PHILLIPS"
+
+
+func _apply_spectrum_model() -> void:
+	for config in configs:
+		config.spectrum_model = _spectrum_model
 
 
 ## --- OceanQuery (Fase 2C, backend NATIVE si disponible, fallback REDUCED) ---

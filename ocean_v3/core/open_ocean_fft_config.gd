@@ -2,6 +2,11 @@ class_name OpenOceanFFTConfig
 extends Resource
 ## Configuración física de una cascada espectral. El módulo sigue siendo único.
 
+enum SpectrumModel {
+	PHILLIPS,
+	JONSWAP_HASSELMANN,
+}
+
 @export var id: StringName = &"MID"
 @export var resolution: int = 256
 @export var domain_size_m: float = 128.0
@@ -16,6 +21,13 @@ extends Resource
 @export var short_wave_damping_m: float = 0.35
 @export_range(0.0, 1.5, 0.01) var choppiness: float = 1.0
 @export var target_hs_m: float = 0.65
+# A/B de espectro. PHILLIPS = actual (sin cambios). JONSWAP_HASSELMANN = nuevo.
+@export var spectrum_model: int = SpectrumModel.PHILLIPS
+# JONSWAP+Hasselmann (deep/open-ocean, sin TMA). La altura final la fija target_hs_m.
+@export var fetch_length_m := 1000.0
+@export_range(0.0, 1.0, 0.05) var swell := 0.5
+@export var jonswap_alpha := 0.0081
+@export_range(0.0, 1.0, 0.05) var detail := 1.0
 
 # Métricas de inicialización: no se actualizan por frame ni requieren readback GPU.
 var measured_hs_m := 0.0
