@@ -1,26 +1,65 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-// Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B.
-// Este include se procesa al inicio del archivo y declara los uniforms
-// compartidos (texturas FFT/coastal/warp, fades, band_mask, modelo de energía
-// 4A, composición) además de las funciones. No redeclarar esos uniforms aquí.
-#include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
-
+uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
+uniform sampler2D displacement_mid : repeat_enable, filter_linear;
+uniform sampler2D displacement_short : repeat_enable, filter_linear;
+uniform sampler2D normal_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
+uniform sampler2D normal_mid : repeat_enable, filter_linear;
+uniform sampler2D normal_short : repeat_enable, filter_linear;
+uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
+uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
+uniform float domain_long_coastal_m = 512.0;
+uniform float domain_long_remainder_m = 512.0;
+uniform float domain_mid_m = 137.0;
+uniform float domain_short_m = 37.0;
+uniform vec2 camera_world_xz = vec2(0.0);
+uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
+uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
+uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
+uniform vec3 band_mask = vec3(1.0);
 uniform int debug_mode = 0;
+uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
+uniform bool coastal_propagation_enabled = false;
+uniform bool coastal_transform_enabled = false;
+uniform bool coastal_monochromatic_debug = false;
 uniform bool coastal_eikonal_phase_debug = false;
+uniform bool coastal_warp_enabled = false;
+// 3B.2B diagnóstico: 0 FULL, 1 LONG, 2 COASTAL, 3 REMAINDER, 4 MID+SHORT.
+uniform int coastal_composition_debug = 0;
 // 0 WARP+SHOALING, 1 WARP_ONLY, 2 SHOALING_ONLY.
 uniform int coastal_warp_effect_debug = 0;
 uniform bool coastal_forced_warp_debug = false;
 uniform vec2 coastal_forced_warp_offset_xz = vec2(37.0, 23.0);
+uniform float coastal_debug_gain = 1.0;
 uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
-// Phase 4A: instrumento GPU opt-in del detector. 0 OFF, 1 DEPTH, 2 STEEPNESS,
-// 3 CRESTNESS, 4 PREBREAK.
+// Phase 4A: detector GPU de pre-break. Apagado salvo instrumento debug / 4B.
+// 0 OFF, 1 DEPTH, 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK.
 uniform int breaking_debug_mode = 0;
+// Hs de LONG completo en deep water y fracción de energía del split COASTAL.
+// Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
+uniform float breaking_long_hs_m = 0.50;
+uniform float breaking_coastal_energy_fraction = 0.50;
+uniform float breaking_depth_gamma = 0.78;
+uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
+uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
+uniform vec2 breaking_crest_spacing_lambda_range_m = vec2(0.25, 2.0);
 uniform float coastal_monochromatic_amplitude_m = 0.35;
+uniform vec2 coastal_origin_xz = vec2(0.0);
+uniform vec2 coastal_extent_m = vec2(1.0);
+uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
+uniform vec2 coastal_warp_origin_xz = vec2(0.0);
+uniform vec2 coastal_warp_extent_m = vec2(1.0);
+uniform float coastal_warp_detj_safe = 0.5;
+uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
 uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
@@ -38,7 +77,13 @@ varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 
-float level_color(float level) {
+// Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
+// spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
+// warp_deep_sample, warp_jacobian_sample, coastal_long_state, long_height_at,
+// breaking_local_state_at, prebreak_indices_at y los perfiles del labio 4B.
+#include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
+
+vec3 level_color(float level) {
 	float wave = fract(level * 0.61803398875);
 	return mix(vec3(0.12, 0.85, 0.95), vec3(0.95, 0.25, 0.12), wave);
 }
