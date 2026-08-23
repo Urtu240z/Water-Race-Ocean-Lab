@@ -8,7 +8,8 @@ render_mode cull_disabled, blend_mix, depth_draw_opaque, diffuse_burley, specula
 //     MID/SHORT jamás deciden el nacimiento);
 //   - la superficie base se integra con el clipmap (mismas cascadas/fades);
 //   - 4B: el labio levanta y adelanta según la envolvente de takeover;
-//   - 4C: el frente vuelca (overturn) y la nariz baja (plunge).
+//   - 4C: el frente vuelca (overturn) y la nariz baja (plunge);
+//   - 4C-S1: FORCE_LIP usa la cross-section aprobada horneada en LUT.
 // No hay readback GPU->CPU ni OceanQuery en esta ruta.
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
@@ -60,6 +61,11 @@ uniform float breaker_advance_fraction = 0.45;
 uniform float breaker_lip_slope = 0.7;
 // 4C: ángulo máximo de curl en producción (PREBREAK alto). FORCE_LIP usa ~115°.
 uniform float breaker_curl_angle_deg = 90.0;
+// 4C-S1: LUT de cross-section aprobada (horneada offline). R/G = delta respecto
+// a stage 0, B/A = dR/du y dG/du. Sólo la consume FORCE_LIP (debug).
+uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
+uniform float breaker_profile_debug_stage = 1.0;
+uniform float breaker_profile_height_hs = 2.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
@@ -137,36 +143,44 @@ void vertex() {
 	vec3 disp = surface_displacement_break(P0, coast_uv, field_data, dist);
 	vec2 slope = surface_slope_break(P0, coast_uv, field_data, dist);
 
-	// Takeover 4B + curl 4C. REGION (debug) no deforma: muestra la plantilla
-	// pegada a la superficie base para inspeccionar posición/orientación.
-	bool deform = breaker_debug_mode != 2;
-	float debug_scale = (breaker_debug_mode == 3) ? 4.0 : 1.0;
+	// Modos: LIP/TAKEOVER (producción) = curl 4B/4C antiguo. FORCE_LIP (debug) =
+	// cross-section LUT aprobada. REGION = plantilla plana sin deformar.
+	bool use_lut_profile = breaker_debug_mode == 3;
+	bool deform_old = breaker_debug_mode == 0 || breaker_debug_mode == 1;
 
+	// --- Perfil LUT (FORCE_LIP): DELTA desde stage 0 aplicado sobre el FFT ---
+	float profile_s = u_world;
+	float y_profile = 0.0;
+	float dRdu = 0.0;
+	float dGdu = 0.0;
+	if (use_lut_profile) {
+		vec4 profile = textureLod(breaker_profile_lut, vec2(u, clamp(breaker_profile_debug_stage, 0.0, 1.0)), 0.0);
+		float patch_length = 1.1 * ribbon_wavelength_m;
+		profile_s = u_world + profile.r * patch_length;
+		float vertical_scale = local_hs * breaker_profile_height_hs;
+		y_profile = profile.g * vertical_scale;
+		dRdu = profile.b;
+		dGdu = profile.a;
+	}
+
+	// --- Curl 4B/4C antiguo (LIP/TAKEOVER), sin cambios de producción ---
 	float lift = 0.0;
 	float advance = 0.0;
 	float curl_angle = 0.0;
-	if (deform) {
-		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u) * debug_scale;
-		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u) * debug_scale;
-		// Curl: ángulo continuo de la envolvente (nada binario). Producción máx
-		// 90°; FORCE_LIP fuerza ~115° para demostrar overhang real.
+	if (deform_old) {
+		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
+		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
 		float curl_env = smoothstep(0.25, 1.0, envelope);
 		float curl_angle_max = curl_env * radians(breaker_curl_angle_deg);
-		if (breaker_debug_mode == 3) {
-			curl_angle_max = curl_env * radians(115.0);
-		}
 		curl_angle = -curl_angle_max * breaker_curl_profile(u);
 	}
 
-	// Curva paramétrica del frente: la sección delantera gira alrededor del
-	// hinge (u=0.58) en el plano (direction, Y). Tras la punta el ángulo supera
-	// 90° y la posición longitudinal retrocede => overhang real (dx/du < 0).
 	float u_world_h = mix(-0.6, 0.5, BREAKER_HINGE_U) * ribbon_wavelength_m;
 	float lift_h = 0.0;
 	float advance_h = 0.0;
-	if (deform) {
-		lift_h = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(BREAKER_HINGE_U) * debug_scale;
-		advance_h = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(BREAKER_HINGE_U) * debug_scale;
+	if (deform_old) {
+		lift_h = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(BREAKER_HINGE_U);
+		advance_h = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(BREAKER_HINGE_U);
 	}
 	float s0 = u_world + advance;
 	float y0 = lift;
@@ -178,37 +192,67 @@ void vertex() {
 	float sin_a = sin(curl_angle);
 	float ds_rot = ds * cos_a - dy * sin_a;
 	float dy_rot = ds * sin_a + dy * cos_a;
-	float s_final = s_h + ds_rot;
-	float y_final = y_h + dy_rot;
+	float s_final_old = s_h + ds_rot;
+	float y_final_old = y_h + dy_rot;
 
-	// REGION (debug): offset vertical fijo para eliminar z-fighting.
 	float region_debug_offset = (breaker_debug_mode == 2) ? 0.15 : 0.0;
 
-	vec3 world_pos = vec3(
-		anchor_xz.x + direction.x * s_final + tangent.x * v_world + disp.x,
-		sea_level_y + disp.y + y_final + region_debug_offset,
-		anchor_xz.y + direction.y * s_final + tangent.y * v_world + disp.z
-	);
-
-	// Normal: base del océano + inclinación 4B (localizada), rotada con el
-	// mismo ángulo del curl para que una cara volcada no se ilumine horizontal.
-	if (deform) {
-		float slope_profile = max(breaker_lift_profile(u), breaker_advance_profile(u));
-		slope += direction * (envelope * breaker_lip_slope * slope_profile);
+	vec3 world_pos;
+	if (use_lut_profile) {
+		world_pos = vec3(
+			anchor_xz.x + direction.x * profile_s + tangent.x * v_world + disp.x,
+			sea_level_y + disp.y + y_profile,
+			anchor_xz.y + direction.y * profile_s + tangent.y * v_world + disp.z
+		);
+	} else if (deform_old) {
+		world_pos = vec3(
+			anchor_xz.x + direction.x * s_final_old + tangent.x * v_world + disp.x,
+			sea_level_y + disp.y + y_final_old + region_debug_offset,
+			anchor_xz.y + direction.y * s_final_old + tangent.y * v_world + disp.z
+		);
+	} else {
+		// REGION: plantilla plana pegada a la superficie.
+		world_pos = vec3(
+			anchor_xz.x + direction.x * u_world + tangent.x * v_world + disp.x,
+			sea_level_y + disp.y + region_debug_offset,
+			anchor_xz.y + direction.y * u_world + tangent.y * v_world + disp.z
+		);
 	}
-	vec3 normal0 = normalize(vec3(-slope.x, 1.0, -slope.y));
-	if (deform) {
+
+	vec3 normal_final;
+	if (use_lut_profile) {
+		// Normal del perfil LUT a partir de las derivadas B/A (permite overhang).
+		float patch_length = 1.1 * ribbon_wavelength_m;
+		float vertical_scale = local_hs * breaker_profile_height_hs;
+		float ds_du = patch_length * (1.0 + dRdu);
+		float dy_du = vertical_scale * dGdu;
+		float slope_dir = dot(slope, direction);
+		float slope_tan = dot(slope, tangent);
+		vec3 tang_u = vec3(direction.x * ds_du, slope_dir * ds_du + dy_du, direction.y * ds_du);
+		vec3 tang_v = vec3(tangent.x * ribbon_width_m, slope_tan * ribbon_width_m, tangent.y * ribbon_width_m);
+		vec3 n = cross(tang_v, tang_u);
+		if (dot(n, n) > 1.0e-8) {
+			normal_final = normalize(n);
+		} else {
+			normal_final = normalize(vec3(-slope.x, 1.0, -slope.y));
+		}
+	} else if (deform_old) {
+		float slope_profile = max(breaker_lift_profile(u), breaker_advance_profile(u));
+		vec2 slope2 = slope + direction * (envelope * breaker_lip_slope * slope_profile);
+		vec3 normal0 = normalize(vec3(-slope2.x, 1.0, -slope2.y));
 		float n_d = dot(normal0.xz, direction);
 		float n_t = dot(normal0.xz, tangent);
 		float n_y = normal0.y;
 		float n_d_r = n_d * cos_a - n_y * sin_a;
 		float n_y_r = n_d * sin_a + n_y * cos_a;
 		vec2 n_xz_r = direction * n_d_r + tangent * n_t;
-		normal0 = normalize(vec3(n_xz_r.x, n_y_r, n_xz_r.y));
+		normal_final = normalize(vec3(n_xz_r.x, n_y_r, n_xz_r.y));
+	} else {
+		normal_final = normalize(vec3(-slope.x, 1.0, -slope.y));
 	}
 
 	VERTEX = world_pos;
-	NORMAL = normal0;
+	NORMAL = normal_final;
 
 	// REGION (debug): siempre visible (independiente de PREBREAK/envelope) para
 	// inspeccionar los slots; el resto conserva la envolvente de takeover.

@@ -19,6 +19,8 @@ extends Node3D
 ##     datos horneados + el reloj (vía texturas FFT), nunca del frame.
 
 const LipShader := preload("res://ocean_v3/rendering/shaders/breaker_lip.gdshader")
+## 4C-S1: LUT de cross-section horneada (ocean_v3 autocontenido; sin depender de lab/).
+const LutTexture := preload("res://ocean_v3/breaking/data/breaker_cross_section_lut.res")
 
 enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, OFF }
 
@@ -28,7 +30,7 @@ const BREAKER_CREST_U := 0.545
 
 ## Límite estricto de slots simultáneos; el pool reutiliza las mismas instancias.
 @export_range(1, 16, 1) var max_breakers := 8
-@export_range(8, 64, 1) var ribbon_u_segments := 36
+@export_range(8, 128, 1) var ribbon_u_segments := 96
 @export_range(2, 12, 1) var ribbon_v_segments := 5
 @export_range(2.0, 40.0, 0.5) var ribbon_width_m := 5.0
 @export_range(0.6, 2.0, 0.05) var ribbon_length_lambda := 1.15
@@ -93,6 +95,7 @@ var _ribbons: Array[MeshInstance3D] = []
 var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
 var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
+var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
 var _last_fingerprint := ""
 
 
@@ -200,6 +203,21 @@ func debug_slot_name() -> String:
 	return "ALL" if _debug_slot < 0 else str(_debug_slot)
 
 
+func set_debug_stage(value: float) -> void:
+	## 4C-S1: actualiza SÓLO breaker_profile_debug_stage del material (sin rebuild).
+	_debug_stage = clampf(value, 0.0, 1.0)
+	if _material != null:
+		_material.set_shader_parameter(&"breaker_profile_debug_stage", _debug_stage)
+
+
+func adjust_debug_stage(delta: float) -> void:
+	set_debug_stage(_debug_stage + delta)
+
+
+func debug_stage() -> float:
+	return _debug_stage
+
+
 func breaker_debug_name() -> String:
 	return DEBUG_NAMES[_debug_mode]
 
@@ -257,6 +275,9 @@ func _ensure_material() -> void:
 	_material.set_shader_parameter(&"breaker_debug_mode", _debug_mode)
 	_material.set_shader_parameter(&"sea_level_y", _sea_level_y)
 	_material.set_shader_parameter(&"breaker_fade_range_m", breaker_fade_range_m)
+	# 4C-S1: LUT de cross-section (una vez; sin regeneración runtime).
+	_material.set_shader_parameter(&"breaker_profile_lut", LutTexture)
+	_material.set_shader_parameter(&"breaker_profile_debug_stage", _debug_stage)
 	_template_mesh = _build_ribbon_mesh()
 
 

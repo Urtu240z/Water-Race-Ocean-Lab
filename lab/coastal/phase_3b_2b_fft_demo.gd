@@ -105,6 +105,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ocean.set_sea_state(SeaStateScript.State.ROUGH)
 		KEY_T:
 			_ocean.cycle_spectrum_model()
+		KEY_Q:
+			_ocean.adjust_breaker_debug_stage(-0.05)
+		KEY_E:
+			_ocean.adjust_breaker_debug_stage(0.05)
 	_update_status()
 
 
@@ -188,7 +192,8 @@ func _breaker_text() -> String:
 		lines.append("slot %d p=(%+.1f,%+.1f) d=(%+.2f,%+.2f) h=%.2fm lam=%.1fm" % [index, anchor["xz"].x, anchor["xz"].y, direction.x, direction.y, anchor["depth_m"], anchor["wavelength_m"]])
 	var body := " | ".join(lines)
 	var slot_text := "Breaker debug slot (H): %s/%d" % [_ocean.breaker_debug_slot_name(), summary["slots"]]
-	return "Breakers (K): %s | debug (N): %s | %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, summary["slots"], summary["max_slots"], body]
+	var stage_text := "CrossStage (Q/E): %.2f" % _ocean.breaker_debug_stage()
+	return "Breakers (K): %s | debug (N): %s | %s | %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, stage_text, summary["slots"], summary["max_slots"], body]
 
 
 func _set_camera_mode(mode: int) -> void:

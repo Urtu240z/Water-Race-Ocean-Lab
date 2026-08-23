@@ -548,6 +548,22 @@ func breaker_debug_slot_name() -> String:
 	return _breaker_pool.debug_slot_name()
 
 
+func set_breaker_debug_stage(value: float) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_debug_stage(value)
+
+
+func adjust_breaker_debug_stage(delta: float) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.adjust_debug_stage(delta)
+
+
+func breaker_debug_stage() -> float:
+	if _breaker_pool == null:
+		return 1.0
+	return _breaker_pool.debug_stage()
+
+
 func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}
