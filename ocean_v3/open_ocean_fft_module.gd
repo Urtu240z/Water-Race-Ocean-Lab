@@ -69,7 +69,7 @@ var _coastal_warp = null
 var _coastal_energy_metrics: Dictionary = {}
 var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
-var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.PHILLIPS
+var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.

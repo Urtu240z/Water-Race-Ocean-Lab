@@ -62,7 +62,9 @@ uniform float coastal_warp_detj_safe = 0.5;
 uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
-uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
+uniform vec3 base_color : source_color = vec3(0.03, 0.16, 0.20);
+// 5R.1: debug de forma (silueta/crest/valle/choppiness). Neutro, sin foam/emission.
+uniform bool ocean_shape_debug = false;
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -88,16 +90,6 @@ uniform float breaker_takeover_seam_half_width = 0.10;
 uniform float breaker_takeover_seam_feather = 0.06;
 // 4C-S3.3: profundidad de submerge (depresión vertical) bajo la seam S3.2.
 uniform float breaker_takeover_submerge_hs = 0.30;
-// 5A: visual quality pass / living surface. Tunables agrupados y bien nombrados.
-uniform float ocean_foam_strength = 1.0;      // crest/flow/patch foam global.
-uniform float ocean_redistribution = 1.0;     // secondary-peak instability / streaks.
-uniform float ocean_directional_flow = 1.0;   // orientación de la piel (streaks).
-uniform float ocean_nearshore_boost = 1.0;    // enriquecimiento nearshore.
-uniform float ocean_detail_boost = 1.0;       // piel SHORT / microdetalle.
-uniform vec3 ocean_color_deep = vec3(0.014, 0.075, 0.15);
-uniform vec3 ocean_color_shallow = vec3(0.05, 0.32, 0.33);
-uniform float ocean_fresnel_strength = 1.0;
-uniform bool ocean_quality_debug = false;
 
 varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
@@ -108,10 +100,6 @@ varying float coastal_mono_phase;
 varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
-varying vec2 slope_long;   // 5A: pendiente LONG (swell dominante).
-varying vec2 slope_mid;    // 5A: pendiente MID.
-varying vec2 slope_short;  // 5A: pendiente SHORT (piel).
-varying float long_height; // 5A: altura LONG en este vértice (para curvatura).
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -212,7 +200,6 @@ void vertex() {
 	// LONG_REMAINDER: siempre open-ocean.
 	vec3 long_remainder = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb;
 	vec3 long_displacement = long_coastal + long_remainder;
-	long_height = long_displacement.y; // 5A: referencia de altura LONG para curvatura.
 	vec3 mid_displacement = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb;
 	vec3 short_displacement = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb;
 	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
@@ -222,8 +209,7 @@ void vertex() {
 	vec3 displacement = long_coastal * coastal_weight * coastal_gain + long_remainder * remainder_weight;
 	displacement += mid_displacement * mid_weight * mid_short_weight + short_displacement * short_weight * mid_short_weight;
 
-	// Normales en slope space: slope_total = suma de slopes por banda. 5A: se
-	// separan LONG/MID/SHORT para la jerarquía y la inestabilidad de picos.
+	// Normales en slope space: slope_total = suma de slopes por banda.
 	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
 	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
 	vec2 slope_open = slope_from_normal(long_coastal_normal_open);
@@ -235,14 +221,11 @@ void vertex() {
 		warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y
 	);
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
+	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
-	vec3 mid_normal = normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb);
-	vec3 short_normal = normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb);
-	slope_long = slope_coastal * coastal_weight * effective_shoaling * coastal_gain
-		+ slope_from_normal(long_remainder_normal) * remainder_weight;
-	slope_mid = slope_from_normal(mid_normal) * mid_weight * mid_short_weight;
-	slope_short = slope_from_normal(short_normal) * short_weight * mid_short_weight;
-	vec2 slope = slope_long + slope_mid + slope_short;
+	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight * mid_short_weight;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
 	if (coastal_monochromatic_debug) {
@@ -295,36 +278,6 @@ void vertex() {
 	VERTEX += displacement;
 	NORMAL = ocean_normal;
 	derived_normal = ocean_normal;
-}
-
-
-// 5A: hash y value-noise baratos para streaks/foam (sin texturas nuevas).
-float ocean_hash(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
-}
-
-float ocean_noise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	float a = ocean_hash(i);
-	float b = ocean_hash(i + vec2(1.0, 0.0));
-	float c = ocean_hash(i + vec2(0.0, 1.0));
-	float d = ocean_hash(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float ocean_fbm(vec2 p) {
-	float v = 0.0;
-	float a = 0.5;
-	for (int i = 0; i < 3; i++) {
-		v += a * ocean_noise(p);
-		p = p * 2.03 + vec2(17.7, 9.1);
-		a *= 0.5;
-	}
-	return v;
 }
 
 
@@ -394,91 +347,16 @@ void fragment() {
 		EMISSION = color;
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
+	} else if (ocean_shape_debug) {
+		// 5R.1: vista neutra de silueta/crest/valle/choppiness. Sin foam ni emission.
+		ALBEDO = vec3(0.52, 0.56, 0.60);
+		EMISSION = vec3(0.0);
+		ROUGHNESS = 0.7;
+		SPECULAR = 0.2;
 	} else {
-		// ===== 5A: living surface / ocean look =====
-		vec3 N = normalize(derived_normal);
-		vec3 N_view = normalize((VIEW_MATRIX * vec4(N, 0.0)).xyz);
-		float ndotv = abs(dot(N_view, VIEW)); // 0 rasante, 1 nadir.
-
-		// Pendiente total + dirección de máxima pendiente.
-		vec2 slope_total = -N.xz / max(N.y, 0.02);
-		float slope_mag = length(slope_total);
-		vec2 slope_dir = slope_total / max(slope_mag, 0.001);
-
-		// Escala de swell para curvatura (wavelength costera o fallback deep).
-		float swell_lambda = coastal_metrics.g > 0.5 ? coastal_metrics.g : (TAU / max(coastal_k0_rad_m, 0.001));
-		float eps = swell_lambda * 0.09;
-		float h_c = long_height;
-		float h_l = long_height_at(ocean_world_xz - slope_dir * eps);
-		float h_r = long_height_at(ocean_world_xz + slope_dir * eps);
-		float curv = h_l - 2.0 * h_c + h_r; // negativo = cresta (convexo arriba).
-		float asym = abs(h_l - h_r);         // asimetría: hacia qué valle cae.
-
-		// Jerarquía por banda.
-		float long_mag = length(slope_long);
-		float mid_mag = length(slope_mid);
-		float short_mag = length(slope_short);
-		float total_mag = max(long_mag + mid_mag + short_mag, 0.001);
-		float swell_dominance = long_mag / total_mag;
-		float worked = (mid_mag + short_mag * ocean_detail_boost) / total_mag;
-
-		float local_hs = max(breaking_long_hs_m, 0.05);
-
-		// Forma local: pico / cara / asimetría.
-		float peak = smoothstep(-0.10 * local_hs, -0.005 * local_hs, curv);
-		float steep = smoothstep(0.05, 0.32, slope_mag);
-		float asym_norm = asym / max(local_hs, 0.001);
-
-		// Inestabilidad de pico secundario: pico débil + empinado + asimétrico.
-		float instability = peak * steep * smoothstep(0.08, 0.38, asym_norm) * ocean_redistribution;
-
-		// Presencia costera (sólo donde hay datos de propagación).
-		float coastal_presence = step(0.5, coastal_field.a);
-		float depth_m = coastal_metrics.r;
-		float nearshore = coastal_presence * (1.0 - smoothstep(1.0, 12.0, depth_m)) * ocean_nearshore_boost;
-
-		// Foam de cresta: picos energéticos y caras empinadas.
-		float crest_foam = peak * steep * ocean_foam_strength * mix(0.5, 1.0, swell_dominance);
-
-		// Foam de flujo / streaks: caras + picos que se desparraman.
-		vec2 flow_coord = ocean_world_xz * 0.9;
-		float along = dot(flow_coord, slope_dir);
-		float across = dot(flow_coord, vec2(-slope_dir.y, slope_dir.x));
-		float streak = ocean_fbm(vec2(along * 0.55, across * 1.9)); // estirado a lo largo del flujo.
-		float flow_foam = (steep * (0.35 + 0.65 * streak) * 0.5 + instability * (0.4 + 0.6 * streak)) * ocean_foam_strength * ocean_directional_flow;
-		flow_foam *= (1.0 + 0.9 * nearshore);
-
-		// Patch foam: zonas muy trabajadas (mid/short dominando).
-		float patch_foam = steep * smoothstep(0.45, 0.85, worked) * streak * ocean_foam_strength;
-
-		float foam = clamp(crest_foam + flow_foam + patch_foam, 0.0, 1.0);
-
-		// Color: deep -> shallow por nearshore + sombreado de forma.
-		vec3 water_color = mix(ocean_color_deep, ocean_color_shallow, clamp(nearshore, 0.0, 1.0));
-		float form_shade = clamp(0.58 + 0.9 * (h_c - (h_l + h_r) * 0.5) / max(local_hs, 0.05) - 0.35 * slope_mag, 0.0, 1.0);
-		water_color *= mix(0.82, 1.14, form_shade);
-
-		// Fresnel + cielo rasante (VIEW en view-space; y ≈ componente vertical).
-		float fresnel = pow(1.0 - ndotv, 4.0) * ocean_fresnel_strength;
-		vec3 sky = mix(vec3(0.18, 0.30, 0.40), vec3(0.72, 0.85, 0.95), clamp(VIEW.y * 1.5 + 0.2, 0.0, 1.0));
-		water_color = mix(water_color, sky, clamp(fresnel * 0.55, 0.0, 1.0));
-
-		// Foam color (blanco-cálido) y roughness aparente.
-		vec3 foam_color = mix(vec3(0.70, 0.80, 0.84), vec3(0.98, 0.99, 1.0), 0.65);
-		float base_rough = mix(0.34, 0.62, clamp(short_mag * 3.0, 0.0, 1.0));
-		float roughness = mix(base_rough, 0.78, clamp(foam * 0.6, 0.0, 1.0));
-
-		ALBEDO = mix(water_color, foam_color, foam);
-		EMISSION = foam_color * clamp(foam - 0.35, 0.0, 1.0) * 0.22;
-		ROUGHNESS = roughness;
-		SPECULAR = 0.5;
-
-		if (ocean_quality_debug) {
-			// Debug opcional: R=crest foam, G=flow foam, B=instability.
-			ALBEDO = vec3(0.0);
-			EMISSION = vec3(crest_foam, flow_foam, instability);
-			ROUGHNESS = 1.0;
-			SPECULAR = 0.0;
-		}
+		ALBEDO = color;
+		EMISSION = vec3(0.0);
+		ROUGHNESS = 0.42;
+		SPECULAR = 0.35;
 	}
 }

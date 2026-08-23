@@ -75,6 +75,11 @@ static func _apply_invariant(config: OpenOceanFFTConfig, band_index: int) -> voi
 			config.max_wavelength_m = 128.0
 			config.transition_width_m = 4.0
 			config.short_wave_damping_m = 0.35
+			# 5R.1 JONSWAP LONG: swell fuerte y coherente, peak legible.
+			config.fetch_length_m = 40000.0
+			config.swell = 0.8
+			config.detail = 1.0
+			config.jonswap_spread = 0.05
 		1:
 			# 137 m: no múltiplo simple de 512 (137 = primo), rompe la
 			# periodicidad combinada de las tres cascadas.
@@ -83,6 +88,11 @@ static func _apply_invariant(config: OpenOceanFFTConfig, band_index: int) -> voi
 			config.max_wavelength_m = 20.0
 			config.transition_width_m = 0.75
 			config.short_wave_damping_m = 0.35
+			# 5R.1 JONSWAP MID: algo más disperso, modula la crest line.
+			config.fetch_length_m = 3000.0
+			config.swell = 0.45
+			config.detail = 1.0
+			config.jonswap_spread = 0.35
 		2:
 			# 37 m: no múltiplo simple de 137 ni de 512.
 			config.domain_size_m = 37.0
@@ -90,6 +100,11 @@ static func _apply_invariant(config: OpenOceanFFTConfig, band_index: int) -> voi
 			config.max_wavelength_m = 5.0
 			config.transition_width_m = 0.15
 			config.short_wave_damping_m = 0.20
+			# 5R.1 JONSWAP SHORT: spread alto, piel, no silueta macro.
+			config.fetch_length_m = 300.0
+			config.swell = 0.15
+			config.detail = 1.0
+			config.jonswap_spread = 0.75
 
 
 static func _state_table() -> Dictionary:
@@ -97,25 +112,25 @@ static func _state_table() -> Dictionary:
 		State.CALM: {
 			"wind_speed_mps": 6.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 8.0, "choppiness": 0.45, "target_hs_m": 0.18},
-				{"wind_direction": Vector2(1.0, 0.18), "directional_spread": 6.0, "choppiness": 0.55, "target_hs_m": 0.12},
-				{"wind_direction": Vector2(1.0, 0.25), "directional_spread": 4.0, "choppiness": 0.45, "target_hs_m": 0.05},
+				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 8.0, "choppiness": 0.55, "target_hs_m": 0.20},
+				{"wind_direction": Vector2(1.0, 0.18), "directional_spread": 6.0, "choppiness": 0.45, "target_hs_m": 0.09},
+				{"wind_direction": Vector2(1.0, 0.25), "directional_spread": 4.0, "choppiness": 0.25, "target_hs_m": 0.03},
 			],
 		},
 		State.RACE: {
 			"wind_speed_mps": 12.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.15), "directional_spread": 7.0, "choppiness": 0.75, "target_hs_m": 0.50},
-				{"wind_direction": Vector2(1.0, 0.30), "directional_spread": 5.0, "choppiness": 1.00, "target_hs_m": 0.38},
-				{"wind_direction": Vector2(1.0, 0.45), "directional_spread": 4.0, "choppiness": 0.90, "target_hs_m": 0.15},
+				{"wind_direction": Vector2(1.0, 0.15), "directional_spread": 7.0, "choppiness": 1.00, "target_hs_m": 0.59},
+				{"wind_direction": Vector2(1.0, 0.30), "directional_spread": 5.0, "choppiness": 0.70, "target_hs_m": 0.25},
+				{"wind_direction": Vector2(1.0, 0.45), "directional_spread": 4.0, "choppiness": 0.35, "target_hs_m": 0.05},
 			],
 		},
 		State.ROUGH: {
 			"wind_speed_mps": 18.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 0.90, "target_hs_m": 0.85},
-				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 1.15, "target_hs_m": 0.65},
-				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 1.05, "target_hs_m": 0.30},
+				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 1.25, "target_hs_m": 1.00},
+				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 0.80, "target_hs_m": 0.46},
+				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 0.40, "target_hs_m": 0.10},
 			],
 		},
 	}

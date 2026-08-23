@@ -190,12 +190,11 @@ static func _build_h0_vector(config: OpenOceanFFTConfig, simulation_seed: int) -
 # coastal/warp/shoaling espacial.
 
 static func _jonswap_peak_frequency(config: OpenOceanFFTConfig) -> float:
-	## Frecuencia pico estándar JONSWAP derivada de viento + fetch.
+	## Frecuencia pico JONSWAP (Horvath / GodotOceanWaves): omega_p = 22·(g²/(U·F))^(1/3).
 	var u := maxf(config.wind_speed_mps, 0.1)
 	var fetch := maxf(config.fetch_length_m, 1.0)
 	var g := config.gravity_mps2
-	var non_dim_fetch := g * fetch / (u * u)
-	return 3.5 * (g / u) * pow(non_dim_fetch, -0.33)
+	return 22.0 * pow(g * g / (u * fetch), 1.0 / 3.0)
 
 
 static func _jonswap_hasselmann_density(config: OpenOceanFFTConfig, k_length: float, k_hat: Vector2, wind: Vector2) -> float:
@@ -220,7 +219,10 @@ static func _jonswap_hasselmann_density(config: OpenOceanFFTConfig, k_length: fl
 	var s_xi := 16.0 * tanh(wp / w) * config.swell * config.swell
 	var s_total := s_dir + s_xi
 	var theta := absf(k_hat.angle_to(wind))
-	var d_theta := _longuet_higgins(s_total, theta)
+	# 5R.1: D = mix(1/(2π), D_hasselmann, 1 - jonswap_spread). Ambos integran 1.
+	var d_flat := 1.0 / TAU
+	var d_hasselmann := _longuet_higgins(s_total, theta)
+	var d_theta := lerpf(d_flat, d_hasselmann, 1.0 - clampf(config.jonswap_spread, 0.0, 1.0))
 	# E(k,theta) = S(w)·D(theta)·(dw/dk)/k ; dw/dk = g/(2·w).
 	var dw_dk := g / (2.0 * w)
 	var density := s_w * d_theta * (dw_dk / k_length)

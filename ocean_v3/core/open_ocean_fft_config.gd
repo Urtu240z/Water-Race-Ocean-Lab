@@ -28,6 +28,8 @@ enum SpectrumModel {
 @export_range(0.0, 1.0, 0.05) var swell := 0.5
 @export var jonswap_alpha := 0.0081
 @export_range(0.0, 1.0, 0.05) var detail := 1.0
+# 5R.1: mezcla direccional JONSWAP. 0 = Hasselmann (direccional), 1 = flat/isotrópico.
+@export_range(0.0, 1.0, 0.05) var jonswap_spread := 0.2
 
 # Métricas de inicialización: no se actualizan por frame ni requieren readback GPU.
 var measured_hs_m := 0.0
