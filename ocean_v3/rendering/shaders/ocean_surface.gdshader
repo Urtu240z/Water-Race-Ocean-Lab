@@ -458,20 +458,20 @@ void fragment() {
 		ROUGHNESS = 0.7;
 		SPECULAR = 0.2;
 	} else {
-		// 5R.2: material físico de agua (dielectric). Fresnel Schlick lo aplica
-		// Godot PBR con SPECULAR = F0 y la NORMAL per-pixel.
+		// 5R.2: material físico de agua (dielectric). La NORMAL world-space se
+		// transforma a view-space (NORMAL en fragment es view-space en Godot).
 		vec3 shading_normal;
 		if (ocean_normal_fragment) {
 			shading_normal = pixel_ocean_normal(ocean_world_xz);
 		} else {
 			shading_normal = normalize(derived_normal);
 		}
-		NORMAL = shading_normal;
+		NORMAL = normalize((VIEW_MATRIX * vec4(shading_normal, 0.0)).xyz);
 		// Translucencia de cresta MUY sutil (sin foam, sin emission).
 		ALBEDO = mix(base_color, base_color * 1.25, crest_sharpen_mask * 0.35);
 		EMISSION = vec3(0.0);
 		ROUGHNESS = ocean_water_roughness;
-		SPECULAR = ocean_water_f0;
+		SPECULAR = 0.5;
 		METALLIC = 0.0;
 	}
 }
