@@ -82,10 +82,12 @@ uniform float breaker_takeover_core_end = 0.72;
 uniform float breaker_takeover_end = 0.82;
 uniform float breaker_takeover_forward_sign = -1.0;
 // 4C-S3.2: banda longitudinal estrecha de seam (q_profile). La ventana S3.1
-// actúa sólo como bounding window; el discard real vive en esta banda.
+// actúa sólo como bounding window; la ocultación real vive en esta banda.
 uniform float breaker_takeover_seam_center = 0.56;
 uniform float breaker_takeover_seam_half_width = 0.10;
 uniform float breaker_takeover_seam_feather = 0.06;
+// 4C-S3.3: profundidad de submerge (depresión vertical) bajo la seam S3.2.
+uniform float breaker_takeover_submerge_hs = 0.85;
 
 varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
@@ -114,9 +116,10 @@ float periodic_grid(vec2 world_xz, float domain_size_m) {
 }
 
 // 4C-S3.2: seam suppression estrecha. La ventana exterior S3.1 se conserva como
-// bounding window (ya no define un core de discard); la ocultación real es una
+// bounding window (ya no define un core de ocultación); la ocultación real es una
 // banda longitudinal simétrica alrededor de seam_center en q_profile. El lateral
-// conserva el fade inner/feather existente.
+// conserva el fade inner/feather existente. S3.3 resuelve la ocultación en
+// vertex() como submerge vertical (sin discard).
 float breaker_takeover_mask(vec2 world_xz) {
 	vec2 direction = normalize(breaker_takeover_direction_xz);
 	vec2 tangent = vec2(-direction.y, direction.x);
@@ -260,6 +263,16 @@ void vertex() {
 		// HEIGHT ONLY: sin desplazamiento horizontal, para evaluar choppiness.
 		displacement.xz = vec2(0.0);
 	}
+
+	// 4C-S3.3: submerge takeover. En vez de discard, hunde verticalmente el FFT
+	// bajo la seam S3.2 (fade suave de la propia máscara). No toca xz/choppiness.
+	if (breaker_takeover_debug_enabled) {
+		float take_strength = smoothstep(0.35, 0.70, breaker_takeover_stage);
+		float takeover = breaker_takeover_mask(world_xz) * take_strength;
+		float takeover_submerge_m = max(0.15, breaking_long_hs_m * breaker_takeover_submerge_hs);
+		displacement.y -= takeover_submerge_m * takeover;
+	}
+
 	VERTEX += displacement;
 	NORMAL = ocean_normal;
 	derived_normal = ocean_normal;
@@ -323,21 +336,8 @@ void fragment() {
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
 
-	// 4C-S3: takeover mask debug. El FFT base deja de renderizarse bajo el
-	// patch del breaker (sólo FORCE_LIP + slot individual). Discard en el núcleo
-	// y dither estable en world-space en la banda de feather.
-	if (breaker_takeover_debug_enabled) {
-		float take_strength = smoothstep(0.35, 0.70, breaker_takeover_stage);
-		float mask = breaker_takeover_mask(ocean_world_xz) * take_strength;
-		if (mask > 0.995) {
-			discard;
-		} else if (mask > 0.002) {
-			float dither_hash = fract(sin(dot(ocean_world_xz, vec2(12.9898, 78.233))) * 43758.5453);
-			if (dither_hash < mask) {
-				discard;
-			}
-		}
-	}
+	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
+	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
 
 	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap;
 	if (unlit) {
