@@ -72,6 +72,7 @@ var _breaking_coastal_fraction := 0.0
 var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
 var _ocean_shape_debug := false # 5R.1: vista neutra de forma (silueta/crest/valle).
 var _ocean_crest_sharpen_debug := false # 5R1C: vista de zonas de crest sharpening.
+var _ocean_normal_fragment := true # 5R2: normal shading FRAGMENT (true) vs VERTEX (false).
 # 5R1D: autoridad única de los parámetros de crest sharpening (render + query).
 var _crest_sharpen := {
 	"strength": 1.0,
@@ -317,6 +318,16 @@ func toggle_ocean_crest_sharpen_debug() -> void:
 
 func ocean_crest_sharpen_debug_name() -> String:
 	return "ON" if _ocean_crest_sharpen_debug else "OFF"
+
+
+func toggle_ocean_normal_fragment() -> void:
+	## 5R2: A/B normal shading FRAGMENT vs VERTEX. No altera geometría.
+	_ocean_normal_fragment = not _ocean_normal_fragment
+	surface.get_surface_material().set_shader_parameter(&"ocean_normal_fragment", _ocean_normal_fragment)
+
+
+func ocean_normal_fragment_name() -> String:
+	return "FRAGMENT" if _ocean_normal_fragment else "VERTEX"
 
 
 func _crest_sharpen_config() -> Dictionary:

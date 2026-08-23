@@ -14,7 +14,7 @@ func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | Y: query probes | 4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes | 4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -64,6 +64,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			var fft_module_z := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module_z:
 				fft_module_z.toggle_ocean_crest_sharpen_debug()
+		KEY_G:
+			var fft_module_g := get_tree().get_first_node_in_group(&"ocean_fft")
+			if fft_module_g:
+				fft_module_g.toggle_ocean_normal_fragment()
 		KEY_Y:
 			if _query_probe_tool:
 				_query_probe_tool.call("toggle_snapshot")

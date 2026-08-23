@@ -72,6 +72,10 @@ uniform float ocean_crest_sharpen_max_gain = 0.30;
 uniform float ocean_crest_sharpen_long_weight = 1.0;
 uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform bool ocean_crest_sharpen_debug = false;
+// 5R.2: normal shading per-fragment + material físico de agua.
+uniform bool ocean_normal_fragment = true;   // A/B: FRAGMENT (true) vs VERTEX (false).
+uniform float ocean_water_roughness = 0.08;  // dielectric agua (0.05–0.18).
+uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick).
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -319,6 +323,64 @@ void vertex() {
 }
 
 
+// 5R.2: normal FFT per-pixel (LONG/MID/SHORT compuestos en fragment) con
+// filtering por pixel footprint. Replica la cadena de slope del vertex.
+vec3 pixel_ocean_normal(vec2 world_xz) {
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
+	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+
+	// Filtering por footprint: fade cuando el detalle de la cascade es subpixel.
+	float footprint = max(fwidth(world_xz.x), fwidth(world_xz.y));
+	short_weight *= 1.0 - smoothstep(domain_short_m / 256.0, domain_short_m / 128.0, footprint);
+	mid_weight *= 1.0 - smoothstep(domain_mid_m / 256.0, domain_mid_m / 128.0, footprint);
+
+	vec2 coast_uv = coastal_uv(world_xz);
+	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
+	bool coast_active = has_coastal_data(coast_uv, field_data);
+	bool coast_transform_active = coastal_transform_enabled && coast_active;
+	float shoaling = field_data.g;
+
+	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
+	if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
+		warp_sample = warp_deep_sample(world_xz);
+	}
+	vec2 deep_xz = warp_sample.xy;
+	float warp_confidence = warp_sample.z;
+	vec4 warp_jacobian = vec4(1.0, 0.0, 0.0, 1.0);
+	if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
+		warp_jacobian = warp_jacobian_sample(world_xz);
+	}
+	float effective_shoaling = 1.0;
+	if (coast_transform_active) {
+		if (coastal_warp_effect_debug == 2) effective_shoaling = shoaling;
+		else if (coastal_warp_effect_debug == 0) effective_shoaling = mix(1.0, shoaling, warp_confidence);
+	}
+
+	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+
+	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
+	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
+	vec2 slope_open = slope_from_normal(long_coastal_normal_open);
+	vec2 slope_deep = slope_from_normal(long_coastal_normal_warped);
+	vec2 slope_warped_world = vec2(warp_jacobian.r * slope_deep.x + warp_jacobian.b * slope_deep.y, warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y);
+	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
+	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
+	slope += slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * remainder_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
+	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight * mid_short_weight;
+
+	// 5R.2: la cresta afilada 5R.1C es más empinada que la normal FFT base.
+	slope *= 1.0 + crest_sharpen_mask * ocean_crest_sharpen_max_gain * 0.5;
+
+	return normalize(vec3(-slope.x, 1.0, -slope.y));
+}
+
+
 void fragment() {
 	vec3 color = base_color;
 	if (debug_mode == 2) {
@@ -396,9 +458,20 @@ void fragment() {
 		ROUGHNESS = 0.7;
 		SPECULAR = 0.2;
 	} else {
-		ALBEDO = color;
+		// 5R.2: material físico de agua (dielectric). Fresnel Schlick lo aplica
+		// Godot PBR con SPECULAR = F0 y la NORMAL per-pixel.
+		vec3 shading_normal;
+		if (ocean_normal_fragment) {
+			shading_normal = pixel_ocean_normal(ocean_world_xz);
+		} else {
+			shading_normal = normalize(derived_normal);
+		}
+		NORMAL = shading_normal;
+		// Translucencia de cresta MUY sutil (sin foam, sin emission).
+		ALBEDO = mix(base_color, base_color * 1.25, crest_sharpen_mask * 0.35);
 		EMISSION = vec3(0.0);
-		ROUGHNESS = 0.42;
-		SPECULAR = 0.35;
+		ROUGHNESS = ocean_water_roughness;
+		SPECULAR = ocean_water_f0;
+		METALLIC = 0.0;
 	}
 }
