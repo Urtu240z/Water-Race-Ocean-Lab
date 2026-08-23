@@ -75,8 +75,9 @@ static func _apply_invariant(config: OpenOceanFFTConfig, band_index: int) -> voi
 			config.max_wavelength_m = 128.0
 			config.transition_width_m = 4.0
 			config.short_wave_damping_m = 0.35
-			# 5R.1 JONSWAP LONG: swell fuerte y coherente, peak legible.
-			config.fetch_length_m = 40000.0
+			# 5R.1B JONSWAP LONG: swell coherente, peak más corto (17-36m) para
+			# subir la steepness de LONG sin aumentar Hs (crest más legible).
+			config.fetch_length_m = 25000.0
 			config.swell = 0.8
 			config.detail = 1.0
 			config.jonswap_spread = 0.05

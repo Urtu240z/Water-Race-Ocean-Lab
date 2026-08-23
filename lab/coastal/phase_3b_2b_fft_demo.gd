@@ -111,6 +111,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ocean.set_sea_state(SeaStateScript.State.ROUGH)
 		KEY_T:
 			_ocean.cycle_spectrum_model()
+		KEY_S:
+			_ocean.toggle_ocean_shape_debug()
 		KEY_Q:
 			_ocean.adjust_breaker_debug_stage(-0.05)
 		KEY_E:
@@ -148,7 +150,7 @@ func _update_status() -> void:
 	var long_direction: Vector2 = _ocean.coastal_long_reference_direction()
 	var warp_direction: Vector2 = _ocean.coastal_warp_direction()
 	var direction_error_deg: float = rad_to_deg(acos(clampf(long_direction.dot(warp_direction), -1.0, 1.0)))
-	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD — Sea State: %s | Spectrum: %s\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s\n%s" % [_ocean.sea_state_name(), _ocean.spectrum_model_name(), _BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text(), _breaker_text()]
+	_status.text = "PHASE 4A — REAL FFT PRE-BREAK FIELD — Sea State: %s | Spectrum: %s | Shape: %s\nB Break debug: %s | C Coastal: %s | P Paused: %s | V Camera: %s | J Seabed: %s\nM Composition: %s | O Effect: %s\nF Forced warp: %s (+37,+23 m) | G Gain: %.0fx | D Delta heatmap: %s\nLONG dir=(%.3f,%.3f) | Eikonal/warp=(%.3f,%.3f) | error=%.3f deg\n\nDepth=H_LONG/(gamma*h), gamma=.78 | steepness=k_local*(Hs_LONG/2) | crest=lambda/16\nWarp world->deep: %s\n%s\n%s\n%s\n%s\n%s\n%s" % [_ocean.sea_state_name(), _ocean.spectrum_model_name(), _ocean.ocean_shape_debug_name(), _BREAKING_DEBUG_NAMES[_breaking_debug], "ON" if _coastal_enabled else "OFF", "YES" if SimulationClock.is_paused() else "NO", _camera_mode_name(), _seabed_mode_name(), _COMPOSITION_NAMES[_composition_mode], _WARP_EFFECT_NAMES[_warp_effect_mode], "ON" if _forced_warp_enabled else "OFF", _DEBUG_GAINS[_debug_gain_index], "ON" if _delta_heatmap_enabled else "OFF", long_direction.x, long_direction.y, warp_direction.x, warp_direction.y, direction_error_deg, warp_text, _split_metrics_text(), _warp_probes_text(warp), _fft_diagnostics_text(), _query_coastal_text(), _breaker_text(), _spectrum_hs_text()]
 
 
 func _split_metrics_text() -> String:
@@ -156,6 +158,17 @@ func _split_metrics_text() -> String:
 	if metrics.is_empty():
 		return "Split metrics: pending"
 	return "Split H0 total=%.5f coastal=%.5f (%.2f%%) | variance C=%.7f R=%.7f cov=%.7f total=%.7f" % [metrics["weighted_h0_power_total"], metrics["weighted_h0_power_coastal"], 100.0 * metrics["weighted_h0_power_coastal_fraction"], metrics["reconstructed_spatial_variance_coastal"], metrics["reconstructed_spatial_variance_remainder"], metrics["coastal_remainder_covariance"], metrics["total_reconstructed_variance"]]
+
+
+func _spectrum_hs_text() -> String:
+	## 5R1B: target/measured Hs por banda (diagnóstico de amplitud LONG/MID/SHORT).
+	var bands: Array = _ocean.spectrum_band_diagnostics()
+	if bands.is_empty():
+		return "Hs bands: pending"
+	var parts: PackedStringArray = []
+	for band in bands:
+		parts.append("%s %.3f/%.3f" % [band["id"], band["target_hs_m"], band["measured_hs_m"]])
+	return "Hs " + " | ".join(parts)
 
 
 func _warp_probes_text(warp) -> String:

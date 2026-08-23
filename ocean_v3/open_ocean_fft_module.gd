@@ -70,6 +70,7 @@ var _coastal_energy_metrics: Dictionary = {}
 var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
 var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
+var _ocean_shape_debug := false # 5R.1: vista neutra de forma (silueta/crest/valle).
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -268,6 +269,53 @@ func set_spectrum_model(model: int) -> void:
 
 func spectrum_model_name() -> String:
 	return "JONSWAP_HASSELMANN" if _spectrum_model == OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN else "PHILLIPS"
+
+
+func spectrum_band_diagnostics() -> Array:
+	## 5R1B: target/measured Hs + lambda_peak por banda (JONSWAP), sin readback GPU.
+	var result: Array = []
+	for config in configs:
+		var u := maxf(config.wind_speed_mps, 0.1)
+		var fetch := maxf(config.fetch_length_m, 1.0)
+		var g := config.gravity_mps2
+		var omega_p := 22.0 * pow(g * g / (u * fetch), 1.0 / 3.0)
+		var k_p := omega_p * omega_p / g
+		result.append({
+			"id": String(config.id),
+			"target_hs_m": config.target_hs_m,
+			"measured_hs_m": config.measured_hs_m,
+			"lambda_peak_m": TAU / k_p,
+		})
+	return result
+
+
+func toggle_ocean_shape_debug() -> void:
+	## 5R1B: vista neutra de forma (C en el lab). No altera simulación.
+	_ocean_shape_debug = not _ocean_shape_debug
+	surface.get_surface_material().set_shader_parameter(&"ocean_shape_debug", _ocean_shape_debug)
+
+
+func ocean_shape_debug_name() -> String:
+	return "ON" if _ocean_shape_debug else "OFF"
+
+
+func _validate_long_split(config: OpenOceanFFTConfig) -> Dictionary:
+	## 5R1B: comprueba numéricamente que LONG_COASTAL + LONG_REMAINDER = LONG.
+	var full := SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(SimulationClock.simulation_seed, config.id))
+	var split := SpectrumScript.build_h0_split_rgba32f(config, SpectrumScript.derive_cascade_seed(SimulationClock.simulation_seed, config.id), coastal_split_inner_deg, coastal_split_outer_deg)
+	var full_f := full.to_float32_array()
+	var coastal_f := (split["coastal"] as PackedByteArray).to_float32_array()
+	var remainder_f := (split["remainder"] as PackedByteArray).to_float32_array()
+	var max_err := 0.0
+	var sum_sq := 0.0
+	var count := 0
+	for index in full_f.size():
+		var recon := coastal_f[index] + remainder_f[index]
+		var err := absf(recon - full_f[index])
+		max_err = maxf(max_err, err)
+		sum_sq += err * err
+		count += 1
+	return {"max_err": max_err, "rms_err": sqrt(sum_sq / float(max(count, 1)))}
 
 
 func _apply_spectrum_model() -> void:
