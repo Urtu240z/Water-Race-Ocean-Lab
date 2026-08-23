@@ -18,93 +18,99 @@ extends RefCounted
 
 const _STAGE_KEYS: Array[float] = [0.0, 0.25, 0.5, 0.75, 1.0]
 
-# OUTER (13): agua trasera, subida, cara, cresta (redondeada, casi plana arriba),
-# approach y punta/nose (máximo forward).
+# OUTER (13): agua trasera, subida progresiva, cara larga y suave, cresta
+# redondeada y punta/nose (labio fino proyectado hacia +X, máximo forward).
+# Silueta COMPACTA: el perfil ocupa casi todo el ancho del ribetón (sin colas
+# muertas), por lo que cara + cresta + labio dominan la sección y el breaker
+# lee alto, no achatado. Plano local: +X = forward (avance de la ola).
 const _OUTER_SHAPES: Array = [
 	# 0.0 — swell suave (sin reverse).
 	[
-		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.03),
-		Vector2(-3.70, 0.10), Vector2(-2.80, 0.20), Vector2(-1.90, 0.32),
-		Vector2(-1.00, 0.42), Vector2(-0.10, 0.48), Vector2(0.75, 0.52),
-		Vector2(1.55, 0.53), Vector2(2.15, 0.50), Vector2(2.55, 0.42),
-		Vector2(2.75, 0.34),
+		Vector2(-2.2, 0.00), Vector2(-1.9, 0.02), Vector2(-1.6, 0.05),
+		Vector2(-1.3, 0.10), Vector2(-1.0, 0.17), Vector2(-0.7, 0.24),
+		Vector2(-0.4, 0.30), Vector2(-0.1, 0.34), Vector2(0.2, 0.37),
+		Vector2(0.5, 0.37), Vector2(0.8, 0.35), Vector2(1.05, 0.31),
+		Vector2(1.28, 0.27),
 	],
 	# 0.25 — cara baja, cresta redondeada (sin reverse).
 	[
-		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.08),
-		Vector2(-3.70, 0.25), Vector2(-2.80, 0.48), Vector2(-1.90, 0.72),
-		Vector2(-1.00, 0.92), Vector2(-0.10, 1.05), Vector2(0.75, 1.12),
-		Vector2(1.55, 1.14), Vector2(2.15, 1.08), Vector2(2.55, 0.94),
-		Vector2(2.75, 0.78),
+		Vector2(-2.2, 0.00), Vector2(-1.9, 0.05), Vector2(-1.6, 0.13),
+		Vector2(-1.3, 0.26), Vector2(-1.0, 0.44), Vector2(-0.7, 0.66),
+		Vector2(-0.4, 0.92), Vector2(-0.1, 1.18), Vector2(0.2, 1.40),
+		Vector2(0.5, 1.54), Vector2(0.8, 1.58), Vector2(1.05, 1.52),
+		Vector2(1.28, 1.40),
 	],
-	# 0.5 — cara clara, cresta formada (SIN overhang: X sigue avanzando).
+	# 0.5 — cara clara, cresta formada (SIN overhang: nose x <= inner1 x).
 	[
-		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.12),
-		Vector2(-3.70, 0.38), Vector2(-2.80, 0.72), Vector2(-1.90, 1.10),
-		Vector2(-1.00, 1.48), Vector2(-0.10, 1.78), Vector2(0.75, 1.95),
-		Vector2(1.55, 2.00), Vector2(2.15, 1.90), Vector2(2.55, 1.70),
-		Vector2(2.75, 1.50),
+		Vector2(-2.2, 0.00), Vector2(-1.9, 0.09), Vector2(-1.6, 0.24),
+		Vector2(-1.3, 0.48), Vector2(-1.0, 0.80), Vector2(-0.7, 1.20),
+		Vector2(-0.4, 1.64), Vector2(-0.1, 2.06), Vector2(0.2, 2.40),
+		Vector2(0.5, 2.62), Vector2(0.8, 2.70), Vector2(1.05, 2.66),
+		Vector2(1.30, 2.50),
 	],
-	# 0.75 — labio proyectado, reverse moderado (overhang claro pero contenido).
+	# 0.75 — labio proyectado, reverse moderado (empieza el overhang).
 	[
-		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.14),
-		Vector2(-3.70, 0.44), Vector2(-2.80, 0.88), Vector2(-1.90, 1.36),
-		Vector2(-1.00, 1.86), Vector2(-0.10, 2.24), Vector2(0.75, 2.48),
-		Vector2(1.55, 2.56), Vector2(2.15, 2.50), Vector2(2.55, 2.32),
-		Vector2(2.75, 2.10),
+		Vector2(-2.2, 0.00), Vector2(-1.9, 0.11), Vector2(-1.6, 0.30),
+		Vector2(-1.3, 0.60), Vector2(-1.0, 1.00), Vector2(-0.7, 1.48),
+		Vector2(-0.4, 2.00), Vector2(-0.1, 2.48), Vector2(0.2, 2.88),
+		Vector2(0.5, 3.14), Vector2(0.8, 3.24), Vector2(1.08, 3.16),
+		Vector2(1.42, 2.82),
 	],
-	# 1.0 — plunging completo (C abierta).
+	# 1.0 — plunging claro: cara empinada, cresta redondeada, labio fino adelante,
+	# cavidad tipo C abierta (pared interior vertical, retorno inferior suave).
 	[
-		Vector2(-6.00, 0.00), Vector2(-5.20, 0.00), Vector2(-4.60, 0.15),
-		Vector2(-3.70, 0.50), Vector2(-2.80, 1.05), Vector2(-1.90, 1.65),
-		Vector2(-1.00, 2.25), Vector2(-0.10, 2.65), Vector2(0.75, 2.85),
-		Vector2(1.55, 2.88), Vector2(2.15, 2.82), Vector2(2.55, 2.62),
-		Vector2(2.75, 2.38),
+		Vector2(-2.2, 0.00), Vector2(-1.9, 0.13), Vector2(-1.6, 0.36),
+		Vector2(-1.3, 0.72), Vector2(-1.0, 1.18), Vector2(-0.7, 1.72),
+		Vector2(-0.4, 2.30), Vector2(-0.1, 2.84), Vector2(0.2, 3.28),
+		Vector2(0.5, 3.58), Vector2(0.82, 3.66), Vector2(1.14, 3.52),
+		Vector2(1.55, 3.00),
 	],
 ]
 
-# INNER (14): punta (compartida), giro corto abajo, retorno interior amplio,
-# pared interior curva, bottom turn, salida delantera.
+# INNER (14): punta (compartida), caída del labio, pared interior curva/muy
+# vertical, bottom turn y salida delantera por la línea de agua (C abierta,
+# sin cerrar círculo ni espiral).
 const _INNER_SHAPES: Array = [
 	# 0.0 — interior degenerado (sin reverse).
 	[
-		Vector2(2.75, 0.34), Vector2(2.90, 0.26), Vector2(3.05, 0.18),
-		Vector2(3.20, 0.12), Vector2(3.35, 0.08), Vector2(3.50, 0.05),
-		Vector2(3.65, 0.03), Vector2(3.80, 0.02), Vector2(3.95, 0.01),
-		Vector2(4.10, 0.00), Vector2(4.25, 0.00), Vector2(4.40, 0.00),
-		Vector2(4.55, 0.00), Vector2(4.70, 0.00),
+		Vector2(1.28, 0.27), Vector2(1.50, 0.21), Vector2(1.72, 0.15),
+		Vector2(1.92, 0.10), Vector2(2.10, 0.06), Vector2(2.26, 0.035),
+		Vector2(2.40, 0.02), Vector2(2.52, 0.01), Vector2(2.62, 0.005),
+		Vector2(2.70, 0.002), Vector2(2.76, 0.001), Vector2(2.80, 0.0005),
+		Vector2(2.82, 0.0002), Vector2(2.83, 0.0),
 	],
 	# 0.25 — sin reverse.
 	[
-		Vector2(2.75, 0.78), Vector2(2.90, 0.62), Vector2(3.05, 0.46),
-		Vector2(3.20, 0.32), Vector2(3.35, 0.22), Vector2(3.50, 0.14),
-		Vector2(3.65, 0.09), Vector2(3.80, 0.05), Vector2(3.95, 0.03),
-		Vector2(4.10, 0.01), Vector2(4.25, 0.00), Vector2(4.40, 0.00),
-		Vector2(4.55, 0.00), Vector2(4.70, 0.00),
+		Vector2(1.28, 1.40), Vector2(1.50, 1.18), Vector2(1.72, 0.92),
+		Vector2(1.92, 0.66), Vector2(2.10, 0.44), Vector2(2.26, 0.27),
+		Vector2(2.40, 0.15), Vector2(2.52, 0.08), Vector2(2.62, 0.04),
+		Vector2(2.70, 0.02), Vector2(2.76, 0.01), Vector2(2.80, 0.005),
+		Vector2(2.82, 0.002), Vector2(2.83, 0.0),
 	],
-	# 0.5 — SIN overhang: nose (x=2.75) ≤ inner1 (x=2.85).
+	# 0.5 — SIN overhang: nose x (1.30) < inner1 x (1.44); interior adelantado.
 	[
-		Vector2(2.75, 1.50), Vector2(2.85, 1.30), Vector2(2.95, 1.05),
-		Vector2(3.05, 0.82), Vector2(3.15, 0.62), Vector2(3.25, 0.46),
-		Vector2(3.35, 0.33), Vector2(3.45, 0.23), Vector2(3.55, 0.15),
-		Vector2(3.65, 0.10), Vector2(3.75, 0.06), Vector2(3.90, 0.03),
-		Vector2(4.05, 0.01), Vector2(4.20, 0.00),
+		Vector2(1.30, 2.50), Vector2(1.44, 2.16), Vector2(1.60, 1.80),
+		Vector2(1.78, 1.44), Vector2(1.96, 1.10), Vector2(2.12, 0.80),
+		Vector2(2.26, 0.54), Vector2(2.38, 0.34), Vector2(2.48, 0.20),
+		Vector2(2.56, 0.11), Vector2(2.62, 0.06), Vector2(2.66, 0.03),
+		Vector2(2.68, 0.012), Vector2(2.69, 0.0),
 	],
-	# 0.75 — reverse moderado.
+	# 0.75 — reverse moderado: cavidad que empieza a abrirse.
 	[
-		Vector2(2.75, 2.10), Vector2(2.60, 1.90), Vector2(2.40, 1.80),
-		Vector2(2.15, 1.80), Vector2(1.95, 1.70), Vector2(1.80, 1.50),
-		Vector2(1.72, 1.25), Vector2(1.70, 1.00), Vector2(1.80, 0.78),
-		Vector2(2.00, 0.55), Vector2(2.30, 0.36), Vector2(2.70, 0.22),
-		Vector2(3.10, 0.18), Vector2(3.40, 0.20),
+		Vector2(1.42, 2.82), Vector2(1.26, 2.42), Vector2(1.06, 2.08),
+		Vector2(0.94, 1.76), Vector2(0.96, 1.44), Vector2(1.10, 1.14),
+		Vector2(1.34, 0.86), Vector2(1.64, 0.60), Vector2(1.96, 0.38),
+		Vector2(2.24, 0.22), Vector2(2.48, 0.12), Vector2(2.66, 0.06),
+		Vector2(2.77, 0.02), Vector2(2.83, 0.0),
 	],
-	# 1.0 — retorno interior amplio + bottom turn (advance → reverse → advance).
+	# 1.0 — cavidad tipo C abierta: labio fino, pared interior vertical, fondo
+	# suave y salida por la línea de agua (advance → reverse → advance).
 	[
-		Vector2(2.75, 2.38), Vector2(2.58, 2.30), Vector2(2.25, 2.34),
-		Vector2(1.85, 2.43), Vector2(1.35, 2.30), Vector2(0.95, 2.02),
-		Vector2(0.75, 1.65), Vector2(0.72, 1.20), Vector2(0.85, 0.82),
-		Vector2(1.15, 0.50), Vector2(1.65, 0.28), Vector2(2.35, 0.15),
-		Vector2(3.20, 0.15), Vector2(3.80, 0.32),
+		Vector2(1.55, 3.00), Vector2(1.28, 2.60), Vector2(0.98, 2.30),
+		Vector2(0.70, 2.14), Vector2(0.48, 1.90), Vector2(0.34, 1.52),
+		Vector2(0.28, 1.10), Vector2(0.32, 0.70), Vector2(0.54, 0.40),
+		Vector2(0.92, 0.20), Vector2(1.38, 0.08), Vector2(1.88, 0.03),
+		Vector2(2.20, 0.01), Vector2(2.30, 0.0),
 	],
 ]
 

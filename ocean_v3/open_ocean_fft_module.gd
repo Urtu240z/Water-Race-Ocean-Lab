@@ -571,7 +571,7 @@ func toggle_breaker_profile_direction() -> void:
 
 func breaker_profile_direction_name() -> String:
 	if _breaker_pool == null:
-		return "FLIPPED"
+		return "FORWARD"
 	return _breaker_pool.debug_profile_direction_name()
 
 

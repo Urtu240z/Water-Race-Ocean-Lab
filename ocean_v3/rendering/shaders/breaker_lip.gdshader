@@ -65,11 +65,12 @@ uniform float breaker_curl_angle_deg = 90.0;
 // G = (y - y_stage0)/HEIGHT_REF, B = d(x_norm)/du, A = dG/du. Sólo FORCE_LIP.
 uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
-uniform float breaker_profile_height_hs = 2.0;
-uniform float breaker_profile_length_scale = 0.65;
-// 4C-S3: FLIPPED (-1) = labio proyectando hacia -direction_xz, que es la
-// dirección REAL de avance del FFT (convención del evolve actual). Default.
-uniform float breaker_profile_forward_sign = -1.0;
+uniform float breaker_profile_height_hs = 3.2;
+uniform float breaker_profile_length_scale = 0.5;
+// 4C-S3: FORWARD (+1) = labio proyectando hacia +direction_xz, que es la
+// dirección REAL de avance del FFT (verificado: las crestas LONG_COASTAL
+// viajan hacia +wind = +direction_xz; el -1 antiguo las invertía). Default.
+uniform float breaker_profile_forward_sign = 1.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;

@@ -75,6 +75,13 @@ uniform float breaker_takeover_width_m = 5.0;
 uniform float breaker_takeover_stage = 0.0;
 uniform float breaker_takeover_inner = 0.75;
 uniform float breaker_takeover_feather = 0.15;
+// 4C-S3.1: ventana longitudinal localizada (en el marco del perfil; con
+// forward_sign=+1 FORWARD la ventana cae sobre cara/crest/nose sin espejo).
+uniform float breaker_takeover_start = 0.30;
+uniform float breaker_takeover_core_start = 0.40;
+uniform float breaker_takeover_core_end = 0.72;
+uniform float breaker_takeover_end = 0.82;
+uniform float breaker_takeover_forward_sign = 1.0;
 
 varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
@@ -110,15 +117,19 @@ float breaker_takeover_mask(vec2 world_xz) {
 	vec2 delta = world_xz - breaker_takeover_anchor_xz;
 	float local_s = dot(delta, direction);
 	float local_v = dot(delta, tangent);
-	float half_length = 0.5 * breaker_takeover_length_m;
 	float half_width = 0.5 * breaker_takeover_width_m;
-	float fade_s0 = breaker_takeover_inner * half_length;
-	float fade_s1 = max(fade_s0 + 0.001, (breaker_takeover_inner + breaker_takeover_feather) * half_length);
+	// 4C-S3.1: ventana LONGITUDINAL localizada (sólo la franja de cara/crest/nose),
+	// no el rectángulo completo del patch. q ∈ [0,1] a lo largo del ribbon; con
+	// FORWARD (+1, alineado con el avance real del FFT) no se espeja.
+	float q = local_s / max(breaker_takeover_length_m, 0.001) + 0.5;
+	float q_profile = breaker_takeover_forward_sign > 0.0 ? q : 1.0 - q;
+	float longitudinal_mask = smoothstep(breaker_takeover_start, breaker_takeover_core_start, q_profile)
+		* (1.0 - smoothstep(breaker_takeover_core_end, breaker_takeover_end, q_profile));
+	// Lateral: sistema existente (inner/feather sobre local_v), sin ampliar ancho.
 	float fade_v0 = breaker_takeover_inner * half_width;
 	float fade_v1 = max(fade_v0 + 0.001, (breaker_takeover_inner + breaker_takeover_feather) * half_width);
-	float w_s = 1.0 - smoothstep(fade_s0, fade_s1, abs(local_s));
-	float w_v = 1.0 - smoothstep(fade_v0, fade_v1, abs(local_v));
-	return clamp(w_s * w_v, 0.0, 1.0);
+	float lateral_mask = 1.0 - smoothstep(fade_v0, fade_v1, abs(local_v));
+	return clamp(longitudinal_mask * lateral_mask, 0.0, 1.0);
 }
 
 void vertex() {
