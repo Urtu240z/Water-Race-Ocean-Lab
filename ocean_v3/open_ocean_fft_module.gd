@@ -564,6 +564,17 @@ func breaker_debug_stage() -> float:
 	return _breaker_pool.debug_stage()
 
 
+func toggle_breaker_profile_direction() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.toggle_debug_profile_direction()
+
+
+func breaker_profile_direction_name() -> String:
+	if _breaker_pool == null:
+		return "FLIPPED"
+	return _breaker_pool.debug_profile_direction_name()
+
+
 func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}

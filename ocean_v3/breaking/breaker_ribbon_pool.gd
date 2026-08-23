@@ -96,6 +96,7 @@ var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
 var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
 var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
+var _profile_forward_sign := -1.0 # 4C-S2: -1 = FLIPPED, +1 = FORWARD (debug).
 var _last_fingerprint := ""
 
 
@@ -218,6 +219,17 @@ func debug_stage() -> float:
 	return _debug_stage
 
 
+func toggle_debug_profile_direction() -> void:
+	## 4C-S2: espeja la cross-section longitudinalmente (sólo FORCE_LIP, debug).
+	_profile_forward_sign = -_profile_forward_sign
+	if _material != null:
+		_material.set_shader_parameter(&"breaker_profile_forward_sign", _profile_forward_sign)
+
+
+func debug_profile_direction_name() -> String:
+	return "FLIPPED" if _profile_forward_sign < 0.0 else "FORWARD"
+
+
 func breaker_debug_name() -> String:
 	return DEBUG_NAMES[_debug_mode]
 
@@ -278,6 +290,7 @@ func _ensure_material() -> void:
 	# 4C-S1: LUT de cross-section (una vez; sin regeneración runtime).
 	_material.set_shader_parameter(&"breaker_profile_lut", LutTexture)
 	_material.set_shader_parameter(&"breaker_profile_debug_stage", _debug_stage)
+	_material.set_shader_parameter(&"breaker_profile_forward_sign", _profile_forward_sign)
 	_template_mesh = _build_ribbon_mesh()
 
 

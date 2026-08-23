@@ -109,6 +109,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ocean.adjust_breaker_debug_stage(-0.05)
 		KEY_E:
 			_ocean.adjust_breaker_debug_stage(0.05)
+		KEY_X:
+			_ocean.toggle_breaker_profile_direction()
 	_update_status()
 
 
@@ -193,7 +195,8 @@ func _breaker_text() -> String:
 	var body := " | ".join(lines)
 	var slot_text := "Breaker debug slot (H): %s/%d" % [_ocean.breaker_debug_slot_name(), summary["slots"]]
 	var stage_text := "CrossStage (Q/E): %.2f" % _ocean.breaker_debug_stage()
-	return "Breakers (K): %s | debug (N): %s | %s | %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, stage_text, summary["slots"], summary["max_slots"], body]
+	var dir_text := "ProfileDir (X): %s" % _ocean.breaker_profile_direction_name()
+	return "Breakers (K): %s | debug (N): %s | %s | %s | %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, stage_text, dir_text, summary["slots"], summary["max_slots"], body]
 
 
 func _set_camera_mode(mode: int) -> void:

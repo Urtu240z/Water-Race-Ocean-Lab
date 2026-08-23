@@ -61,11 +61,13 @@ uniform float breaker_advance_fraction = 0.45;
 uniform float breaker_lip_slope = 0.7;
 // 4C: ángulo máximo de curl en producción (PREBREAK alto). FORCE_LIP usa ~115°.
 uniform float breaker_curl_angle_deg = 90.0;
-// 4C-S1: LUT de cross-section aprobada (horneada offline). R/G = delta respecto
-// a stage 0, B/A = dR/du y dG/du. Sólo la consume FORCE_LIP (debug).
+// 4C-S2: LUT de cross-section aprobada (horneada offline). R = x_norm ABSOLUTO,
+// G = (y - y_stage0)/HEIGHT_REF, B = d(x_norm)/du, A = dG/du. Sólo FORCE_LIP.
 uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
 uniform float breaker_profile_height_hs = 2.0;
+uniform float breaker_profile_length_scale = 0.65;
+uniform float breaker_profile_forward_sign = -1.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
@@ -118,7 +120,18 @@ void vertex() {
 	// v∈[0,1] -> ancho centrado en el anchor. El labio (cresta) cae en u≈0.545.
 	float u_world = mix(-0.6, 0.5, u) * ribbon_wavelength_m;
 	float v_world = (v - 0.5) * ribbon_width_m;
-	vec2 P0 = anchor_xz + direction * u_world + tangent * v_world;
+	// 4C-S2: en FORCE_LIP la base FFT se samplea en la posición REST de la LUT
+	// (stage 0), para que el stage 0 quede exactamente pegado al FFT.
+	float profile_length = ribbon_wavelength_m * breaker_profile_length_scale;
+	float source_start = -0.5 * profile_length;
+	float source_end = 0.5 * profile_length;
+	float s_rest = u_world;
+	if (breaker_debug_mode == 3) {
+		vec4 rest_profile = textureLod(breaker_profile_lut, vec2(u, 0.0), 0.0);
+		float rest_x = breaker_profile_forward_sign > 0.0 ? rest_profile.r : 1.0 - rest_profile.r;
+		s_rest = mix(source_start, source_end, rest_x);
+	}
+	vec2 P0 = anchor_xz + direction * s_rest + tangent * v_world;
 
 	vec2 coast_uv = coastal_uv(P0);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
@@ -144,22 +157,24 @@ void vertex() {
 	vec2 slope = surface_slope_break(P0, coast_uv, field_data, dist);
 
 	// Modos: LIP/TAKEOVER (producción) = curl 4B/4C antiguo. FORCE_LIP (debug) =
-	// cross-section LUT aprobada. REGION = plantilla plana sin deformar.
+	// cross-section LUT aprobada (x_norm absoluto). REGION = plana sin deformar.
 	bool use_lut_profile = breaker_debug_mode == 3;
 	bool deform_old = breaker_debug_mode == 0 || breaker_debug_mode == 1;
 
-	// --- Perfil LUT (FORCE_LIP): DELTA desde stage 0 aplicado sobre el FFT ---
-	float profile_s = u_world;
+	// --- FORCE_LIP: target desde la LUT (x_norm absoluto + forward sign) ---
+	float s_target = u_world;
 	float y_profile = 0.0;
-	float dRdu = 0.0;
+	float dx_norm_du = 0.0;
 	float dGdu = 0.0;
 	if (use_lut_profile) {
 		vec4 profile = textureLod(breaker_profile_lut, vec2(u, clamp(breaker_profile_debug_stage, 0.0, 1.0)), 0.0);
-		float patch_length = 1.1 * ribbon_wavelength_m;
-		profile_s = u_world + profile.r * patch_length;
-		float vertical_scale = local_hs * breaker_profile_height_hs;
-		y_profile = profile.g * vertical_scale;
-		dRdu = profile.b;
+		float target_x = breaker_profile_forward_sign > 0.0 ? profile.r : 1.0 - profile.r;
+		s_target = mix(source_start, source_end, target_x);
+		y_profile = profile.g * local_hs * breaker_profile_height_hs;
+		dx_norm_du = profile.b;
+		if (breaker_profile_forward_sign < 0.0) {
+			dx_norm_du = -dx_norm_du;
+		}
 		dGdu = profile.a;
 	}
 
@@ -200,9 +215,9 @@ void vertex() {
 	vec3 world_pos;
 	if (use_lut_profile) {
 		world_pos = vec3(
-			anchor_xz.x + direction.x * profile_s + tangent.x * v_world + disp.x,
+			anchor_xz.x + direction.x * s_target + tangent.x * v_world + disp.x,
 			sea_level_y + disp.y + y_profile,
-			anchor_xz.y + direction.y * profile_s + tangent.y * v_world + disp.z
+			anchor_xz.y + direction.y * s_target + tangent.y * v_world + disp.z
 		);
 	} else if (deform_old) {
 		world_pos = vec3(
@@ -221,11 +236,9 @@ void vertex() {
 
 	vec3 normal_final;
 	if (use_lut_profile) {
-		// Normal del perfil LUT a partir de las derivadas B/A (permite overhang).
-		float patch_length = 1.1 * ribbon_wavelength_m;
-		float vertical_scale = local_hs * breaker_profile_height_hs;
-		float ds_du = patch_length * (1.0 + dRdu);
-		float dy_du = vertical_scale * dGdu;
+		// Normal del perfil LUT a partir de d(x_norm)/du y dG/du (permite overhang).
+		float ds_du = profile_length * dx_norm_du;
+		float dy_du = local_hs * breaker_profile_height_hs * dGdu;
 		float slope_dir = dot(slope, direction);
 		float slope_tan = dot(slope, tangent);
 		vec3 tang_u = vec3(direction.x * ds_du, slope_dir * ds_du + dy_du, direction.y * ds_du);

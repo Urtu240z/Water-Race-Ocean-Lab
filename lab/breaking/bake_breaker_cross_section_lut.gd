@@ -2,11 +2,11 @@ extends SceneTree
 ## Baker offline: hornea la cross-section aprobada del LAB a una LUT RGBA16F.
 ## Uso: godot --headless -s res://lab/breaking/bake_breaker_cross_section_lut.gd
 ##
-## La LUT guarda la DEFORMACIÓN relativa a stage=0 (no la posición absoluta):
-##   R = x_norm - x0_norm   (delta horizontal normalizado; overhang preservado)
-##   G = y_delta / HEIGHT_REF
-##   B = dR/du, A = dG/du   (derivadas para reconstruir la normal con overhang)
-## stage 0 => R=G=0 exactamente (el ribbon queda sobre el FFT).
+## La LUT guarda la coordenada longitudinal NORMALIZADA ABSOLUTA (x_norm):
+##   R = x_norm(stage)   (absoluto; advance/reverse/advance preservado, sin clamp)
+##   G = (y(stage) - y(stage0)) / HEIGHT_REF
+##   B = d(x_norm)/du, A = dG/du   (derivadas para reconstruir la normal)
+## stage 0 => G=0 (y_delta=0); R = x_norm(stage0) = posición de reposo real.
 
 const CrossSection := preload("res://lab/breaking/breaker_cross_section.gd")
 
@@ -24,20 +24,16 @@ func _initialize() -> void:
 
 	for j in HEIGHT:
 		var stage := float(j) / float(HEIGHT - 1)
-		var start0 := CrossSection.point(0.0, 0.0)
-		var end0 := CrossSection.point(1.0, 0.0)
 		var start_stage := CrossSection.point(0.0, stage)
 		var end_stage := CrossSection.point(1.0, stage)
-		var span0 := end0.x - start0.x
 		var span_s := end_stage.x - start_stage.x
 		for i in WIDTH:
 			var u := float(i) / float(WIDTH - 1)
 			var p0 := CrossSection.point(u, 0.0)
 			var p := CrossSection.point(u, stage)
-			var x0_norm := (p0.x - start0.x) / span0
 			var x_norm := (p.x - start_stage.x) / span_s
 			var idx := j * WIDTH + i
-			r[idx] = x_norm - x0_norm
+			r[idx] = x_norm
 			y_delta[idx] = p.y - p0.y
 			max_abs_y = maxf(max_abs_y, absf(y_delta[idx]))
 
