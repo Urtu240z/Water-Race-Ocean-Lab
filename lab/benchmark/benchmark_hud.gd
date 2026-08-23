@@ -21,9 +21,10 @@ func _process(_delta: float) -> void:
 	metrics_label.text = "\n".join([
 		"OCEAN LAB — FASE 2A / QUERY REFERENCE",
 		"Sea State: %s" % (fft_module.sea_state_name() if fft_module else "unavailable"),
-		"Spectrum: %s | Shape: %s" % [
+		"Spectrum: %s | Shape: %s | Crest sharpen: %s" % [
 			fft_module.spectrum_model_name() if fft_module else "unavailable",
 			fft_module.ocean_shape_debug_name() if fft_module else "unavailable",
+			fft_module.ocean_crest_sharpen_debug_name() if fft_module else "unavailable",
 		],
 		_hs_line(fft_module),
 		"Query probes: %s | Query backend: %s" % [

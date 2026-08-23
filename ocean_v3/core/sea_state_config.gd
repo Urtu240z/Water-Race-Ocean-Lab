@@ -129,9 +129,9 @@ static func _state_table() -> Dictionary:
 		State.ROUGH: {
 			"wind_speed_mps": 18.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 1.25, "target_hs_m": 1.00},
-				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 0.80, "target_hs_m": 0.46},
-				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 0.40, "target_hs_m": 0.10},
+				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 2.0, "target_hs_m": 2.50},
+				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 1.25, "target_hs_m": 0.60},
+				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 0.40, "target_hs_m": 0.12},
 			],
 		},
 	}

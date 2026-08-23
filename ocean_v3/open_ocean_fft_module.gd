@@ -71,6 +71,7 @@ var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
 var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
 var _ocean_shape_debug := false # 5R.1: vista neutra de forma (silueta/crest/valle).
+var _ocean_crest_sharpen_debug := false # 5R1C: vista de zonas de crest sharpening.
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -297,6 +298,16 @@ func toggle_ocean_shape_debug() -> void:
 
 func ocean_shape_debug_name() -> String:
 	return "ON" if _ocean_shape_debug else "OFF"
+
+
+func toggle_ocean_crest_sharpen_debug() -> void:
+	## 5R1C: vista de zonas de crest sharpening. No altera simulación.
+	_ocean_crest_sharpen_debug = not _ocean_crest_sharpen_debug
+	surface.get_surface_material().set_shader_parameter(&"ocean_crest_sharpen_debug", _ocean_crest_sharpen_debug)
+
+
+func ocean_crest_sharpen_debug_name() -> String:
+	return "ON" if _ocean_crest_sharpen_debug else "OFF"
 
 
 func _validate_long_split(config: OpenOceanFFTConfig) -> Dictionary:

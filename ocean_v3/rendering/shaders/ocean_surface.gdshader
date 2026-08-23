@@ -65,6 +65,13 @@ uniform float coastal_time_s = 0.0;
 uniform vec3 base_color : source_color = vec3(0.03, 0.16, 0.20);
 // 5R.1: debug de forma (silueta/crest/valle/choppiness). Neutro, sin foam/emission.
 uniform bool ocean_shape_debug = false;
+// 5R.1C: crest sharpening por compresión/convergencia (geometría, sin lip).
+uniform float ocean_crest_sharpen_strength = 1.0;
+uniform float ocean_crest_sharpen_threshold = 0.15;
+uniform float ocean_crest_sharpen_max_gain = 0.30;
+uniform float ocean_crest_sharpen_long_weight = 1.0;
+uniform float ocean_crest_sharpen_mid_weight = 0.5;
+uniform bool ocean_crest_sharpen_debug = false;
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -100,6 +107,7 @@ varying float coastal_mono_phase;
 varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
+varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -158,6 +166,7 @@ void vertex() {
 	coastal_mono_active = 0.0;
 	coastal_warp_delta_m = 0.0;
 	breaking_indices = vec4(0.0);
+	crest_sharpen_mask = 0.0;
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -275,6 +284,35 @@ void vertex() {
 		displacement.y -= takeover_submerge_m * takeover;
 	}
 
+	// 5R.1C: crest sharpening por compresión/convergencia (LONG + MID).
+	// Afila crestas que surgen por suma/interferencia. Sólo geometría, sin lip.
+	if (ocean_crest_sharpen_strength > 0.0 && module_enabled && !coastal_monochromatic_debug) {
+		float swell_lambda = coastal_metrics.g > 0.5 ? coastal_metrics.g : (TAU / max(coastal_k0_rad_m, 0.001));
+		float eps = max(swell_lambda * 0.12, 1.5);
+		vec2 sdir = normalize(coastal_incoming_direction_xz + vec2(0.0001, 0.0));
+		float l_c = long_height_at(world_xz);
+		float l_l = long_height_at(world_xz - sdir * eps);
+		float l_r = long_height_at(world_xz + sdir * eps);
+		float curv_long = l_l - 2.0 * l_c + l_r; // negativo = cresta.
+		float m_c = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).y;
+		float m_l = textureLod(displacement_mid, spectrum_uv(world_xz - sdir * eps, domain_mid_m), 0.0).y;
+		float m_r = textureLod(displacement_mid, spectrum_uv(world_xz + sdir * eps, domain_mid_m), 0.0).y;
+		float curv_mid = m_l - 2.0 * m_c + m_r;
+		float local_hs = max(breaking_long_hs_m, 0.05);
+		float crest_long = clamp(-curv_long / local_hs, 0.0, 2.0) * ocean_crest_sharpen_long_weight;
+		float crest_mid = clamp(-curv_mid / max(local_hs * 0.4, 0.02), 0.0, 2.0) * ocean_crest_sharpen_mid_weight;
+		float crestness = crest_long + crest_mid;
+		float face_slope = abs(l_r - l_l) / (2.0 * eps);
+		float compression = smoothstep(0.03, 0.22, face_slope);
+		float sharpen = smoothstep(ocean_crest_sharpen_threshold, ocean_crest_sharpen_threshold + 0.25, crestness)
+			* compression * long_weight * ocean_crest_sharpen_strength;
+		float gain = ocean_crest_sharpen_max_gain;
+		// Elevación vertical acotada + compresión horizontal suave (narrow crest).
+		displacement.y += sharpen * gain * local_hs;
+		displacement.xz *= 1.0 + sharpen * gain * 0.35;
+		crest_sharpen_mask = sharpen;
+	}
+
 	VERTEX += displacement;
 	NORMAL = ocean_normal;
 	derived_normal = ocean_normal;
@@ -337,11 +375,15 @@ void fragment() {
 		float lines = max(periodic_grid(ocean_world_xz, domain_long_coastal_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
 	}
+	if (ocean_crest_sharpen_debug) {
+		// 5R.1C: azul = sin sharpening, rojo = sharpening máximo.
+		color = mix(vec3(0.01, 0.04, 0.10), vec3(1.0, 0.18, 0.04), clamp(crest_sharpen_mask, 0.0, 1.0));
+	}
 
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
 
-	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap;
+	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
