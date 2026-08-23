@@ -429,15 +429,15 @@ func _sync_takeover_mask() -> void:
 		_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", false)
 		return
 	var anchor: Dictionary = _anchors[_debug_slot]
-	var scale: float = 0.65
+	var profile_scale: float = 0.65
 	if _material != null:
 		var s: Variant = _material.get_shader_parameter(&"breaker_profile_length_scale")
 		if s != null and float(s) > 0.0:
-			scale = float(s)
+			profile_scale = float(s)
 	_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", true)
 	_surface_material.set_shader_parameter(&"breaker_takeover_anchor_xz", Vector2(anchor["xz"]))
 	_surface_material.set_shader_parameter(&"breaker_takeover_direction_xz", Vector2(anchor["direction"]))
-	_surface_material.set_shader_parameter(&"breaker_takeover_length_m", float(anchor["wavelength_m"]) * ribbon_length_lambda * scale)
+	_surface_material.set_shader_parameter(&"breaker_takeover_length_m", float(anchor["wavelength_m"]) * ribbon_length_lambda * profile_scale)
 	_surface_material.set_shader_parameter(&"breaker_takeover_width_m", ribbon_width_m)
 	_surface_material.set_shader_parameter(&"breaker_takeover_stage", _debug_stage)
 	_surface_material.set_shader_parameter(&"breaker_takeover_forward_sign", _profile_forward_sign)
