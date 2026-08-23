@@ -21,6 +21,11 @@ func _process(_delta: float) -> void:
 	metrics_label.text = "\n".join([
 		"OCEAN LAB — FASE 2A / QUERY REFERENCE",
 		"Sea State: %s" % (fft_module.sea_state_name() if fft_module else "unavailable"),
+		"Spectrum: %s | Shape: %s" % [
+			fft_module.spectrum_model_name() if fft_module else "unavailable",
+			fft_module.ocean_shape_debug_name() if fft_module else "unavailable",
+		],
+		_hs_line(fft_module),
 		"Query probes: %s | Query backend: %s" % [
 			"ON" if _probe_tool_enabled() else "OFF",
 			fft_module.query_backend_name() if fft_module else "unavailable",
@@ -58,6 +63,19 @@ func _process(_delta: float) -> void:
 		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
+
+
+func _hs_line(fft_module) -> String:
+	## 5R.1B: target/measured Hs por banda (LONG/MID/SHORT).
+	if fft_module == null:
+		return "Hs bands: unavailable"
+	var bands: Array = fft_module.spectrum_band_diagnostics()
+	if bands.is_empty():
+		return "Hs bands: pending"
+	var parts: PackedStringArray = []
+	for band in bands:
+		parts.append("%s %.3f/%.3f" % [band["id"], band["target_hs_m"], band["measured_hs_m"]])
+	return "Hs " + " | ".join(parts)
 
 
 func _probe_tool_enabled() -> bool:
