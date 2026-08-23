@@ -93,6 +93,10 @@ instance uniform float breaker_lifecycle_stage;
 instance uniform float breaker_tracking_valid;
 // 4C-S4.1: continuidad temporal (fade in/out del lifecycle). Sólo LIP/TAKEOVER.
 instance uniform float breaker_lifecycle_alpha;
+// 4C-S4.2: intensidad y altura capturadas al spawn (autónomo). LIP/TAKEOVER ya
+// no evalúan PREBREAK dinámico después del spawn.
+instance uniform float breaker_spawn_strength;
+instance uniform float breaker_spawn_hs_m;
 
 varying float breaker_alpha;
 varying float breaker_env;
@@ -162,29 +166,26 @@ void vertex() {
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	float dist = distance(P0, camera_world_xz);
 
-	// Trigger LONG-only: el MISMO campo PREBREAK de 4A. LIP/TAKEOVER evalúan un
-	// único punto de control por slot (tracked_crest_xz) para que toda la
-	// cross-section comparta stage/intensidad; FORCE_LIP/REGION evalúan el vértice.
-	vec2 control_xz = P0;
+	// 4C-S4.2: LIP/TAKEOVER usan intensidad/altura capturadas al spawn (autónomo,
+	// sin PREBREAK dinámico después del spawn). FORCE_LIP/REGION conservan
+	// PREBREAK por vértice (FORCE_LIP fuerza envelope=1).
+	float envelope = 0.0;
+	float local_hs = 0.0;
 	if (breaker_debug_mode == 0 || breaker_debug_mode == 1) {
-		control_xz = tracked_crest_xz;
-	}
-	vec2 control_uv = coastal_uv(control_xz);
-	vec4 control_field = textureLod(coastal_field_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
-	vec4 control_metrics = textureLod(coastal_metrics_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
-	vec4 control_phase = textureLod(coastal_phase_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
-	vec4 indices = prebreak_indices_at(control_xz, control_uv, control_field, control_metrics, control_phase);
-	vec4 local_state = breaking_local_state_at(control_xz, control_uv, control_field);
-	float envelope = breaker_envelope(indices.w);
-	float local_hs = local_state.w;
-	// FORCE_LIP (debug): envelope fijado a 1 sólo para ver la geometría de
-	// takeover; no modifica el campo PREBREAK ni es ruta de producción.
-	if (breaker_debug_mode == 3) {
-		envelope = 1.0;
-	}
-	// 4C-S4: sin cresta trackeada válida, LIP/TAKEOVER no emiten breaker.
-	if ((breaker_debug_mode == 0 || breaker_debug_mode == 1) && breaker_tracking_valid < 0.5) {
-		envelope = 0.0;
+		envelope = breaker_spawn_strength;
+		local_hs = breaker_spawn_hs_m;
+	} else {
+		vec2 control_uv = coastal_uv(P0);
+		vec4 control_field = textureLod(coastal_field_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+		vec4 control_metrics = textureLod(coastal_metrics_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+		vec4 control_phase = textureLod(coastal_phase_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+		vec4 indices = prebreak_indices_at(P0, control_uv, control_field, control_metrics, control_phase);
+		vec4 local_state = breaking_local_state_at(P0, control_uv, control_field);
+		envelope = breaker_envelope(indices.w);
+		local_hs = local_state.w;
+		if (breaker_debug_mode == 3) {
+			envelope = 1.0;
+		}
 	}
 
 	// Superficie base: idéntica al clipmap (4 cascadas, warp, shoaling, fades,

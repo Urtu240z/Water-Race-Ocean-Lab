@@ -28,19 +28,33 @@ const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "OFF"]
 const BREAKER_GAMMA := 0.78
 const BREAKER_CREST_U := 0.545
 
-## 4C-S4: tracker CPU de cresta (una única batch OceanQuery, sin readback GPU).
-## Muestras en λ a lo largo de travel_dir = -direction. El stage se deriva del
-## avance crest_s a través de la zona de breaking (no de PREBREAK).
+## 4C-S4.2: detector de eventos de ola + breaker autónomo. OceanQuery ya NO
+## trackea continuamente: sólo detecta candidatos y decide un spawn por ola.
 const CREST_SAMPLE_OFFSETS: Array = [-0.45, -0.30, -0.15, 0.0, 0.15, 0.30, 0.45]
 const CREST_SAMPLE_SPACING_LAMBDA := 0.15
-const STAGE_START_S_LAMBDA := -0.30
-const STAGE_END_S_LAMBDA := 0.22
 const CREST_TRACK_EPSILON := 1.0e-4
-## 4C-S4.1: crest lock + lifecycle. Salto máximo compatible con la cresta activa
-## (en λ) para no enganchar la siguiente ola antes de terminar la actual.
-const MAX_TRACKING_JUMP_LAMBDA := 0.22
-const FADE_IN_SECONDS := 0.20
-const FADE_OUT_SECONDS := 0.30
+## Detector: wrap shoreward -> siguiente ola offshore (identifica nueva ola).
+const NEW_WAVE_WRAP_LAMBDA := 0.45
+const SPAWN_S_START_LAMBDA := -0.28
+const SPAWN_S_END_LAMBDA := -0.06
+## break_score 0..1 (pesos juntos y fáciles de tunear).
+const SCORE_PRESSURE_WEIGHT := 0.45
+const SCORE_PROMINENCE_WEIGHT := 0.35
+const SCORE_STEEPNESS_WEIGHT := 0.20
+const SPAWN_PROB_SOFT_LO := 0.30
+const SPAWN_PROB_SOFT_HI := 0.85
+const SPAWN_STRENGTH_MIN := 0.70
+## Lifecycle / cooldown.
+const LIFECYCLE_DURATION_WAVE_FRACTION := 0.85
+const LIFECYCLE_DURATION_MIN := 1.0
+const LIFECYCLE_DURATION_MAX := 3.0
+const SPAWN_INTERVAL_WAVE_FRACTION := 0.90
+const SPAWN_INTERVAL_MIN := 2.0
+const SPAWN_INTERVAL_MAX := 3.0
+## Stage / alpha analíticos (derivados de life_t, no de crest_s).
+const STAGE_LIFE_END := 0.82
+const FADE_IN_END_LIFE := 0.12
+const FADE_OUT_BEGIN_LIFE := 0.80
 
 ## Límite estricto de slots simultáneos; el pool reutiliza las mismas instancias.
 @export_range(1, 16, 1) var max_breakers := 8
@@ -297,19 +311,26 @@ func anchor_snapshot() -> Array:
 
 
 func tracking_snapshot() -> Array:
-	## 4C-S4: estado del tracker por slot (crest_s/stage + alturas de muestra),
-	## para el HUD. Función pura del render time actual: determinista y
-	## reproducible bajo pausa.
+	## 4C-S4.2: estado por slot (DETECT/ACTIVE/COOLDOWN) para el HUD.
 	var result: Array = []
+	var now := _last_track_time
 	for index in _anchors.size():
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		var active: bool = bool(entry.get("active", false))
+		var next_spawn: float = float(entry.get("next_spawn_time", 0.0))
+		var state_name: String = "ACTIVE" if active else ("COOLDOWN" if now < next_spawn else "DETECT")
 		result.append({
-			"crest_s": float(entry.get("crest_s", 0.0)),
+			"state": state_name,
+			"wave": int(entry.get("wave_serial", 0)),
+			"candidate_s": float(entry.get("candidate_s", 0.0)),
+			"score": float(entry.get("score", 0.0)),
+			"probability": float(entry.get("probability", 0.0)),
+			"roll": float(entry.get("roll", 0.0)),
+			"life_t": float(entry.get("life_t", 0.0)),
 			"stage": float(entry.get("stage", 0.0)),
-			"valid": float(entry.get("valid", 0.0)),
 			"alpha": float(entry.get("alpha", 0.0)),
-			"active": bool(entry.get("active", false)),
-			"release": bool(entry.get("releasing", false)),
+			"phase_speed": float(entry.get("phase_speed", 0.0)),
+			"remaining": float(entry.get("remaining", 0.0)),
 			"h0": float(entry.get("h0", 0.0)),
 			"h3": float(entry.get("h3", 0.0)),
 			"h6": float(entry.get("h6", 0.0)),
@@ -351,10 +372,9 @@ func _sync_uniforms() -> void:
 
 
 func _update_tracking() -> void:
-	## 4C-S4.1: tracker con crest lock + lifecycle monotónico + fade in/out.
-	## Una única batch OceanQuery en render time; el estado por slot (active/
-	## releasing/crest_s/stage/alpha) persiste entre frames y es determinista
-	## (dt se deriva de SimulationClock, no del delta de frame).
+	## 4C-S4.2: detector de eventos de ola (batch única) + breaker autónomo por
+	## slot. El detector sólo decide el spawn; una vez spawneado, el breaker
+	## avanza por phase_speed y muere por su propio lifecycle (sin OceanQuery).
 	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
 		return
 	if not _query_batch.is_valid():
@@ -389,147 +409,261 @@ func _update_tracking() -> void:
 		if not all_valid:
 			_update_slot_invalid(index, Vector2(anchor["xz"]), render_time)
 			continue
-		_update_slot(index, anchor, heights, render_time)
+		_update_slot(index, anchor, heights, samples, base, render_time)
 		if index < _tracking.size():
 			_tracking[index]["h0"] = heights[0]
 			_tracking[index]["h3"] = heights[3]
 			_tracking[index]["h6"] = heights[6]
 
 
-func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, render_time: float) -> void:
-	var wavelength := float(anchor["wavelength_m"])
-	var travel_dir := -Vector2(anchor["direction"])
-	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
-	var active: bool = bool(entry.get("active", false))
-	var releasing: bool = bool(entry.get("releasing", false))
-	var prev_crest_s: float = float(entry.get("crest_s", 0.0))
-	var prev_stage: float = float(entry.get("stage", 0.0))
-	var prev_alpha: float = float(entry.get("alpha", 0.0))
-	var prev_tracked_xz: Vector2 = entry.get("tracked_xz", Vector2(anchor["xz"]))
-	var prev_time: float = float(entry.get("previous_time", render_time))
-	var dt: float = maxf(0.0, render_time - prev_time)
-	var max_jump := MAX_TRACKING_JUMP_LAMBDA * wavelength
-
-	# RELEASE: fade out manteniendo stage/posición final. No adquiere otra cresta.
-	if releasing:
-		var alpha: float = maxf(0.0, prev_alpha - dt / FADE_OUT_SECONDS)
-		if alpha <= 0.0:
-			_set_slot_state(index, prev_tracked_xz, prev_crest_s, 0.0, 0.0, false, false, 0.0, render_time)
-		else:
-			_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, alpha, true, true, 1.0, render_time)
-		return
-
-	# Candidatos: prominencia + parábola por cada muestra interior (1..5).
-	var candidates_s := PackedFloat32Array()
-	var candidates_p := PackedFloat32Array()
-	var best_crest_s := 0.0
+func _detect_candidate(heights: PackedFloat32Array, wavelength: float, samples: Array, base: int) -> Dictionary:
+	## Detector de 7 muestras: prominencia + parábola. Devuelve candidate_s,
+	## prominence, index y el sample del candidato (para normal/steepness).
+	var best_index := 1
 	var best_prominence := -INF
 	for k in range(1, CREST_SAMPLE_OFFSETS.size() - 1):
 		var prominence: float = heights[k] - 0.5 * (heights[k - 1] + heights[k + 1])
-		var denom: float = heights[k - 1] - 2.0 * heights[k] + heights[k + 1]
-		var delta := 0.0
-		if absf(denom) > CREST_TRACK_EPSILON:
-			delta = 0.5 * (heights[k - 1] - heights[k + 1]) / denom
-		delta = clampf(delta, -1.0, 1.0)
-		var candidate_s: float = float(CREST_SAMPLE_OFFSETS[k]) * wavelength + delta * (CREST_SAMPLE_SPACING_LAMBDA * wavelength)
-		candidates_s.append(candidate_s)
-		candidates_p.append(prominence)
 		if prominence > best_prominence:
 			best_prominence = prominence
-			best_crest_s = candidate_s
+			best_index = k
+	var denom: float = heights[best_index - 1] - 2.0 * heights[best_index] + heights[best_index + 1]
+	var delta := 0.0
+	if absf(denom) > CREST_TRACK_EPSILON:
+		delta = 0.5 * (heights[best_index - 1] - heights[best_index + 1]) / denom
+	delta = clampf(delta, -1.0, 1.0)
+	var candidate_s: float = float(CREST_SAMPLE_OFFSETS[best_index]) * wavelength + delta * (CREST_SAMPLE_SPACING_LAMBDA * wavelength)
+	return {"s": candidate_s, "prominence": best_prominence, "index": best_index, "sample": samples[base + best_index]}
 
-	if not active:
-		# IDLE: adquirir la cresta de mayor prominencia (bloqueo inicial).
-		var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * best_crest_s
-		_set_slot_state(index, tracked_xz, best_crest_s, 0.0, 0.0, true, false, 1.0, render_time)
+
+func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, samples: Array, base: int, render_time: float) -> void:
+	var wavelength := float(anchor["wavelength_m"])
+	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+	var candidate := _detect_candidate(heights, wavelength, samples, base)
+	if bool(entry.get("active", false)):
+		_update_active_breaker(index, entry, render_time)
+	else:
+		_run_detector(index, anchor, candidate, render_time)
+
+
+func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -> void:
+	## Breaker autónomo: posición/stage/alpha derivados SOLO de spawn_time (nada
+	## de OceanQuery). Fórmula absoluta -> pausa determinista y sin acumulación.
+	var spawn_time: float = float(entry.get("spawn_time", render_time))
+	var duration: float = maxf(float(entry.get("lifecycle_duration", 1.0)), 0.001)
+	var age: float = maxf(0.0, render_time - spawn_time)
+	var life_t: float = clampf(age / duration, 0.0, 1.0)
+	if life_t >= 1.0:
+		var state := _base_state(entry)
+		state["active"] = false
+		state["valid"] = 0.0
+		state["stage"] = 0.0
+		state["alpha"] = 0.0
+		state["tracked_xz"] = Vector2(entry.get("spawn_xz", Vector2.ZERO))
+		state["detector_initialized"] = false
+		state["detector_prev_s"] = 0.0
+		state["life_t"] = 1.0
+		state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", render_time)) - render_time)
+		_publish_slot(index, state)
+		return
+	var stage: float = _smoothstep(0.0, STAGE_LIFE_END, life_t)
+	var fade_in: float = _smoothstep(0.0, FADE_IN_END_LIFE, life_t)
+	var fade_out: float = 1.0 - _smoothstep(FADE_OUT_BEGIN_LIFE, 1.0, life_t)
+	var alpha: float = fade_in * fade_out
+	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
+	var breaker_xz: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO)) + Vector2(entry.get("spawn_direction", Vector2.RIGHT)) * (phase_speed * age)
+	var state := _base_state(entry)
+	state["active"] = true
+	state["valid"] = 1.0
+	state["stage"] = stage
+	state["alpha"] = alpha
+	state["tracked_xz"] = breaker_xz
+	state["life_t"] = life_t
+	state["phase_speed"] = phase_speed
+	state["remaining"] = 0.0
+	_publish_slot(index, state)
+
+
+func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render_time: float) -> void:
+	var wavelength := float(anchor["wavelength_m"])
+	var travel_dir := -Vector2(anchor["direction"])
+	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+	var detector_initialized: bool = bool(entry.get("detector_initialized", false))
+	var detector_prev_s: float = float(entry.get("detector_prev_s", 0.0))
+	var wave_serial: int = int(entry.get("wave_serial", 0))
+	var last_decided: int = int(entry.get("last_decided_wave_serial", -1))
+	var next_spawn_time: float = float(entry.get("next_spawn_time", 0.0))
+	var candidate_s: float = float(candidate["s"])
+
+	if not detector_initialized:
+		var state := _base_state(entry)
+		state["detector_initialized"] = true
+		state["detector_prev_s"] = candidate_s
+		state["active"] = false
+		state["valid"] = 0.0
+		state["tracked_xz"] = Vector2(anchor["xz"])
+		state["candidate_s"] = candidate_s
+		state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+		_publish_slot(index, state)
 		return
 
-	# ACTIVE: continuidad espacial — candidato compatible más cercano a la cresta
-	# previa, sin elegir el máximo global (evita saltar a otra cresta).
-	var found := false
-	var locked_s := 0.0
-	var locked_p := -INF
-	for c in candidates_s.size():
-		var candidate_s: float = candidates_s[c]
-		if absf(candidate_s - prev_crest_s) > max_jump:
-			continue
-		var closer: bool = absf(candidate_s - prev_crest_s) < absf(locked_s - prev_crest_s)
-		var tie: bool = absf(candidate_s - prev_crest_s) == absf(locked_s - prev_crest_s) and candidates_p[c] > locked_p
-		if not found or closer or tie:
-			found = true
-			locked_s = candidate_s
-			locked_p = candidates_p[c]
+	# Identificar nueva ola: wrap shoreward -> offshore.
+	if candidate_s < detector_prev_s - NEW_WAVE_WRAP_LAMBDA * wavelength:
+		wave_serial += 1
+	var advancing: bool = candidate_s > detector_prev_s
+	detector_prev_s = candidate_s
 
-	if not found:
-		# Cresta perdida / salió de la ventana: RELEASE, sin wrap instantáneo.
-		_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, prev_alpha, true, true, 1.0, render_time)
-		return
+	var s_start := SPAWN_S_START_LAMBDA * wavelength
+	var s_end := SPAWN_S_END_LAMBDA * wavelength
+	var in_window: bool = candidate_s >= s_start and candidate_s <= s_end
+	var cooldown_done: bool = render_time >= next_spawn_time
 
-	var target_stage: float = _smoothstep(STAGE_START_S_LAMBDA * wavelength, STAGE_END_S_LAMBDA * wavelength, locked_s)
-	var stage: float = maxf(prev_stage, target_stage) # monotónico: nunca retrocede.
-	var alpha: float = minf(1.0, prev_alpha + dt / FADE_IN_SECONDS)
-	var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * locked_s
-	if stage >= 0.999:
-		# Lifecycle completo -> RELEASE (fade out con stage 1).
-		_set_slot_state(index, tracked_xz, locked_s, 1.0, alpha, true, true, 1.0, render_time)
-		return
-	_set_slot_state(index, tracked_xz, locked_s, stage, alpha, true, false, 1.0, render_time)
+	var state := _base_state(entry)
+	state["detector_initialized"] = true
+	state["detector_prev_s"] = detector_prev_s
+	state["wave_serial"] = wave_serial
+	state["active"] = false
+	state["valid"] = 0.0
+	state["stage"] = 0.0
+	state["alpha"] = 0.0
+	state["tracked_xz"] = Vector2(anchor["xz"])
+	state["candidate_s"] = candidate_s
+	state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+
+	if in_window and advancing and wave_serial != last_decided and cooldown_done:
+		state["last_decided_wave_serial"] = wave_serial
+		var score: float = _break_score(anchor, candidate, travel_dir)
+		var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, score)
+		var roll: float = _deterministic_roll(index, wave_serial)
+		state["score"] = score
+		state["probability"] = probability
+		state["roll"] = roll
+		if roll < probability:
+			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, score, render_time, state)
+			return
+	_publish_slot(index, state)
+
+
+func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_dir: Vector2, wavelength: float, score: float, render_time: float, state: Dictionary) -> void:
+	var phase_speed: float = maxf(float(anchor.get("phase_speed_mps", 0.1)), 0.1)
+	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
+	var strength: float = lerpf(SPAWN_STRENGTH_MIN, 1.0, score)
+	var wave_period: float = wavelength / phase_speed
+	var duration: float = clampf(LIFECYCLE_DURATION_WAVE_FRACTION * wave_period, LIFECYCLE_DURATION_MIN, LIFECYCLE_DURATION_MAX)
+	var interval: float = clampf(SPAWN_INTERVAL_WAVE_FRACTION * wave_period, SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_MAX)
+	state["active"] = true
+	state["valid"] = 1.0
+	state["spawn_time"] = render_time
+	state["spawn_xz"] = Vector2(anchor["xz"]) + travel_dir * candidate_s
+	state["spawn_direction"] = travel_dir
+	state["spawn_wavelength"] = wavelength
+	state["spawn_phase_speed"] = phase_speed
+	state["spawn_local_hs"] = local_hs
+	state["spawn_strength"] = strength
+	state["lifecycle_duration"] = duration
+	state["next_spawn_time"] = render_time + interval
+	state["stage"] = 0.0
+	state["alpha"] = 0.0
+	state["tracked_xz"] = state["spawn_xz"]
+	state["life_t"] = 0.0
+	state["phase_speed"] = phase_speed
+	state["remaining"] = 0.0
+	_publish_slot(index, state)
+
+
+func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2) -> float:
+	var pressure_score: float = _smoothstep(anchor_min_depth_pressure, minf(anchor_max_depth_pressure, 1.15), float(anchor["pressure"]))
+	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
+	var prominence_score: float = _smoothstep(0.04 * local_hs, 0.20 * local_hs, maxf(float(candidate["prominence"]), 0.0))
+	var sample: OceanQuerySample = candidate["sample"]
+	var ny: float = maxf(absf(sample.normal.y), 0.05)
+	var slope_xz := -Vector2(sample.normal.x, sample.normal.z) / ny
+	var slope_long: float = absf(slope_xz.dot(travel_dir))
+	var steepness_score: float = _smoothstep(0.20, 0.75, slope_long)
+	return clampf(SCORE_PRESSURE_WEIGHT * pressure_score + SCORE_PROMINENCE_WEIGHT * prominence_score + SCORE_STEEPNESS_WEIGHT * steepness_score, 0.0, 1.0)
+
+
+func _deterministic_roll(slot: int, wave_serial: int) -> float:
+	var seed: int = int(SimulationClock.simulation_seed) & 0x7FFFFFFF
+	seed ^= ((slot + 1) * 0x9E3779B1) & 0x7FFFFFFF
+	seed ^= ((wave_serial + 1) * 0x85EBCA6B) & 0x7FFFFFFF
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	return rng.randf()
+
+
+func _base_state(entry: Dictionary) -> Dictionary:
+	## Conserva los campos de spawn/detector que deben persistir; resetea lo visual.
+	return {
+		"active": false,
+		"valid": 0.0,
+		"stage": 0.0,
+		"alpha": 0.0,
+		"tracked_xz": entry.get("tracked_xz", Vector2.ZERO),
+		"spawn_time": float(entry.get("spawn_time", 0.0)),
+		"spawn_xz": entry.get("spawn_xz", Vector2.ZERO),
+		"spawn_direction": entry.get("spawn_direction", Vector2.RIGHT),
+		"spawn_wavelength": float(entry.get("spawn_wavelength", 0.0)),
+		"spawn_phase_speed": float(entry.get("spawn_phase_speed", 0.1)),
+		"spawn_local_hs": float(entry.get("spawn_local_hs", 0.0)),
+		"spawn_strength": float(entry.get("spawn_strength", 0.0)),
+		"lifecycle_duration": float(entry.get("lifecycle_duration", 1.0)),
+		"next_spawn_time": float(entry.get("next_spawn_time", 0.0)),
+		"detector_initialized": bool(entry.get("detector_initialized", false)),
+		"detector_prev_s": float(entry.get("detector_prev_s", 0.0)),
+		"wave_serial": int(entry.get("wave_serial", 0)),
+		"last_decided_wave_serial": int(entry.get("last_decided_wave_serial", -1)),
+		"candidate_s": float(entry.get("candidate_s", 0.0)),
+		"score": float(entry.get("score", 0.0)),
+		"probability": float(entry.get("probability", 0.0)),
+		"roll": float(entry.get("roll", 0.0)),
+		"life_t": float(entry.get("life_t", 0.0)),
+		"phase_speed": float(entry.get("phase_speed", 0.0)),
+		"remaining": float(entry.get("remaining", 0.0)),
+	}
+
+
+func _publish_slot(index: int, state: Dictionary) -> void:
+	if index >= _tracking.size():
+		_tracking.resize(index + 1)
+	_tracking[index] = state
+	if index < _ribbons.size():
+		var ribbon: MeshInstance3D = _ribbons[index]
+		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(state.get("tracked_xz", Vector2.ZERO)))
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", float(state.get("stage", 0.0)))
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", float(state.get("alpha", 0.0)))
+		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", float(state.get("valid", 0.0)))
+		ribbon.set_instance_shader_parameter(&"breaker_spawn_strength", float(state.get("spawn_strength", 0.0)))
+		ribbon.set_instance_shader_parameter(&"breaker_spawn_hs_m", float(state.get("spawn_local_hs", 0.0)))
 
 
 func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float) -> void:
-	## 4C-S4.1: muestras no válidas -> si estaba activo/releasing, fade out en
-	## lugar de apagar la geometría instantáneamente.
+	## 4C-S4.2: muestras no válidas -> el breaker activo sigue su lifecycle
+	## autónomo (no depende del detector); si no, permanece IDLE.
 	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
-	var owned: bool = bool(entry.get("active", false)) or bool(entry.get("releasing", false))
-	if not owned:
-		_set_slot_state(index, anchor_xz, 0.0, 0.0, 0.0, false, false, 0.0, render_time)
+	if bool(entry.get("active", false)):
+		_update_active_breaker(index, entry, render_time)
 		return
-	var prev_crest_s: float = float(entry.get("crest_s", 0.0))
-	var prev_stage: float = float(entry.get("stage", 0.0))
-	var prev_alpha: float = float(entry.get("alpha", 0.0))
-	var prev_tracked_xz: Vector2 = entry.get("tracked_xz", anchor_xz)
-	var prev_time: float = float(entry.get("previous_time", render_time))
-	var dt: float = maxf(0.0, render_time - prev_time)
-	var alpha: float = maxf(0.0, prev_alpha - dt / FADE_OUT_SECONDS)
-	if alpha <= 0.0:
-		_set_slot_state(index, prev_tracked_xz, prev_crest_s, 0.0, 0.0, false, false, 0.0, render_time)
-	else:
-		_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, alpha, true, true, 1.0, render_time)
-
-
-func _set_slot_state(index: int, tracked_xz: Vector2, crest_s: float, stage: float, alpha: float,
-		active: bool, releasing: bool, valid: float, previous_time: float) -> void:
-	if index >= _tracking.size():
-		_tracking.resize(index + 1)
-	_tracking[index] = {
-		"crest_s": crest_s,
-		"stage": stage,
-		"alpha": alpha,
-		"valid": valid,
-		"tracked_xz": tracked_xz,
-		"active": active,
-		"releasing": releasing,
-		"previous_time": previous_time,
-	}
-	if index < _ribbons.size():
-		var ribbon: MeshInstance3D = _ribbons[index]
-		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", tracked_xz)
-		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", stage)
-		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", valid)
-		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", alpha)
+	var state := _base_state(entry)
+	state["active"] = false
+	state["valid"] = 0.0
+	state["tracked_xz"] = anchor_xz
+	state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", 0.0)) - render_time)
+	_publish_slot(index, state)
 
 
 func _clear_tracking() -> void:
-	## 4C-S4.1: fallo global de batch -> reinicio duro (IDLE). No es el camino de
-	## release normal (ese mantiene valid=1 durante el fade out).
+	## 4C-S4.2: fallo global de batch -> reinicio duro (IDLE, sin spawn).
 	_tracking.resize(_anchors.size())
 	for index in _ribbons.size():
 		var ribbon: MeshInstance3D = _ribbons[index]
-		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
+		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", Vector2.ZERO)
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
+		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
+		ribbon.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
+		ribbon.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)
 		if index < _tracking.size():
-			_tracking[index] = {"crest_s": 0.0, "stage": 0.0, "alpha": 0.0, "valid": 0.0,
-				"tracked_xz": Vector2.ZERO, "active": false, "releasing": false, "previous_time": 0.0}
+			_tracking[index] = _base_state({})
 
 
 func _ensure_material() -> void:
@@ -559,6 +693,7 @@ func _place_anchors() -> Array[Dictionary]:
 	var k_arr: PackedFloat32Array = propagation.local_k
 	var wave_arr: PackedFloat32Array = propagation.wavelength_m
 	var shoal_arr: PackedFloat32Array = propagation.shoaling_scale
+	var phase_speed_arr: PackedFloat32Array = propagation.phase_speed_mps
 	var valid_mask: PackedByteArray = propagation.valid_mask
 	var reached: PackedByteArray = propagation.reached_mask
 	var dir_x: PackedFloat32Array = propagation.local_direction_x
@@ -589,6 +724,8 @@ func _place_anchors() -> Array[Dictionary]:
 				"direction": direction,
 				"wavelength_m": maxf(wave_arr[index], 0.5),
 				"local_k": maxf(k_arr[index], k0),
+				"shoaling": shoal_arr[index],
+				"phase_speed_mps": phase_speed_arr[index],
 			})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if absf(a["depth_m"] - b["depth_m"]) > 0.001:
@@ -644,11 +781,13 @@ func _rebuild_instances() -> void:
 		instance.set_instance_shader_parameter(&"ribbon_id", float(index))
 		instance.set_instance_shader_parameter(&"ribbon_wavelength_m", float(anchor["wavelength_m"]) * ribbon_length_lambda)
 		instance.set_instance_shader_parameter(&"ribbon_width_m", ribbon_width_m)
-		# 4C-S4: crest-following lifecycle (fallback = anchor + stage 0 + inválido).
+		# 4C-S4.2: breaker autónomo (fallback = anchor + stage 0 + sin spawn).
 		instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
 		instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
+		instance.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
+		instance.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)
 		add_child(instance)
 		_ribbons.append(instance)
 	_tracking.resize(_anchors.size())
