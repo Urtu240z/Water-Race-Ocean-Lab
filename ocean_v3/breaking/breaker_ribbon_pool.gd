@@ -96,7 +96,7 @@ var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
 var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
 var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
-var _profile_forward_sign := 1.0 # 4C-S3: default FORWARD (+1); X lo espeja (debug).
+var _profile_forward_sign := -1.0 # 4C-S3: default FLIPPED (-1) = alineado con el avance real del FFT.
 var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
 
@@ -234,6 +234,12 @@ func toggle_debug_profile_direction() -> void:
 
 func debug_profile_direction_name() -> String:
 	return "FLIPPED" if _profile_forward_sign < 0.0 else "FORWARD"
+
+
+func debug_profile_aligned() -> bool:
+	## FLIPPED es el estado alineado con el avance real del FFT (convención
+	## actual: las crestas LONG viajan en -direction_xz).
+	return _profile_forward_sign < 0.0
 
 
 func toggle_takeover_mask() -> void:

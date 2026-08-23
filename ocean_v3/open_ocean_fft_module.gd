@@ -575,6 +575,12 @@ func breaker_profile_direction_name() -> String:
 	return _breaker_pool.debug_profile_direction_name()
 
 
+func breaker_profile_aligned() -> bool:
+	if _breaker_pool == null:
+		return true
+	return _breaker_pool.debug_profile_aligned()
+
+
 func toggle_breaker_takeover_mask() -> void:
 	if _breaker_pool != null:
 		_breaker_pool.toggle_takeover_mask()
