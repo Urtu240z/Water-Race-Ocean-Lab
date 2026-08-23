@@ -243,6 +243,7 @@ private:
     void sample_prepared_(double wx, double wz, double *out);
     double band_height_(size_t band_index, double qx, double qz) const;
     void apply_crest_sharpen_(double qx, double qz, double &h, double &dx, double &dz) const;
+    void finite_jacobian_(double qx, double qz, double &ja, double &jb, double &jc, double &jd);
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);
     void evaluate_avx2_batch_(const size_t *indices, size_t active_count, bool vector_sincos);

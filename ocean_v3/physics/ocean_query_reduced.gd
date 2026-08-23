@@ -327,15 +327,14 @@ func _band_height(qx: float, qz: float, band_index: int) -> float:
 	return total * cascade.inv_n2
 
 
-func _apply_crest_sharpen(qx: float, qz: float) -> void:
-	## 5R1D: misma matemática 5R.1C del shader (sobre FFT base, no recursiva).
+func _compute_sharpen(qx: float, qz: float) -> float:
+	## 5R1D: máscara 5R.1C del shader (sobre FFT base). Devuelve sharpen ∈ [0,1].
 	if _crest_sharpen.is_empty():
-		return
+		return 0.0
 	var strength: float = float(_crest_sharpen.get("strength", 0.0))
 	if strength <= 0.0:
-		return
+		return 0.0
 	var threshold: float = float(_crest_sharpen.get("threshold", 0.15))
-	var max_gain: float = float(_crest_sharpen.get("max_gain", 0.30))
 	var long_w: float = float(_crest_sharpen.get("long_weight", 1.0))
 	var mid_w: float = float(_crest_sharpen.get("mid_weight", 0.5))
 	var dir := Vector2(float(_crest_sharpen.get("direction_x", 1.0)), float(_crest_sharpen.get("direction_z", 0.0)))
@@ -356,47 +355,70 @@ func _apply_crest_sharpen(qx: float, qz: float) -> void:
 	var crestness := crest_long + crest_mid
 	var face_slope := absf(l_r - l_l) / (2.0 * eps)
 	var compression := smoothstep(0.03, 0.22, face_slope)
-	var sharpen := smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
+	return smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
 
-	var delta_y := sharpen * max_gain * local_hs
-	var h_scale := 1.0 + sharpen * max_gain * 0.35
-	_acc_h += delta_y
-	_acc_dx *= h_scale
-	_acc_dz *= h_scale
+
+func _evaluate_final(qx: float, qz: float) -> Vector2:
+	## 5R1D-hotfix: superficie FINAL (base FFT + crest sharpening). Deja _acc_h/dx/dz
+	## corregidos para el sample y devuelve el dx/dz final.
+	_accumulate(qx, qz, true, _prepared_time)
+	var s := _compute_sharpen(qx, qz)
+	if s > 0.0:
+		var g: float = float(_crest_sharpen.get("max_gain", 0.30))
+		var hs: float = maxf(float(_crest_sharpen.get("local_hs", 0.5)), 0.05)
+		_acc_h += s * g * hs
+		var scale := 1.0 + s * g * 0.35
+		_acc_dx *= scale
+		_acc_dz *= scale
+	return Vector2(_acc_dx, _acc_dz)
+
+
+func _finite_jacobian(qx: float, qz: float) -> Dictionary:
+	## 5R1D-hotfix: Jacobian 2D de q + final_dx/dz por diferencias finitas centrales.
+	var d := 0.05
+	var xp := _evaluate_final(qx + d, qz)
+	var xm := _evaluate_final(qx - d, qz)
+	var zp := _evaluate_final(qx, qz + d)
+	var zm := _evaluate_final(qx, qz - d)
+	return {
+		"a": 1.0 + (xp.x - xm.x) / (2.0 * d),
+		"b": (zp.x - zm.x) / (2.0 * d),
+		"c": (xp.y - xm.y) / (2.0 * d),
+		"d": 1.0 + (zp.y - zm.y) / (2.0 * d),
+	}
 
 
 ## --- Inversión world_xz -> q -------------------------------------------------
 
 func _sample_world(target_xz: Vector2):
 	var q := target_xz
-	_accumulate(q.x, q.y, true, _prepared_time)
-	var fx: float = q.x + _acc_dx - target_xz.x
-	var fz: float = q.y + _acc_dz - target_xz.y
-	var residual := sqrt(fx * fx + fz * fz)
-	var iterations := 0
 	var max_iter := FULL_MAX_ITERATIONS if _mode == MODE_FULL_PAIRS else MAX_ITERATIONS
 	var tolerance := FULL_POSITION_TOLERANCE_M if _mode == MODE_FULL_PAIRS else POSITION_TOLERANCE_M
-	var converged := residual <= tolerance
-	while not converged and iterations < max_iter:
-		var det_j: float = (1.0 + _acc_dxx) * (1.0 + _acc_dzz) - _acc_dxz * _acc_dzx
-		if absf(det_j) <= JACOBIAN_EPSILON:
-			break
-		var inv_det := 1.0 / det_j
-		var delta_x: float = inv_det * ((1.0 + _acc_dzz) * fx - _acc_dxz * fz)
-		var delta_z: float = inv_det * (-_acc_dzx * fx + (1.0 + _acc_dxx) * fz)
-		q.x -= delta_x
-		q.y -= delta_z
-		_accumulate(q.x, q.y, true, _prepared_time)
-		fx = q.x + _acc_dx - target_xz.x
-		fz = q.y + _acc_dz - target_xz.y
+	var iterations := 0
+	var converged := false
+	var residual := 0.0
+	while true:
+		_evaluate_final(q.x, q.y)
+		var fx: float = q.x + _acc_dx - target_xz.x
+		var fz: float = q.y + _acc_dz - target_xz.y
 		residual = sqrt(fx * fx + fz * fz)
+		if residual <= tolerance or iterations >= max_iter:
+			converged = residual <= tolerance
+			break
+		var jac := _finite_jacobian(q.x, q.y)
+		var det: float = float(jac.a) * float(jac.d) - float(jac.b) * float(jac.c)
+		if absf(det) <= JACOBIAN_EPSILON:
+			break
+		var inv: float = 1.0 / det
+		q.x -= inv * (jac.d * fx - jac.b * fz)
+		q.y -= inv * (-jac.c * fx + jac.a * fz)
 		iterations += 1
-		converged = residual <= tolerance
+	# Deja _acc_* con la superficie FINAL en q resuelto (no aplicar sharpening 2 veces).
+	_evaluate_final(q.x, q.y)
 	diagnostic_last_iterations = iterations
 	diagnostic_last_residual = residual
 	if not converged:
 		diagnostic_non_converged += 1
-	_apply_crest_sharpen(q.x, q.y)
 	return _build_sample(residual, iterations, converged)
 
 

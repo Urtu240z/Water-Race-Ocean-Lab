@@ -305,6 +305,33 @@ void OceanQueryCore::apply_crest_sharpen_(double qx, double qz, double &h, doubl
     dz *= h_scale;
 }
 
+
+void OceanQueryCore::finite_jacobian_(double qx, double qz, double &ja, double &jb, double &jc, double &jd) {
+    // 5R1D-hotfix: Jacobian 2D de q + final_dx/dz por diferencias finitas centrales.
+    const double d = 0.05;
+    double h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz;
+    double xp_x, xp_z, xm_x, xm_z, zp_x, zp_z, zm_x, zm_z;
+
+    accumulate_(qx + d, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+    apply_crest_sharpen_(qx + d, qz, h, dx, dz);
+    xp_x = dx; xp_z = dz;
+    accumulate_(qx - d, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+    apply_crest_sharpen_(qx - d, qz, h, dx, dz);
+    xm_x = dx; xm_z = dz;
+    accumulate_(qx, qz + d, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+    apply_crest_sharpen_(qx, qz + d, h, dx, dz);
+    zp_x = dx; zp_z = dz;
+    accumulate_(qx, qz - d, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+    apply_crest_sharpen_(qx, qz - d, h, dx, dz);
+    zm_x = dx; zm_z = dz;
+
+    ja = 1.0 + (xp_x - xm_x) / (2.0 * d);
+    jb = (zp_x - zm_x) / (2.0 * d);
+    jc = (xp_z - xm_z) / (2.0 * d);
+    jd = 1.0 + (zp_z - zm_z) / (2.0 * d);
+}
+
+
 size_t OceanQueryCore::coastal_pair_count() const {
     return cascades.empty() ? 0 : cascades[0].kx.size();
 }
@@ -487,36 +514,39 @@ void OceanQueryCore::apply_coastal_correction_(double qx, double qz, bool use_pr
 }
 
 void OceanQueryCore::sample_prepared_(double wx, double wz, double *out) {
-    // Newton world_xz -> q (mismo algoritmo que GDScript).
+    // Newton world_xz -> q usando el displacement FINAL (base + crest sharpening).
     double qx = wx, qz = wz;
     double h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz;
-    accumulate_(qx, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
-    double fx = qx + dx - wx;
-    double fz = qz + dz - wz;
-    double residual = std::sqrt(fx * fx + fz * fz);
     int iterations = 0;
-    bool converged = residual <= POSITION_TOLERANCE_M;
-    while (!converged && iterations < MAX_ITERATIONS) {
-        const double det_j = (1.0 + dxx) * (1.0 + dzz) - dxz * dzx;
-        if (std::abs(det_j) <= JACOBIAN_EPSILON) {
+    bool converged = false;
+    double residual = 0.0;
+    while (true) {
+        accumulate_(qx, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+        apply_crest_sharpen_(qx, qz, h, dx, dz);
+        const double fx = qx + dx - wx;
+        const double fz = qz + dz - wz;
+        residual = std::sqrt(fx * fx + fz * fz);
+        if (residual <= POSITION_TOLERANCE_M || iterations >= MAX_ITERATIONS) {
+            converged = residual <= POSITION_TOLERANCE_M;
             break;
         }
-        const double inv_det = 1.0 / det_j;
-        const double delta_x = inv_det * ((1.0 + dzz) * fx - dxz * fz);
-        const double delta_z = inv_det * (-dzx * fx + (1.0 + dxx) * fz);
-        qx -= delta_x;
-        qz -= delta_z;
-        accumulate_(qx, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
-        fx = qx + dx - wx;
-        fz = qz + dz - wz;
-        residual = std::sqrt(fx * fx + fz * fz);
+        double ja, jb, jc, jd;
+        finite_jacobian_(qx, qz, ja, jb, jc, jd);
+        const double det = ja * jd - jb * jc;
+        if (std::abs(det) <= JACOBIAN_EPSILON) {
+            break;
+        }
+        const double inv = 1.0 / det;
+        qx -= inv * (jd * fx - jb * fz);
+        qz -= inv * (-jc * fx + ja * fz);
         iterations += 1;
-        converged = residual <= POSITION_TOLERANCE_M;
     }
+    // Re-evalúa la superficie FINAL en q resuelto (no aplicar sharpening 2 veces).
+    accumulate_(qx, qz, true, prepared_time, h, dx, dz, dhx, dhz, dxx, dxz, dzx, dzz, vh, vx, vz);
+    apply_crest_sharpen_(qx, qz, h, dx, dz);
     if (!converged) {
         diag_non_converged += 1;
     }
-    apply_crest_sharpen_(qx, qz, h, dx, dz); // 5R1D: crest sharpening (base FFT + corrección).
 
     // Construcción del sample (mismo orden que GDScript _build_sample).
     double disp[3] = {dx, h, dz};
@@ -568,6 +598,12 @@ void OceanQueryCore::sample_world(double wx, double wz, double simulation_time, 
 }
 
 void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n, double *out) {
+    if (crest_sharpen_enabled) {
+        // 5R1D-hotfix: con sharpening la inversión usa displacement FINAL + Jacobian
+        // finito; la ruta scalar (correcta) sustituye a AVX2 (que resuelve con base).
+        sample_batch_scalar_prepared(positions_xz, n, out);
+        return;
+    }
     if (avx2_supported() && !force_scalar && n >= 4) {
         batch_.ensure_capacity(n);
         for (size_t p = 0; p < n; ++p) {
@@ -575,19 +611,6 @@ void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n,
             batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
         }
         solve_avx2_batch_(n, out, true);
-        if (crest_sharpen_enabled) {
-            // 5R1D: post-pase de crest sharpening sobre el resultado batch (q resuelto).
-            for (size_t p = 0; p < n; ++p) {
-                double h = out[p * S_STRIDE + S_DY];
-                double dx = out[p * S_STRIDE + S_DX];
-                double dz = out[p * S_STRIDE + S_DZ];
-                apply_crest_sharpen_(batch_.qx[p], batch_.qz[p], h, dx, dz);
-                out[p * S_STRIDE + S_DY] = h;
-                out[p * S_STRIDE + S_DX] = dx;
-                out[p * S_STRIDE + S_DZ] = dz;
-                out[p * S_STRIDE + S_HEIGHT] = sea_level + h;
-            }
-        }
         return;
     }
     sample_batch_scalar_prepared(positions_xz, n, out);

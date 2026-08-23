@@ -147,15 +147,14 @@ func _band_height(qx: float, qz: float, band_index: int) -> float:
 	return total * cascade.inv_n2
 
 
-func _apply_crest_sharpen(qx: float, qz: float, acc: Dictionary) -> void:
-	## 5R1D: misma matemática 5R.1C del shader (sobre FFT base, no recursiva).
+func _compute_sharpen(qx: float, qz: float) -> float:
+	## 5R1D: máscara 5R.1C del shader (sobre FFT base). Devuelve sharpen ∈ [0,1].
 	if _crest_sharpen.is_empty():
-		return
+		return 0.0
 	var strength: float = float(_crest_sharpen.get("strength", 0.0))
 	if strength <= 0.0:
-		return
+		return 0.0
 	var threshold: float = float(_crest_sharpen.get("threshold", 0.15))
-	var max_gain: float = float(_crest_sharpen.get("max_gain", 0.30))
 	var long_w: float = float(_crest_sharpen.get("long_weight", 1.0))
 	var mid_w: float = float(_crest_sharpen.get("mid_weight", 0.5))
 	var dir := Vector2(float(_crest_sharpen.get("direction_x", 1.0)), float(_crest_sharpen.get("direction_z", 0.0)))
@@ -176,42 +175,64 @@ func _apply_crest_sharpen(qx: float, qz: float, acc: Dictionary) -> void:
 	var crestness := crest_long + crest_mid
 	var face_slope := absf(l_r - l_l) / (2.0 * eps)
 	var compression := smoothstep(0.03, 0.22, face_slope)
-	var sharpen := smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
+	return smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
 
-	acc["h"] += sharpen * max_gain * local_hs
-	var h_scale := 1.0 + sharpen * max_gain * 0.35
-	acc["dx"] *= h_scale
-	acc["dz"] *= h_scale
+
+func _evaluate_final(qx: float, qz: float) -> Dictionary:
+	## 5R1D-hotfix: superficie FINAL (base FFT + crest sharpening).
+	var acc := _parametric_accumulators(qx, qz, true, _prepared_time)
+	var s := _compute_sharpen(qx, qz)
+	if s > 0.0:
+		var g: float = float(_crest_sharpen.get("max_gain", 0.30))
+		var hs: float = maxf(float(_crest_sharpen.get("local_hs", 0.5)), 0.05)
+		acc["h"] += s * g * hs
+		var scale := 1.0 + s * g * 0.35
+		acc["dx"] *= scale
+		acc["dz"] *= scale
+	return acc
+
+
+func _finite_jacobian(qx: float, qz: float) -> Dictionary:
+	## 5R1D-hotfix: Jacobian 2D de q + final_dx/dz por diferencias finitas centrales.
+	var d := 0.05
+	var xp := _evaluate_final(qx + d, qz)
+	var xm := _evaluate_final(qx - d, qz)
+	var zp := _evaluate_final(qx, qz + d)
+	var zm := _evaluate_final(qx, qz - d)
+	return {
+		"a": 1.0 + (xp.dx - xm.dx) / (2.0 * d),
+		"b": (zp.dx - zm.dx) / (2.0 * d),
+		"c": (xp.dz - xm.dz) / (2.0 * d),
+		"d": 1.0 + (zp.dz - zm.dz) / (2.0 * d),
+	}
 
 
 ## --- Inversión world_xz -> q (Newton-Raphson 2D) ----------------------------
 
 func _solve_world_to_q(target_xz: Vector2) -> Dictionary:
-	## Resuelve F(q) = q + Dxz(q) - target_xz = 0.
-	## J = [[1+dDx/dx, dDx/dz], [dDz/dx, 1+dDz/dz]]
+	## Resuelve F(q) = q + final_Dxz(q) - target_xz = 0 con Jacobian finito.
 	var q := target_xz
-	var acc := _parametric_accumulators(q.x, q.y, true, _prepared_time)
-	var fx: float = q.x + acc.dx - target_xz.x
-	var fz: float = q.y + acc.dz - target_xz.y
-	var residual := sqrt(fx * fx + fz * fz)
+	var acc: Dictionary = {}
+	var residual := 0.0
 	var iterations := 0
-	var converged := residual <= POSITION_TOLERANCE_M
-	while not converged and iterations < MAX_ITERATIONS:
-		var det_j: float = (1.0 + acc.dxx) * (1.0 + acc.dzz) - acc.dxz * acc.dzx
-		if absf(det_j) <= JACOBIAN_EPSILON:
-			break # parametrización singular/localmente no invertible
-		var inv_det: float = 1.0 / det_j
-		var delta_x: float = inv_det * ((1.0 + acc.dzz) * fx - acc.dxz * fz)
-		var delta_z: float = inv_det * (-acc.dzx * fx + (1.0 + acc.dxx) * fz)
-		q.x -= delta_x
-		q.y -= delta_z
-		acc = _parametric_accumulators(q.x, q.y, true, _prepared_time)
-		fx = q.x + acc.dx - target_xz.x
-		fz = q.y + acc.dz - target_xz.y
+	var converged := false
+	while true:
+		acc = _evaluate_final(q.x, q.y)
+		var fx: float = q.x + acc.dx - target_xz.x
+		var fz: float = q.y + acc.dz - target_xz.y
 		residual = sqrt(fx * fx + fz * fz)
+		if residual <= POSITION_TOLERANCE_M or iterations >= MAX_ITERATIONS:
+			converged = residual <= POSITION_TOLERANCE_M
+			break
+		var jac := _finite_jacobian(q.x, q.y)
+		var det: float = float(jac.a) * float(jac.d) - float(jac.b) * float(jac.c)
+		if absf(det) <= JACOBIAN_EPSILON:
+			break # parametrización singular/localmente no invertible
+		var inv_det: float = 1.0 / det
+		q.x -= inv_det * (jac.d * fx - jac.b * fz)
+		q.y -= inv_det * (-jac.c * fx + jac.a * fz)
 		iterations += 1
-		converged = residual <= POSITION_TOLERANCE_M
-	_apply_crest_sharpen(q.x, q.y, acc)
+	acc = _evaluate_final(q.x, q.y)
 	return {
 		"acc": acc,
 		"residual": residual,
