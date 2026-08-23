@@ -36,6 +36,11 @@ const CREST_SAMPLE_SPACING_LAMBDA := 0.15
 const STAGE_START_S_LAMBDA := -0.30
 const STAGE_END_S_LAMBDA := 0.22
 const CREST_TRACK_EPSILON := 1.0e-4
+## 4C-S4.1: crest lock + lifecycle. Salto máximo compatible con la cresta activa
+## (en λ) para no enganchar la siguiente ola antes de terminar la actual.
+const MAX_TRACKING_JUMP_LAMBDA := 0.22
+const FADE_IN_SECONDS := 0.20
+const FADE_OUT_SECONDS := 0.30
 
 ## Límite estricto de slots simultáneos; el pool reutiliza las mismas instancias.
 @export_range(1, 16, 1) var max_breakers := 8
@@ -302,6 +307,9 @@ func tracking_snapshot() -> Array:
 			"crest_s": float(entry.get("crest_s", 0.0)),
 			"stage": float(entry.get("stage", 0.0)),
 			"valid": float(entry.get("valid", 0.0)),
+			"alpha": float(entry.get("alpha", 0.0)),
+			"active": bool(entry.get("active", false)),
+			"release": bool(entry.get("releasing", false)),
 			"h0": float(entry.get("h0", 0.0)),
 			"h3": float(entry.get("h3", 0.0)),
 			"h6": float(entry.get("h6", 0.0)),
@@ -343,10 +351,10 @@ func _sync_uniforms() -> void:
 
 
 func _update_tracking() -> void:
-	## 4C-S4: localiza la cresta visible por slot con UNA batch OceanQuery en
-	## render time y publica tracked_crest_xz / stage como instance uniforms.
-	## Sin smoothing dependiente de frames: resultado puro del océano en ese
-	## instante (determinista, reproducible bajo pausa).
+	## 4C-S4.1: tracker con crest lock + lifecycle monotónico + fade in/out.
+	## Una única batch OceanQuery en render time; el estado por slot (active/
+	## releasing/crest_s/stage/alpha) persiste entre frames y es determinista
+	## (dt se deriva de SimulationClock, no del delta de frame).
 	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
 		return
 	if not _query_batch.is_valid():
@@ -379,54 +387,149 @@ func _update_tracking() -> void:
 				break
 			heights.append(sample.height)
 		if not all_valid:
-			_set_slot_tracking(index, Vector2(anchor["xz"]), 0.0, 0.0, 0.0)
+			_update_slot_invalid(index, Vector2(anchor["xz"]), render_time)
 			continue
-		# Prominencia longitudinal en las muestras interiores (1..5): reduce la
-		# influencia de MID/SHORT sobre la posición del máximo.
-		var best_index := 1
-		var best_prominence := -INF
-		for k in range(1, CREST_SAMPLE_OFFSETS.size() - 1):
-			var prominence: float = heights[k] - 0.5 * (heights[k - 1] + heights[k + 1])
-			if prominence > best_prominence:
-				best_prominence = prominence
-				best_index = k
-		var wavelength := float(anchor["wavelength_m"])
-		var sample_spacing := CREST_SAMPLE_SPACING_LAMBDA * wavelength
-		var denom: float = heights[best_index - 1] - 2.0 * heights[best_index] + heights[best_index + 1]
-		var delta := 0.0
-		if absf(denom) > CREST_TRACK_EPSILON:
-			delta = 0.5 * (heights[best_index - 1] - heights[best_index + 1]) / denom
-		delta = clampf(delta, -1.0, 1.0)
-		var crest_s: float = float(CREST_SAMPLE_OFFSETS[best_index]) * wavelength + delta * sample_spacing
-		var travel_dir := -Vector2(anchor["direction"])
-		var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * crest_s
-		var stage: float = _smoothstep(STAGE_START_S_LAMBDA * wavelength, STAGE_END_S_LAMBDA * wavelength, crest_s)
-		_set_slot_tracking(index, tracked_xz, crest_s, stage, 1.0)
+		_update_slot(index, anchor, heights, render_time)
 		if index < _tracking.size():
 			_tracking[index]["h0"] = heights[0]
 			_tracking[index]["h3"] = heights[3]
 			_tracking[index]["h6"] = heights[6]
 
 
-func _set_slot_tracking(index: int, tracked_xz: Vector2, crest_s: float, stage: float, valid: float) -> void:
+func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, render_time: float) -> void:
+	var wavelength := float(anchor["wavelength_m"])
+	var travel_dir := -Vector2(anchor["direction"])
+	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+	var active: bool = bool(entry.get("active", false))
+	var releasing: bool = bool(entry.get("releasing", false))
+	var prev_crest_s: float = float(entry.get("crest_s", 0.0))
+	var prev_stage: float = float(entry.get("stage", 0.0))
+	var prev_alpha: float = float(entry.get("alpha", 0.0))
+	var prev_tracked_xz: Vector2 = entry.get("tracked_xz", Vector2(anchor["xz"]))
+	var prev_time: float = float(entry.get("previous_time", render_time))
+	var dt: float = maxf(0.0, render_time - prev_time)
+	var max_jump := MAX_TRACKING_JUMP_LAMBDA * wavelength
+
+	# RELEASE: fade out manteniendo stage/posición final. No adquiere otra cresta.
+	if releasing:
+		var alpha: float = maxf(0.0, prev_alpha - dt / FADE_OUT_SECONDS)
+		if alpha <= 0.0:
+			_set_slot_state(index, prev_tracked_xz, prev_crest_s, 0.0, 0.0, false, false, 0.0, render_time)
+		else:
+			_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, alpha, true, true, 1.0, render_time)
+		return
+
+	# Candidatos: prominencia + parábola por cada muestra interior (1..5).
+	var candidates_s := PackedFloat32Array()
+	var candidates_p := PackedFloat32Array()
+	var best_crest_s := 0.0
+	var best_prominence := -INF
+	for k in range(1, CREST_SAMPLE_OFFSETS.size() - 1):
+		var prominence: float = heights[k] - 0.5 * (heights[k - 1] + heights[k + 1])
+		var denom: float = heights[k - 1] - 2.0 * heights[k] + heights[k + 1]
+		var delta := 0.0
+		if absf(denom) > CREST_TRACK_EPSILON:
+			delta = 0.5 * (heights[k - 1] - heights[k + 1]) / denom
+		delta = clampf(delta, -1.0, 1.0)
+		var candidate_s: float = float(CREST_SAMPLE_OFFSETS[k]) * wavelength + delta * (CREST_SAMPLE_SPACING_LAMBDA * wavelength)
+		candidates_s.append(candidate_s)
+		candidates_p.append(prominence)
+		if prominence > best_prominence:
+			best_prominence = prominence
+			best_crest_s = candidate_s
+
+	if not active:
+		# IDLE: adquirir la cresta de mayor prominencia (bloqueo inicial).
+		var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * best_crest_s
+		_set_slot_state(index, tracked_xz, best_crest_s, 0.0, 0.0, true, false, 1.0, render_time)
+		return
+
+	# ACTIVE: continuidad espacial — candidato compatible más cercano a la cresta
+	# previa, sin elegir el máximo global (evita saltar a otra cresta).
+	var found := false
+	var locked_s := 0.0
+	var locked_p := -INF
+	for c in candidates_s.size():
+		var candidate_s: float = candidates_s[c]
+		if absf(candidate_s - prev_crest_s) > max_jump:
+			continue
+		var closer: bool = absf(candidate_s - prev_crest_s) < absf(locked_s - prev_crest_s)
+		var tie: bool = absf(candidate_s - prev_crest_s) == absf(locked_s - prev_crest_s) and candidates_p[c] > locked_p
+		if not found or closer or tie:
+			found = true
+			locked_s = candidate_s
+			locked_p = candidates_p[c]
+
+	if not found:
+		# Cresta perdida / salió de la ventana: RELEASE, sin wrap instantáneo.
+		_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, prev_alpha, true, true, 1.0, render_time)
+		return
+
+	var target_stage: float = _smoothstep(STAGE_START_S_LAMBDA * wavelength, STAGE_END_S_LAMBDA * wavelength, locked_s)
+	var stage: float = maxf(prev_stage, target_stage) # monotónico: nunca retrocede.
+	var alpha: float = minf(1.0, prev_alpha + dt / FADE_IN_SECONDS)
+	var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * locked_s
+	if stage >= 0.999:
+		# Lifecycle completo -> RELEASE (fade out con stage 1).
+		_set_slot_state(index, tracked_xz, locked_s, 1.0, alpha, true, true, 1.0, render_time)
+		return
+	_set_slot_state(index, tracked_xz, locked_s, stage, alpha, true, false, 1.0, render_time)
+
+
+func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float) -> void:
+	## 4C-S4.1: muestras no válidas -> si estaba activo/releasing, fade out en
+	## lugar de apagar la geometría instantáneamente.
+	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+	var owned: bool = bool(entry.get("active", false)) or bool(entry.get("releasing", false))
+	if not owned:
+		_set_slot_state(index, anchor_xz, 0.0, 0.0, 0.0, false, false, 0.0, render_time)
+		return
+	var prev_crest_s: float = float(entry.get("crest_s", 0.0))
+	var prev_stage: float = float(entry.get("stage", 0.0))
+	var prev_alpha: float = float(entry.get("alpha", 0.0))
+	var prev_tracked_xz: Vector2 = entry.get("tracked_xz", anchor_xz)
+	var prev_time: float = float(entry.get("previous_time", render_time))
+	var dt: float = maxf(0.0, render_time - prev_time)
+	var alpha: float = maxf(0.0, prev_alpha - dt / FADE_OUT_SECONDS)
+	if alpha <= 0.0:
+		_set_slot_state(index, prev_tracked_xz, prev_crest_s, 0.0, 0.0, false, false, 0.0, render_time)
+	else:
+		_set_slot_state(index, prev_tracked_xz, prev_crest_s, prev_stage, alpha, true, true, 1.0, render_time)
+
+
+func _set_slot_state(index: int, tracked_xz: Vector2, crest_s: float, stage: float, alpha: float,
+		active: bool, releasing: bool, valid: float, previous_time: float) -> void:
 	if index >= _tracking.size():
 		_tracking.resize(index + 1)
-	_tracking[index] = {"crest_s": crest_s, "stage": stage, "valid": valid, "tracked_xz": tracked_xz}
+	_tracking[index] = {
+		"crest_s": crest_s,
+		"stage": stage,
+		"alpha": alpha,
+		"valid": valid,
+		"tracked_xz": tracked_xz,
+		"active": active,
+		"releasing": releasing,
+		"previous_time": previous_time,
+	}
 	if index < _ribbons.size():
 		var ribbon: MeshInstance3D = _ribbons[index]
 		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", tracked_xz)
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", stage)
 		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", valid)
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", alpha)
 
 
 func _clear_tracking() -> void:
-	## 4C-S4: sin batch/posiciones válidas -> crest sin track (envelope 0 en GPU).
+	## 4C-S4.1: fallo global de batch -> reinicio duro (IDLE). No es el camino de
+	## release normal (ese mantiene valid=1 durante el fade out).
 	_tracking.resize(_anchors.size())
 	for index in _ribbons.size():
 		var ribbon: MeshInstance3D = _ribbons[index]
 		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
 		if index < _tracking.size():
-			_tracking[index] = {"crest_s": 0.0, "stage": 0.0, "valid": 0.0, "tracked_xz": Vector2.ZERO}
+			_tracking[index] = {"crest_s": 0.0, "stage": 0.0, "alpha": 0.0, "valid": 0.0,
+				"tracked_xz": Vector2.ZERO, "active": false, "releasing": false, "previous_time": 0.0}
 
 
 func _ensure_material() -> void:
@@ -545,6 +648,7 @@ func _rebuild_instances() -> void:
 		instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
 		instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
+		instance.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
 		add_child(instance)
 		_ribbons.append(instance)
 	_tracking.resize(_anchors.size())

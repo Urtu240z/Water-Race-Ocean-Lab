@@ -200,7 +200,8 @@ func _breaker_text() -> String:
 	var lines: PackedStringArray = []
 	for index in summary["anchors"].size():
 		var track: Dictionary = tracking[index] if index < tracking.size() else {}
-		lines.append("slot %d crest_s=%+.1fm stage=%.2f (h0=%.2f h3=%.2f h6=%.2f)" % [index, float(track.get("crest_s", 0.0)), float(track.get("stage", 0.0)), float(track.get("h0", 0.0)), float(track.get("h3", 0.0)), float(track.get("h6", 0.0))])
+		var state_name: String = "RELEASE" if bool(track.get("release", false)) else ("ACTIVE" if bool(track.get("active", false)) else "IDLE")
+		lines.append("slot %d crest_s=%+.1fm stage=%.2f alpha=%.2f %s (h0=%.2f h3=%.2f h6=%.2f)" % [index, float(track.get("crest_s", 0.0)), float(track.get("stage", 0.0)), float(track.get("alpha", 0.0)), state_name, float(track.get("h0", 0.0)), float(track.get("h3", 0.0)), float(track.get("h6", 0.0))])
 	var body := "track_t=%.3fs | " % track_t + " | ".join(lines)
 	var slot_text := "Breaker debug slot (H): %s/%d" % [_ocean.breaker_debug_slot_name(), summary["slots"]]
 	var stage_text := "CrossStage (Q/E): %.2f" % _ocean.breaker_debug_stage()

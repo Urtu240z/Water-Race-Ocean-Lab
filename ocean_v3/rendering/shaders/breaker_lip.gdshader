@@ -91,6 +91,8 @@ instance uniform float ribbon_width_m;
 instance uniform vec2 tracked_crest_xz;
 instance uniform float breaker_lifecycle_stage;
 instance uniform float breaker_tracking_valid;
+// 4C-S4.1: continuidad temporal (fade in/out del lifecycle). Sólo LIP/TAKEOVER.
+instance uniform float breaker_lifecycle_alpha;
 
 varying float breaker_alpha;
 varying float breaker_env;
@@ -252,9 +254,14 @@ void vertex() {
 	// inspeccionar los slots; el resto conserva la envolvente de takeover.
 	float alpha;
 	if (breaker_debug_mode == 2) {
+		// REGION: siempre visible, sin lifecycle_alpha.
 		alpha = breaker_edge_fade(u, v) * distance_fade(breaker_fade_range_m, dist) * 0.75;
 	} else {
 		alpha = envelope * breaker_edge_fade(u, v) * distance_fade(breaker_fade_range_m, dist);
+		// 4C-S4.1: LIP/TAKEOVER amortiguan por lifecycle_alpha; FORCE_LIP no.
+		if (breaker_debug_mode == 0 || breaker_debug_mode == 1) {
+			alpha *= breaker_lifecycle_alpha;
+		}
 	}
 	if (coastal_monochromatic_debug || !module_enabled) {
 		alpha = 0.0; // instrumento mono / módulo apagado: ningún breaker.

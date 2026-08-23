@@ -55,7 +55,7 @@ fov = 62.0
 far = 2000.0
 
 [node name="BreakerCloseCamera" type="Camera3D" parent="." unique_id=733101337]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.525, 0.46, 8.805)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.935, 1.755, 10.74)
 fov = 55.0
 far = 2000.0
 
