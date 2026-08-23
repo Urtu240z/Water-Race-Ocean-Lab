@@ -189,11 +189,13 @@ func _breaker_text() -> String:
 	var enabled_text := "ON" if _breakers_enabled else "OFF"
 	if summary.is_empty() or not summary.get("configured", false):
 		return "Breakers (K): %s | debug (N): %s | sin coastal válido -> 0 slots" % [enabled_text, _ocean.breaker_debug_name()]
+	var tracking: Array = _ocean.breaker_tracking_snapshot()
 	var lines: PackedStringArray = []
 	for index in summary["anchors"].size():
 		var anchor: Dictionary = summary["anchors"][index]
 		var direction: Vector2 = anchor["direction"]
-		lines.append("slot %d p=(%+.1f,%+.1f) d=(%+.2f,%+.2f) h=%.2fm lam=%.1fm" % [index, anchor["xz"].x, anchor["xz"].y, direction.x, direction.y, anchor["depth_m"], anchor["wavelength_m"]])
+		var track: Dictionary = tracking[index] if index < tracking.size() else {}
+		lines.append("slot %d p=(%+.1f,%+.1f) d=(%+.2f,%+.2f) lam=%.1fm crest_s=%+.1fm stage=%.2f" % [index, anchor["xz"].x, anchor["xz"].y, direction.x, direction.y, anchor["wavelength_m"], float(track.get("crest_s", 0.0)), float(track.get("stage", 0.0))])
 	var body := " | ".join(lines)
 	var slot_text := "Breaker debug slot (H): %s/%d" % [_ocean.breaker_debug_slot_name(), summary["slots"]]
 	var stage_text := "CrossStage (Q/E): %.2f" % _ocean.breaker_debug_stage()

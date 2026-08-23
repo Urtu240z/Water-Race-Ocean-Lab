@@ -9,8 +9,11 @@ render_mode cull_disabled, blend_mix, depth_draw_opaque, diffuse_burley, specula
 //   - la superficie base se integra con el clipmap (mismas cascadas/fades);
 //   - 4B: el labio levanta y adelanta según la envolvente de takeover;
 //   - 4C: el frente vuelca (overturn) y la nariz baja (plunge);
-//   - 4C-S1: FORCE_LIP usa la cross-section aprobada horneada en LUT.
-// No hay readback GPU->CPU ni OceanQuery en esta ruta.
+//   - 4C-S1: FORCE_LIP usa la cross-section aprobada horneada en LUT;
+//   - 4C-S4: LIP/TAKEOVER usan esa misma LUT de forma automática, centrada en
+//     la cresta trackeada por CPU (tracked_crest_xz) con stage de lifecycle.
+// No hay readback GPU->CPU ni OceanQuery dentro de esta ruta de shader; el
+// tracking de cresta es CPU (BreakerRibbonPool) y publica instance uniforms.
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
@@ -59,10 +62,11 @@ uniform float sea_level_y = 0.0;
 uniform float breaker_lift_fraction = 0.55;
 uniform float breaker_advance_fraction = 0.45;
 uniform float breaker_lip_slope = 0.7;
-// 4C: ángulo máximo de curl en producción (PREBREAK alto). FORCE_LIP usa ~115°.
+// 4C: ángulo máximo de curl antiguo (legacy; ya no usado en S4).
 uniform float breaker_curl_angle_deg = 90.0;
 // 4C-S2: LUT de cross-section aprobada (horneada offline). R = x_norm ABSOLUTO,
-// G = (y - y_stage0)/HEIGHT_REF, B = d(x_norm)/du, A = dG/du. Sólo FORCE_LIP.
+// G = (y - y_stage0)/HEIGHT_REF, B = d(x_norm)/du, A = dG/du. 4C-S4: la usan
+// LIP/TAKEOVER (stage = lifecycle) y FORCE_LIP (stage = debug manual Q/E).
 uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
 uniform float breaker_profile_height_hs = 2.0;
@@ -81,6 +85,12 @@ instance uniform vec2 direction_xz;
 instance uniform float ribbon_id;
 instance uniform float ribbon_wavelength_m;
 instance uniform float ribbon_width_m;
+// 4C-S4: crest-following lifecycle (por slot). tracked_crest_xz es la autoridad
+// de posición de la cross-section; breaker_lifecycle_stage avanza 0..1 con la
+// cresta; breaker_tracking_valid (0/1) apaga el breaker si no hay cresta fiable.
+instance uniform vec2 tracked_crest_xz;
+instance uniform float breaker_lifecycle_stage;
+instance uniform float breaker_tracking_valid;
 
 varying float breaker_alpha;
 varying float breaker_env;
@@ -122,34 +132,57 @@ void vertex() {
 	// v∈[0,1] -> ancho centrado en el anchor. El labio (cresta) cae en u≈0.545.
 	float u_world = mix(-0.6, 0.5, u) * ribbon_wavelength_m;
 	float v_world = (v - 0.5) * ribbon_width_m;
-	// 4C-S2: en FORCE_LIP la base FFT se samplea en la posición REST de la LUT
-	// (stage 0), para que el stage 0 quede exactamente pegado al FFT.
+
+	// 4C-S4: LIP/TAKEOVER = LUT automática centrada en la cresta trackeada;
+	// FORCE_LIP = diagnóstico manual (anchor estático + Q/E). REGION = plana.
+	bool use_lut_profile = breaker_debug_mode == 0 || breaker_debug_mode == 1 || breaker_debug_mode == 3;
+	vec2 profile_center_xz = anchor_xz;
+	float profile_stage = breaker_profile_debug_stage;
+	if (breaker_debug_mode == 0 || breaker_debug_mode == 1) {
+		profile_center_xz = tracked_crest_xz;
+		profile_stage = breaker_lifecycle_stage;
+	}
+
+	// La base FFT se samplea en la posición REST de la LUT (stage 0), para que
+	// el stage 0 quede exactamente pegado al FFT.
 	float profile_length = ribbon_wavelength_m * breaker_profile_length_scale;
 	float source_start = -0.5 * profile_length;
 	float source_end = 0.5 * profile_length;
 	float s_rest = u_world;
-	if (breaker_debug_mode == 3) {
+	if (use_lut_profile) {
 		vec4 rest_profile = textureLod(breaker_profile_lut, vec2(u, 0.0), 0.0);
 		float rest_x = breaker_profile_forward_sign > 0.0 ? rest_profile.r : 1.0 - rest_profile.r;
 		s_rest = mix(source_start, source_end, rest_x);
 	}
-	vec2 P0 = anchor_xz + direction * s_rest + tangent * v_world;
+	vec2 P0 = profile_center_xz + direction * s_rest + tangent * v_world;
 
 	vec2 coast_uv = coastal_uv(P0);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
-	vec4 metrics_data = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
-	vec4 phase_data = textureLod(coastal_phase_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	float dist = distance(P0, camera_world_xz);
 
-	// Trigger LONG-only: el MISMO campo PREBREAK de 4A evaluado en el vértice.
-	vec4 indices = prebreak_indices_at(P0, coast_uv, field_data, metrics_data, phase_data);
-	vec4 local_state = breaking_local_state_at(P0, coast_uv, field_data);
+	// Trigger LONG-only: el MISMO campo PREBREAK de 4A. LIP/TAKEOVER evalúan un
+	// único punto de control por slot (tracked_crest_xz) para que toda la
+	// cross-section comparta stage/intensidad; FORCE_LIP/REGION evalúan el vértice.
+	vec2 control_xz = P0;
+	if (breaker_debug_mode == 0 || breaker_debug_mode == 1) {
+		control_xz = tracked_crest_xz;
+	}
+	vec2 control_uv = coastal_uv(control_xz);
+	vec4 control_field = textureLod(coastal_field_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 control_metrics = textureLod(coastal_metrics_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 control_phase = textureLod(coastal_phase_texture, clamp(control_uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 indices = prebreak_indices_at(control_xz, control_uv, control_field, control_metrics, control_phase);
+	vec4 local_state = breaking_local_state_at(control_xz, control_uv, control_field);
 	float envelope = breaker_envelope(indices.w);
 	float local_hs = local_state.w;
 	// FORCE_LIP (debug): envelope fijado a 1 sólo para ver la geometría de
 	// takeover; no modifica el campo PREBREAK ni es ruta de producción.
 	if (breaker_debug_mode == 3) {
 		envelope = 1.0;
+	}
+	// 4C-S4: sin cresta trackeada válida, LIP/TAKEOVER no emiten breaker.
+	if ((breaker_debug_mode == 0 || breaker_debug_mode == 1) && breaker_tracking_valid < 0.5) {
+		envelope = 0.0;
 	}
 
 	// Superficie base: idéntica al clipmap (4 cascadas, warp, shoaling, fades,
@@ -158,18 +191,13 @@ void vertex() {
 	vec3 disp = surface_displacement_break(P0, coast_uv, field_data, dist);
 	vec2 slope = surface_slope_break(P0, coast_uv, field_data, dist);
 
-	// Modos: LIP/TAKEOVER (producción) = curl 4B/4C antiguo. FORCE_LIP (debug) =
-	// cross-section LUT aprobada (x_norm absoluto). REGION = plana sin deformar.
-	bool use_lut_profile = breaker_debug_mode == 3;
-	bool deform_old = breaker_debug_mode == 0 || breaker_debug_mode == 1;
-
-	// --- FORCE_LIP: target desde la LUT (x_norm absoluto + forward sign) ---
+	// --- LUT aprobada: target desde x_norm absoluto + forward sign ---
 	float s_target = u_world;
 	float y_profile = 0.0;
 	float dx_norm_du = 0.0;
 	float dGdu = 0.0;
 	if (use_lut_profile) {
-		vec4 profile = textureLod(breaker_profile_lut, vec2(u, clamp(breaker_profile_debug_stage, 0.0, 1.0)), 0.0);
+		vec4 profile = textureLod(breaker_profile_lut, vec2(u, clamp(profile_stage, 0.0, 1.0)), 0.0);
 		float target_x = breaker_profile_forward_sign > 0.0 ? profile.r : 1.0 - profile.r;
 		s_target = mix(source_start, source_end, target_x);
 		y_profile = profile.g * local_hs * breaker_profile_height_hs;
@@ -180,55 +208,17 @@ void vertex() {
 		dGdu = profile.a;
 	}
 
-	// --- Curl 4B/4C antiguo (LIP/TAKEOVER), sin cambios de producción ---
-	float lift = 0.0;
-	float advance = 0.0;
-	float curl_angle = 0.0;
-	if (deform_old) {
-		lift = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(u);
-		advance = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(u);
-		float curl_env = smoothstep(0.25, 1.0, envelope);
-		float curl_angle_max = curl_env * radians(breaker_curl_angle_deg);
-		curl_angle = -curl_angle_max * breaker_curl_profile(u);
-	}
-
-	float u_world_h = mix(-0.6, 0.5, BREAKER_HINGE_U) * ribbon_wavelength_m;
-	float lift_h = 0.0;
-	float advance_h = 0.0;
-	if (deform_old) {
-		lift_h = envelope * local_hs * breaker_lift_fraction * breaker_lift_profile(BREAKER_HINGE_U);
-		advance_h = envelope * local_hs * breaker_advance_fraction * breaker_advance_profile(BREAKER_HINGE_U);
-	}
-	float s0 = u_world + advance;
-	float y0 = lift;
-	float s_h = u_world_h + advance_h;
-	float y_h = lift_h;
-	float ds = s0 - s_h;
-	float dy = y0 - y_h;
-	float cos_a = cos(curl_angle);
-	float sin_a = sin(curl_angle);
-	float ds_rot = ds * cos_a - dy * sin_a;
-	float dy_rot = ds * sin_a + dy * cos_a;
-	float s_final_old = s_h + ds_rot;
-	float y_final_old = y_h + dy_rot;
-
 	float region_debug_offset = (breaker_debug_mode == 2) ? 0.15 : 0.0;
 
 	vec3 world_pos;
 	if (use_lut_profile) {
 		world_pos = vec3(
-			anchor_xz.x + direction.x * s_target + tangent.x * v_world + disp.x,
+			profile_center_xz.x + direction.x * s_target + tangent.x * v_world + disp.x,
 			sea_level_y + disp.y + y_profile,
-			anchor_xz.y + direction.y * s_target + tangent.y * v_world + disp.z
-		);
-	} else if (deform_old) {
-		world_pos = vec3(
-			anchor_xz.x + direction.x * s_final_old + tangent.x * v_world + disp.x,
-			sea_level_y + disp.y + y_final_old + region_debug_offset,
-			anchor_xz.y + direction.y * s_final_old + tangent.y * v_world + disp.z
+			profile_center_xz.y + direction.y * s_target + tangent.y * v_world + disp.z
 		);
 	} else {
-		// REGION: plantilla plana pegada a la superficie.
+		// REGION/OFF: plantilla plana pegada a la superficie.
 		world_pos = vec3(
 			anchor_xz.x + direction.x * u_world + tangent.x * v_world + disp.x,
 			sea_level_y + disp.y + region_debug_offset,
@@ -251,17 +241,6 @@ void vertex() {
 		} else {
 			normal_final = normalize(vec3(-slope.x, 1.0, -slope.y));
 		}
-	} else if (deform_old) {
-		float slope_profile = max(breaker_lift_profile(u), breaker_advance_profile(u));
-		vec2 slope2 = slope + direction * (envelope * breaker_lip_slope * slope_profile);
-		vec3 normal0 = normalize(vec3(-slope2.x, 1.0, -slope2.y));
-		float n_d = dot(normal0.xz, direction);
-		float n_t = dot(normal0.xz, tangent);
-		float n_y = normal0.y;
-		float n_d_r = n_d * cos_a - n_y * sin_a;
-		float n_y_r = n_d * sin_a + n_y * cos_a;
-		vec2 n_xz_r = direction * n_d_r + tangent * n_t;
-		normal_final = normalize(vec3(n_xz_r.x, n_y_r, n_xz_r.y));
 	} else {
 		normal_final = normalize(vec3(-slope.x, 1.0, -slope.y));
 	}

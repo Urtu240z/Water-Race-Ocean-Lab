@@ -28,6 +28,15 @@ const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "OFF"]
 const BREAKER_GAMMA := 0.78
 const BREAKER_CREST_U := 0.545
 
+## 4C-S4: tracker CPU de cresta (una única batch OceanQuery, sin readback GPU).
+## Muestras en λ a lo largo de travel_dir = -direction. El stage se deriva del
+## avance crest_s a través de la zona de breaking (no de PREBREAK).
+const CREST_SAMPLE_OFFSETS: Array = [-0.45, -0.30, -0.15, 0.0, 0.15, 0.30, 0.45]
+const CREST_SAMPLE_SPACING_LAMBDA := 0.15
+const STAGE_START_S_LAMBDA := -0.30
+const STAGE_END_S_LAMBDA := 0.22
+const CREST_TRACK_EPSILON := 1.0e-4
+
 ## Límite estricto de slots simultáneos; el pool reutiliza las mismas instancias.
 @export_range(1, 16, 1) var max_breakers := 8
 @export_range(8, 128, 1) var ribbon_u_segments := 96
@@ -99,6 +108,8 @@ var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
 var _profile_forward_sign := -1.0 # 4C-S3: default FLIPPED (-1) = alineado con el avance real del FFT.
 var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
+var _query_batch: Callable = Callable() # 4C-S4: sample_water_batch_at_time del módulo.
+var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz} por slot.
 
 
 # --- Réplicas CPU de los perfiles del shader (breaker_lip.gdshader / inc).
@@ -149,6 +160,11 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 	set_energy_model(long_hs_m, coastal_fraction)
 	_sync_uniforms()
 	visible = true
+
+
+func set_query_source(callable: Callable) -> void:
+	## 4C-S4: Callable batch de OceanQuery (sample_water_batch_at_time del módulo).
+	_query_batch = callable
 
 
 func set_energy_model(long_hs_m: float, coastal_fraction: float) -> void:
@@ -274,6 +290,20 @@ func anchor_snapshot() -> Array:
 	return result
 
 
+func tracking_snapshot() -> Array:
+	## 4C-S4: estado del tracker por slot (crest_s/stage), para el HUD. Función
+	## pura del render time actual: determinista y reproducible bajo pausa.
+	var result: Array = []
+	for index in _anchors.size():
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		result.append({
+			"crest_s": float(entry.get("crest_s", 0.0)),
+			"stage": float(entry.get("stage", 0.0)),
+			"valid": float(entry.get("valid", 0.0)),
+		})
+	return result
+
+
 func summary() -> Dictionary:
 	return {
 		"configured": _propagation != null and _propagation.is_valid(),
@@ -288,6 +318,7 @@ func _process(_delta: float) -> void:
 	if _material == null or _surface_material == null:
 		return
 	_sync_uniforms()
+	_update_tracking()
 
 
 # --- Internos. ---
@@ -299,6 +330,88 @@ func _sync_uniforms() -> void:
 		var value: Variant = _surface_material.get_shader_parameter(uniform_name)
 		if value != null:
 			_material.set_shader_parameter(uniform_name, value)
+
+
+func _update_tracking() -> void:
+	## 4C-S4: localiza la cresta visible por slot con UNA batch OceanQuery en
+	## render time y publica tracked_crest_xz / stage como instance uniforms.
+	## Sin smoothing dependiente de frames: resultado puro del océano en ese
+	## instante (determinista, reproducible bajo pausa).
+	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
+		return
+	if not _query_batch.is_valid():
+		_clear_tracking()
+		return
+	var render_time: float = SimulationClock.get_render_time()
+	var positions: Array[Vector3] = []
+	var base_index: Array[int] = []
+	for anchor in _anchors:
+		var travel_dir := -Vector2(anchor["direction"])
+		var wavelength := float(anchor["wavelength_m"])
+		base_index.append(positions.size())
+		for offset in CREST_SAMPLE_OFFSETS:
+			var xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * (float(offset) * wavelength)
+			positions.append(Vector3(xz.x, _sea_level_y, xz.y))
+	var samples: Array = _query_batch.call(positions, render_time)
+	if samples.size() != positions.size():
+		_clear_tracking()
+		return
+	for index in _anchors.size():
+		var anchor: Dictionary = _anchors[index]
+		var base: int = base_index[index]
+		var heights := PackedFloat32Array()
+		var all_valid := true
+		for k in CREST_SAMPLE_OFFSETS.size():
+			var sample: OceanQuerySample = samples[base + k]
+			if sample == null or not sample.valid or not is_finite(sample.height):
+				all_valid = false
+				break
+			heights.append(sample.height)
+		if not all_valid:
+			_set_slot_tracking(index, Vector2(anchor["xz"]), 0.0, 0.0, 0.0)
+			continue
+		# Prominencia longitudinal en las muestras interiores (1..5): reduce la
+		# influencia de MID/SHORT sobre la posición del máximo.
+		var best_index := 1
+		var best_prominence := -INF
+		for k in range(1, CREST_SAMPLE_OFFSETS.size() - 1):
+			var prominence: float = heights[k] - 0.5 * (heights[k - 1] + heights[k + 1])
+			if prominence > best_prominence:
+				best_prominence = prominence
+				best_index = k
+		var wavelength := float(anchor["wavelength_m"])
+		var sample_spacing := CREST_SAMPLE_SPACING_LAMBDA * wavelength
+		var denom: float = heights[best_index - 1] - 2.0 * heights[best_index] + heights[best_index + 1]
+		var delta := 0.0
+		if absf(denom) > CREST_TRACK_EPSILON:
+			delta = 0.5 * (heights[best_index - 1] - heights[best_index + 1]) / denom
+		delta = clampf(delta, -1.0, 1.0)
+		var crest_s: float = float(CREST_SAMPLE_OFFSETS[best_index]) * wavelength + delta * sample_spacing
+		var travel_dir := -Vector2(anchor["direction"])
+		var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * crest_s
+		var stage: float = _smoothstep(STAGE_START_S_LAMBDA * wavelength, STAGE_END_S_LAMBDA * wavelength, crest_s)
+		_set_slot_tracking(index, tracked_xz, crest_s, stage, 1.0)
+
+
+func _set_slot_tracking(index: int, tracked_xz: Vector2, crest_s: float, stage: float, valid: float) -> void:
+	if index >= _tracking.size():
+		_tracking.resize(index + 1)
+	_tracking[index] = {"crest_s": crest_s, "stage": stage, "valid": valid, "tracked_xz": tracked_xz}
+	if index < _ribbons.size():
+		var ribbon: MeshInstance3D = _ribbons[index]
+		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", tracked_xz)
+		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", stage)
+		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", valid)
+
+
+func _clear_tracking() -> void:
+	## 4C-S4: sin batch/posiciones válidas -> crest sin track (envelope 0 en GPU).
+	_tracking.resize(_anchors.size())
+	for index in _ribbons.size():
+		var ribbon: MeshInstance3D = _ribbons[index]
+		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
+		if index < _tracking.size():
+			_tracking[index] = {"crest_s": 0.0, "stage": 0.0, "valid": 0.0, "tracked_xz": Vector2.ZERO}
 
 
 func _ensure_material() -> void:
@@ -413,8 +526,13 @@ func _rebuild_instances() -> void:
 		instance.set_instance_shader_parameter(&"ribbon_id", float(index))
 		instance.set_instance_shader_parameter(&"ribbon_wavelength_m", float(anchor["wavelength_m"]) * ribbon_length_lambda)
 		instance.set_instance_shader_parameter(&"ribbon_width_m", ribbon_width_m)
+		# 4C-S4: crest-following lifecycle (fallback = anchor + stage 0 + inválido).
+		instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
+		instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
+		instance.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
 		add_child(instance)
 		_ribbons.append(instance)
+	_tracking.resize(_anchors.size())
 	_apply_visibility()
 	_sync_takeover_mask()
 

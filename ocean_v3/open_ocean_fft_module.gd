@@ -328,6 +328,35 @@ func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
 	return []
 
 
+func sample_water_batch_at_time(positions: Array[Vector3], simulation_time: float) -> Array:
+	## 4C-S4: batch de tracking visual de crestas. Igual que la batch física pero
+	## con un tiempo explícito (render time), para que el tracker sea determinista
+	## y coincida exactamente con lo que se ve en pantalla (pausa incluida).
+	if not _enabled:
+		var flat_result: Array = []
+		var flat = QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
+		flat_result.resize(positions.size())
+		for index in positions.size():
+			flat_result[index] = flat
+		return flat_result
+	if _native_query_can_sample_coastal():
+		_query_native.ensure_prepared(simulation_time)
+		var packed := PackedVector3Array()
+		packed.resize(positions.size())
+		for index in positions.size():
+			packed[index] = positions[index]
+		var out = _query_native.sample_batch_prepared(packed)
+		var result: Array = []
+		result.resize(positions.size())
+		for index in positions.size():
+			result[index] = _native_to_sample(out, index)
+		return result
+	if _query_reduced != null:
+		_query_reduced.prepare_time(simulation_time)
+		return _query_reduced.sample_water_batch_prepared(positions)
+	return []
+
+
 func prepare_query_time(simulation_time: float) -> void:
 	if _native_query_can_sample_coastal():
 		_query_native.ensure_prepared(simulation_time)
@@ -509,6 +538,8 @@ func _configure_breaker_pool() -> void:
 		surface.clipmap_config.sea_level_y,
 		surface.get_surface_material(),
 	)
+	# 4C-S4: el pool resuelve la batch de tracking con el MISMO evaluador OceanQuery.
+	_breaker_pool.set_query_source(Callable(self, &"sample_water_batch_at_time"))
 
 
 func set_breakers_enabled(enabled: bool) -> void:
@@ -596,6 +627,13 @@ func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}
 	return _breaker_pool.summary()
+
+
+func breaker_tracking_snapshot() -> Array:
+	## 4C-S4: crest_s/stage por slot para el HUD (función pura del render time).
+	if _breaker_pool == null:
+		return []
+	return _breaker_pool.tracking_snapshot()
 
 
 func coastal_propagation_data():

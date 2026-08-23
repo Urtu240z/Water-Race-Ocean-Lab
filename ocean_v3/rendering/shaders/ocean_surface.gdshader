@@ -87,7 +87,7 @@ uniform float breaker_takeover_seam_center = 0.56;
 uniform float breaker_takeover_seam_half_width = 0.10;
 uniform float breaker_takeover_seam_feather = 0.06;
 // 4C-S3.3: profundidad de submerge (depresión vertical) bajo la seam S3.2.
-uniform float breaker_takeover_submerge_hs = 0.85;
+uniform float breaker_takeover_submerge_hs = 0.30;
 
 varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
