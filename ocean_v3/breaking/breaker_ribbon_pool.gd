@@ -96,7 +96,8 @@ var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
 var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
 var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
-var _profile_forward_sign := -1.0 # 4C-S2: -1 = FLIPPED, +1 = FORWARD (debug).
+var _profile_forward_sign := 1.0 # 4C-S3: default FORWARD (+1); X lo espeja (debug).
+var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
 
 
@@ -174,6 +175,7 @@ func set_debug_mode(mode: int) -> void:
 	if _material != null:
 		_material.set_shader_parameter(&"breaker_debug_mode", _debug_mode)
 	_apply_visibility()
+	_sync_takeover_mask()
 
 
 func cycle_debug_mode() -> void:
@@ -184,6 +186,7 @@ func set_debug_slot(slot: int) -> void:
 	## slot -1 => ALL. Sólo filtra visibilidad en REGION/FORCE_LIP; no recrea mesh.
 	_debug_slot = slot
 	_apply_visibility()
+	_sync_takeover_mask()
 
 
 func cycle_debug_slot() -> void:
@@ -198,6 +201,7 @@ func cycle_debug_slot() -> void:
 		if _debug_slot >= count:
 			_debug_slot = -1
 	_apply_visibility()
+	_sync_takeover_mask()
 
 
 func debug_slot_name() -> String:
@@ -209,6 +213,7 @@ func set_debug_stage(value: float) -> void:
 	_debug_stage = clampf(value, 0.0, 1.0)
 	if _material != null:
 		_material.set_shader_parameter(&"breaker_profile_debug_stage", _debug_stage)
+	_sync_takeover_mask()
 
 
 func adjust_debug_stage(delta: float) -> void:
@@ -224,10 +229,21 @@ func toggle_debug_profile_direction() -> void:
 	_profile_forward_sign = -_profile_forward_sign
 	if _material != null:
 		_material.set_shader_parameter(&"breaker_profile_forward_sign", _profile_forward_sign)
+	_sync_takeover_mask()
 
 
 func debug_profile_direction_name() -> String:
 	return "FLIPPED" if _profile_forward_sign < 0.0 else "FORWARD"
+
+
+func toggle_takeover_mask() -> void:
+	## 4C-S3: activa/desactiva el takeover mask del ocean base (sólo FORCE_LIP).
+	_takeover_mask_enabled = not _takeover_mask_enabled
+	_sync_takeover_mask()
+
+
+func takeover_mask_name() -> String:
+	return "ON" if _takeover_mask_enabled else "OFF"
 
 
 func breaker_debug_name() -> String:
@@ -394,6 +410,30 @@ func _rebuild_instances() -> void:
 		add_child(instance)
 		_ribbons.append(instance)
 	_apply_visibility()
+	_sync_takeover_mask()
+
+
+func _sync_takeover_mask() -> void:
+	## 4C-S3: sincroniza los uniforms debug del takeover mask en el material del
+	## ocean base. Activo sólo en FORCE_LIP + slot individual. Eventos, no por frame.
+	if _surface_material == null:
+		return
+	var active: bool = _takeover_mask_enabled and _debug_mode == DebugMode.FORCE_LIP and _debug_slot >= 0 and _debug_slot < _anchors.size()
+	if not active:
+		_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", false)
+		return
+	var anchor: Dictionary = _anchors[_debug_slot]
+	var scale: float = 0.65
+	if _material != null:
+		var s: Variant = _material.get_shader_parameter(&"breaker_profile_length_scale")
+		if s != null and float(s) > 0.0:
+			scale = float(s)
+	_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", true)
+	_surface_material.set_shader_parameter(&"breaker_takeover_anchor_xz", Vector2(anchor["xz"]))
+	_surface_material.set_shader_parameter(&"breaker_takeover_direction_xz", Vector2(anchor["direction"]))
+	_surface_material.set_shader_parameter(&"breaker_takeover_length_m", float(anchor["wavelength_m"]) * ribbon_length_lambda * scale)
+	_surface_material.set_shader_parameter(&"breaker_takeover_width_m", ribbon_width_m)
+	_surface_material.set_shader_parameter(&"breaker_takeover_stage", _debug_stage)
 
 
 func _apply_visibility() -> void:

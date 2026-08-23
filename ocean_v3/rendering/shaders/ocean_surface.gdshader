@@ -66,6 +66,15 @@ uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
+// 4C-S3: takeover mask debug (FORCE_LIP). Oculta el FFT base bajo el patch.
+uniform bool breaker_takeover_debug_enabled = false;
+uniform vec2 breaker_takeover_anchor_xz = vec2(0.0);
+uniform vec2 breaker_takeover_direction_xz = vec2(1.0, 0.0);
+uniform float breaker_takeover_length_m = 16.0;
+uniform float breaker_takeover_width_m = 5.0;
+uniform float breaker_takeover_stage = 0.0;
+uniform float breaker_takeover_inner = 0.75;
+uniform float breaker_takeover_feather = 0.15;
 
 varying vec3 derived_normal;
 varying vec2 ocean_world_xz;
@@ -91,6 +100,25 @@ vec3 level_color(float level) {
 float periodic_grid(vec2 world_xz, float domain_size_m) {
 	vec2 cell = abs(fract(world_xz / domain_size_m + 0.5) - 0.5);
 	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
+}
+
+// 4C-S3: máscara rectangular suave del patch del breaker (coordenadas locales
+// del slot). 1 en el núcleo, feather hacia 0 en los cuatro bordes.
+float breaker_takeover_mask(vec2 world_xz) {
+	vec2 direction = normalize(breaker_takeover_direction_xz);
+	vec2 tangent = vec2(-direction.y, direction.x);
+	vec2 delta = world_xz - breaker_takeover_anchor_xz;
+	float local_s = dot(delta, direction);
+	float local_v = dot(delta, tangent);
+	float half_length = 0.5 * breaker_takeover_length_m;
+	float half_width = 0.5 * breaker_takeover_width_m;
+	float fade_s0 = breaker_takeover_inner * half_length;
+	float fade_s1 = max(fade_s0 + 0.001, (breaker_takeover_inner + breaker_takeover_feather) * half_length);
+	float fade_v0 = breaker_takeover_inner * half_width;
+	float fade_v1 = max(fade_v0 + 0.001, (breaker_takeover_inner + breaker_takeover_feather) * half_width);
+	float w_s = 1.0 - smoothstep(fade_s0, fade_s1, abs(local_s));
+	float w_v = 1.0 - smoothstep(fade_v0, fade_v1, abs(local_v));
+	return clamp(w_s * w_v, 0.0, 1.0);
 }
 
 void vertex() {
@@ -268,6 +296,22 @@ void fragment() {
 	if (periodicity_debug) {
 		float lines = max(periodic_grid(ocean_world_xz, domain_long_coastal_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
+	}
+
+	// 4C-S3: takeover mask debug. El FFT base deja de renderizarse bajo el
+	// patch del breaker (sólo FORCE_LIP + slot individual). Discard en el núcleo
+	// y dither estable en world-space en la banda de feather.
+	if (breaker_takeover_debug_enabled) {
+		float take_strength = smoothstep(0.35, 0.70, breaker_takeover_stage);
+		float mask = breaker_takeover_mask(ocean_world_xz) * take_strength;
+		if (mask > 0.995) {
+			discard;
+		} else if (mask > 0.002) {
+			float dither_hash = fract(sin(dot(ocean_world_xz, vec2(12.9898, 78.233))) * 43758.5453);
+			if (dither_hash < mask) {
+				discard;
+			}
+		}
 	}
 
 	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap;

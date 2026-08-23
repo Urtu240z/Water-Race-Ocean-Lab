@@ -575,6 +575,17 @@ func breaker_profile_direction_name() -> String:
 	return _breaker_pool.debug_profile_direction_name()
 
 
+func toggle_breaker_takeover_mask() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.toggle_takeover_mask()
+
+
+func breaker_takeover_mask_name() -> String:
+	if _breaker_pool == null:
+		return "OFF"
+	return _breaker_pool.takeover_mask_name()
+
+
 func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}

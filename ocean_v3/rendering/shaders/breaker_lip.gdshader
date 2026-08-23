@@ -67,7 +67,7 @@ uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
 uniform float breaker_profile_height_hs = 2.0;
 uniform float breaker_profile_length_scale = 0.65;
-uniform float breaker_profile_forward_sign = -1.0;
+uniform float breaker_profile_forward_sign = 1.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
