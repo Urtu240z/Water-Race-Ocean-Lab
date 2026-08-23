@@ -109,7 +109,8 @@ var _profile_forward_sign := -1.0 # 4C-S3: default FLIPPED (-1) = alineado con e
 var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
 var _query_batch: Callable = Callable() # 4C-S4: sample_water_batch_at_time del módulo.
-var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz} por slot.
+var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz, h0, h3, h6} por slot.
+var _last_track_time := 0.0 # 4C-S4: último render_time usado por el tracker (HUD).
 
 
 # --- Réplicas CPU de los perfiles del shader (breaker_lip.gdshader / inc).
@@ -291,8 +292,9 @@ func anchor_snapshot() -> Array:
 
 
 func tracking_snapshot() -> Array:
-	## 4C-S4: estado del tracker por slot (crest_s/stage), para el HUD. Función
-	## pura del render time actual: determinista y reproducible bajo pausa.
+	## 4C-S4: estado del tracker por slot (crest_s/stage + alturas de muestra),
+	## para el HUD. Función pura del render time actual: determinista y
+	## reproducible bajo pausa.
 	var result: Array = []
 	for index in _anchors.size():
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
@@ -300,8 +302,16 @@ func tracking_snapshot() -> Array:
 			"crest_s": float(entry.get("crest_s", 0.0)),
 			"stage": float(entry.get("stage", 0.0)),
 			"valid": float(entry.get("valid", 0.0)),
+			"h0": float(entry.get("h0", 0.0)),
+			"h3": float(entry.get("h3", 0.0)),
+			"h6": float(entry.get("h6", 0.0)),
 		})
 	return result
+
+
+func track_time() -> float:
+	## 4C-S4: último render_time evaluado por el tracker (para verificar que avanza).
+	return _last_track_time
 
 
 func summary() -> Dictionary:
@@ -343,6 +353,7 @@ func _update_tracking() -> void:
 		_clear_tracking()
 		return
 	var render_time: float = SimulationClock.get_render_time()
+	_last_track_time = render_time
 	var positions: Array[Vector3] = []
 	var base_index: Array[int] = []
 	for anchor in _anchors:
@@ -391,6 +402,10 @@ func _update_tracking() -> void:
 		var tracked_xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * crest_s
 		var stage: float = _smoothstep(STAGE_START_S_LAMBDA * wavelength, STAGE_END_S_LAMBDA * wavelength, crest_s)
 		_set_slot_tracking(index, tracked_xz, crest_s, stage, 1.0)
+		if index < _tracking.size():
+			_tracking[index]["h0"] = heights[0]
+			_tracking[index]["h3"] = heights[3]
+			_tracking[index]["h6"] = heights[6]
 
 
 func _set_slot_tracking(index: int, tracked_xz: Vector2, crest_s: float, stage: float, valid: float) -> void:

@@ -59,6 +59,12 @@ func _ready() -> void:
 	_update_status()
 
 
+func _process(_delta: float) -> void:
+	## 4C-S4: el HUD debe refrescar cada frame para observar el lifecycle
+	## automático del tracker (crest_s/stage/h0..h6) en tiempo real.
+	_update_status()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
@@ -190,13 +196,12 @@ func _breaker_text() -> String:
 	if summary.is_empty() or not summary.get("configured", false):
 		return "Breakers (K): %s | debug (N): %s | sin coastal válido -> 0 slots" % [enabled_text, _ocean.breaker_debug_name()]
 	var tracking: Array = _ocean.breaker_tracking_snapshot()
+	var track_t: float = _ocean.breaker_track_time()
 	var lines: PackedStringArray = []
 	for index in summary["anchors"].size():
-		var anchor: Dictionary = summary["anchors"][index]
-		var direction: Vector2 = anchor["direction"]
 		var track: Dictionary = tracking[index] if index < tracking.size() else {}
-		lines.append("slot %d p=(%+.1f,%+.1f) d=(%+.2f,%+.2f) lam=%.1fm crest_s=%+.1fm stage=%.2f" % [index, anchor["xz"].x, anchor["xz"].y, direction.x, direction.y, anchor["wavelength_m"], float(track.get("crest_s", 0.0)), float(track.get("stage", 0.0))])
-	var body := " | ".join(lines)
+		lines.append("slot %d crest_s=%+.1fm stage=%.2f (h0=%.2f h3=%.2f h6=%.2f)" % [index, float(track.get("crest_s", 0.0)), float(track.get("stage", 0.0)), float(track.get("h0", 0.0)), float(track.get("h3", 0.0)), float(track.get("h6", 0.0))])
+	var body := "track_t=%.3fs | " % track_t + " | ".join(lines)
 	var slot_text := "Breaker debug slot (H): %s/%d" % [_ocean.breaker_debug_slot_name(), summary["slots"]]
 	var stage_text := "CrossStage (Q/E): %.2f" % _ocean.breaker_debug_stage()
 	var dir_text := "ProfileDir (X): %s" % _ocean.breaker_profile_direction_name()

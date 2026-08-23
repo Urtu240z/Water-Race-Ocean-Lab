@@ -636,6 +636,13 @@ func breaker_tracking_snapshot() -> Array:
 	return _breaker_pool.tracking_snapshot()
 
 
+func breaker_track_time() -> float:
+	## 4C-S4: último render_time evaluado por el tracker (HUD).
+	if _breaker_pool == null:
+		return 0.0
+	return _breaker_pool.track_time()
+
+
 func coastal_propagation_data():
 	return _coastal_propagation
 
