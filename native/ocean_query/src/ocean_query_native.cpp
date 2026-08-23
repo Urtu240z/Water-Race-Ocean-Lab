@@ -35,6 +35,7 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_coastal_profile_us"), &OceanQueryNative::get_coastal_profile_us);
     ClassDB::bind_method(D_METHOD("get_coastal_pair_counts"), &OceanQueryNative::get_coastal_pair_counts);
     ClassDB::bind_method(D_METHOD("ensure_prepared", "simulation_time"), &OceanQueryNative::ensure_prepared);
+    ClassDB::bind_method(D_METHOD("set_crest_sharpen", "config"), &OceanQueryNative::set_crest_sharpen);
     ClassDB::bind_method(D_METHOD("sample_world", "wx", "wz", "simulation_time"), &OceanQueryNative::sample_world);
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_prepared", "positions"), &OceanQueryNative::sample_batch_prepared);
@@ -144,6 +145,19 @@ void OceanQueryNative::clear_coastal() { core_.clear_coastal(); }
 
 void OceanQueryNative::ensure_prepared(double simulation_time) {
     core_.ensure_prepared(simulation_time);
+}
+
+void OceanQueryNative::set_crest_sharpen(const Dictionary &config) {
+    core_.set_crest_sharpen(
+        config.get("strength", 1.0),
+        config.get("threshold", 0.15),
+        config.get("max_gain", 0.30),
+        config.get("long_weight", 1.0),
+        config.get("mid_weight", 0.5),
+        config.get("direction_x", 1.0),
+        config.get("direction_z", 0.0),
+        config.get("eps", 1.92),
+        config.get("local_hs", 0.5));
 }
 
 PackedFloat64Array OceanQueryNative::sample_to_packed_(const double *out) {

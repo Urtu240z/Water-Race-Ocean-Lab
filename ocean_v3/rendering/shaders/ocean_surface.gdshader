@@ -305,7 +305,7 @@ void vertex() {
 		float face_slope = abs(l_r - l_l) / (2.0 * eps);
 		float compression = smoothstep(0.03, 0.22, face_slope);
 		float sharpen = smoothstep(ocean_crest_sharpen_threshold, ocean_crest_sharpen_threshold + 0.25, crestness)
-			* compression * long_weight * ocean_crest_sharpen_strength;
+			* compression * band_mask.x * ocean_crest_sharpen_strength; // 5R.1D: band_mask (world-space), no camera distance.
 		float gain = ocean_crest_sharpen_max_gain;
 		// Elevación vertical acotada + compresión horizontal suave (narrow crest).
 		displacement.y += sharpen * gain * local_hs;

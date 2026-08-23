@@ -72,6 +72,14 @@ var _breaking_coastal_fraction := 0.0
 var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
 var _ocean_shape_debug := false # 5R.1: vista neutra de forma (silueta/crest/valle).
 var _ocean_crest_sharpen_debug := false # 5R1C: vista de zonas de crest sharpening.
+# 5R1D: autoridad única de los parámetros de crest sharpening (render + query).
+var _crest_sharpen := {
+	"strength": 1.0,
+	"threshold": 0.15,
+	"max_gain": 0.30,
+	"long_weight": 1.0,
+	"mid_weight": 0.5,
+}
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -151,6 +159,7 @@ func _ready() -> void:
 		_query_golden = QueryReferenceScript.new()
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
+	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -308,6 +317,45 @@ func toggle_ocean_crest_sharpen_debug() -> void:
 
 func ocean_crest_sharpen_debug_name() -> String:
 	return "ON" if _ocean_crest_sharpen_debug else "OFF"
+
+
+func _crest_sharpen_config() -> Dictionary:
+	## 5R1D: configuración compartida render/query (world-space, sin camera LOD).
+	var dir: Vector2 = coastal_incoming_direction_xz.normalized()
+	if dir.length_squared() < 0.5:
+		dir = Vector2.RIGHT
+	# eps coincide con el shader en open ocean: swell_lambda = TAU/k0 ≈ 16 m.
+	var k0 := 0.392699
+	var eps := maxf((TAU / k0) * 0.12, 1.5)
+	var hs: float = configs[0].target_hs_m if not configs.is_empty() else 0.5
+	return {
+		"strength": _crest_sharpen["strength"],
+		"threshold": _crest_sharpen["threshold"],
+		"max_gain": _crest_sharpen["max_gain"],
+		"long_weight": _crest_sharpen["long_weight"],
+		"mid_weight": _crest_sharpen["mid_weight"],
+		"direction_x": dir.x,
+		"direction_z": dir.y,
+		"eps": eps,
+		"local_hs": hs,
+	}
+
+
+func _apply_crest_sharpen_config() -> void:
+	## 5R1D: empuja la MISMA configuración a shader, REDUCED, NATIVE y GOLDEN.
+	var mat: ShaderMaterial = surface.get_surface_material()
+	mat.set_shader_parameter(&"ocean_crest_sharpen_strength", _crest_sharpen["strength"])
+	mat.set_shader_parameter(&"ocean_crest_sharpen_threshold", _crest_sharpen["threshold"])
+	mat.set_shader_parameter(&"ocean_crest_sharpen_max_gain", _crest_sharpen["max_gain"])
+	mat.set_shader_parameter(&"ocean_crest_sharpen_long_weight", _crest_sharpen["long_weight"])
+	mat.set_shader_parameter(&"ocean_crest_sharpen_mid_weight", _crest_sharpen["mid_weight"])
+	var cfg := _crest_sharpen_config()
+	if _query_reduced != null:
+		_query_reduced.set_crest_sharpen(cfg)
+	if _query_native != null and _query_native.has_method(&"set_crest_sharpen"):
+		_query_native.set_crest_sharpen(cfg)
+	if _query_golden != null:
+		_query_golden.set_crest_sharpen(cfg)
 
 
 func _validate_long_split(config: OpenOceanFFTConfig) -> Dictionary:

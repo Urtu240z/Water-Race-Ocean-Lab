@@ -96,6 +96,7 @@ var _cascades: Array[_CascadeData] = []
 var _sea_level := 0.0
 var _prepared_valid := false
 var _prepared_time := 0.0
+var _crest_sharpen: Dictionary = {} # 5R1D: config de crest sharpening (world-space).
 var _mode := MODE_REDUCED
 var _budgets: Array[int] = [DEFAULT_BUDGET, DEFAULT_BUDGET, DEFAULT_BUDGET]
 var _native_backend: RefCounted = null
@@ -182,6 +183,13 @@ func set_sea_level(sea_level_y: float) -> void:
 	_sea_level = sea_level_y
 	if _native_backend != null:
 		_native_backend.set_sea_level(_sea_level)
+
+
+func set_crest_sharpen(config: Dictionary) -> void:
+	## 5R1D: misma configuración que render (módulo como autoridad única).
+	_crest_sharpen = config
+	if _native_backend != null and _native_backend.has_method(&"set_crest_sharpen"):
+		_native_backend.set_crest_sharpen(config)
 
 
 func set_mode(mode: int) -> void:
@@ -302,6 +310,61 @@ func sample_water_batch_prepared(positions: Array[Vector3]) -> Array:
 	return result
 
 
+func _band_height(qx: float, qz: float, band_index: int) -> float:
+	## 5R1D: altura de UNA banda (LONG=0, MID=1) en q, con espectro prepared.
+	var cascade: _CascadeData = _cascades[band_index]
+	var total := 0.0
+	var kx_arr := cascade.kx
+	var ky_arr := cascade.ky
+	var par_arr := cascade.parity
+	var w_arr := cascade.weight
+	var ev_hr := cascade.ev_h_re
+	var ev_hi := cascade.ev_h_im
+	for idx in cascade.count:
+		var phi: float = kx_arr[idx] * qx + ky_arr[idx] * qz
+		var p_re: float = ev_hr[idx] * cos(phi) - ev_hi[idx] * sin(phi)
+		total += par_arr[idx] * w_arr[idx] * p_re
+	return total * cascade.inv_n2
+
+
+func _apply_crest_sharpen(qx: float, qz: float) -> void:
+	## 5R1D: misma matemática 5R.1C del shader (sobre FFT base, no recursiva).
+	if _crest_sharpen.is_empty():
+		return
+	var strength: float = float(_crest_sharpen.get("strength", 0.0))
+	if strength <= 0.0:
+		return
+	var threshold: float = float(_crest_sharpen.get("threshold", 0.15))
+	var max_gain: float = float(_crest_sharpen.get("max_gain", 0.30))
+	var long_w: float = float(_crest_sharpen.get("long_weight", 1.0))
+	var mid_w: float = float(_crest_sharpen.get("mid_weight", 0.5))
+	var dir := Vector2(float(_crest_sharpen.get("direction_x", 1.0)), float(_crest_sharpen.get("direction_z", 0.0)))
+	var eps: float = float(_crest_sharpen.get("eps", 1.92))
+	var local_hs: float = maxf(float(_crest_sharpen.get("local_hs", 0.5)), 0.05)
+
+	var l_c := _band_height(qx, qz, 0)
+	var l_l := _band_height(qx - dir.x * eps, qz - dir.y * eps, 0)
+	var l_r := _band_height(qx + dir.x * eps, qz + dir.y * eps, 0)
+	var m_c := _band_height(qx, qz, 1)
+	var m_l := _band_height(qx - dir.x * eps, qz - dir.y * eps, 1)
+	var m_r := _band_height(qx + dir.x * eps, qz + dir.y * eps, 1)
+
+	var curv_long := l_l - 2.0 * l_c + l_r
+	var curv_mid := m_l - 2.0 * m_c + m_r
+	var crest_long := clampf(-curv_long / local_hs, 0.0, 2.0) * long_w
+	var crest_mid := clampf(-curv_mid / maxf(local_hs * 0.4, 0.02), 0.0, 2.0) * mid_w
+	var crestness := crest_long + crest_mid
+	var face_slope := absf(l_r - l_l) / (2.0 * eps)
+	var compression := smoothstep(0.03, 0.22, face_slope)
+	var sharpen := smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
+
+	var delta_y := sharpen * max_gain * local_hs
+	var h_scale := 1.0 + sharpen * max_gain * 0.35
+	_acc_h += delta_y
+	_acc_dx *= h_scale
+	_acc_dz *= h_scale
+
+
 ## --- Inversión world_xz -> q -------------------------------------------------
 
 func _sample_world(target_xz: Vector2):
@@ -333,6 +396,7 @@ func _sample_world(target_xz: Vector2):
 	diagnostic_last_residual = residual
 	if not converged:
 		diagnostic_non_converged += 1
+	_apply_crest_sharpen(q.x, q.y)
 	return _build_sample(residual, iterations, converged)
 
 

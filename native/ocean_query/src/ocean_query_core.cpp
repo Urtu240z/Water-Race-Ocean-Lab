@@ -243,6 +243,68 @@ size_t OceanQueryCore::coastal_nonzero_pair_count() const {
     return cascades.empty() ? 0 : cascades[0].coastal_nonzero_indices.size();
 }
 
+
+void OceanQueryCore::set_crest_sharpen(double strength, double threshold, double max_gain,
+                                       double long_weight, double mid_weight,
+                                       double dir_x, double dir_z, double eps, double local_hs) {
+    crest_sharpen_enabled = strength > 0.0;
+    crest_sharpen_strength = strength;
+    crest_sharpen_threshold = threshold;
+    crest_sharpen_max_gain = max_gain;
+    crest_sharpen_long_weight = long_weight;
+    crest_sharpen_mid_weight = mid_weight;
+    crest_sharpen_dir_x = dir_x;
+    crest_sharpen_dir_z = dir_z;
+    crest_sharpen_eps = eps;
+    crest_sharpen_local_hs = local_hs;
+}
+
+
+double OceanQueryCore::band_height_(size_t band_index, double qx, double qz) const {
+    // 5R1D: altura de UNA banda (LONG=0, MID=1) en q, con espectro prepared.
+    const Cascade &c = cascades[band_index];
+    const size_t count = c.kx.size();
+    double total = 0.0;
+    for (size_t idx = 0; idx < count; ++idx) {
+        const double phi = c.kx[idx] * qx + c.ky[idx] * qz;
+        const double cp = std::cos(phi);
+        const double sp = std::sin(phi);
+        const double p_re = c.ev_h_re[idx] * cp - c.ev_h_im[idx] * sp;
+        const double sig = c.parity[idx] * c.weight[idx];
+        total += sig * p_re;
+    }
+    return total * c.inv_n2;
+}
+
+
+void OceanQueryCore::apply_crest_sharpen_(double qx, double qz, double &h, double &dx, double &dz) const {
+    // 5R1D: misma matemática 5R.1C del shader (sobre FFT base, no recursiva).
+    if (!crest_sharpen_enabled || cascades.size() < 2) return;
+    const double local_hs = std::max(crest_sharpen_local_hs, 0.05);
+    const double eps = crest_sharpen_eps;
+    const double dirx = crest_sharpen_dir_x, dirz = crest_sharpen_dir_z;
+    const double l_c = band_height_(0, qx, qz);
+    const double l_l = band_height_(0, qx - dirx * eps, qz - dirz * eps);
+    const double l_r = band_height_(0, qx + dirx * eps, qz + dirz * eps);
+    const double m_c = band_height_(1, qx, qz);
+    const double m_l = band_height_(1, qx - dirx * eps, qz - dirz * eps);
+    const double m_r = band_height_(1, qx + dirx * eps, qz + dirz * eps);
+    const double curv_long = l_l - 2.0 * l_c + l_r;
+    const double curv_mid = m_l - 2.0 * m_c + m_r;
+    const double crest_long = std::clamp(-curv_long / local_hs, 0.0, 2.0) * crest_sharpen_long_weight;
+    const double crest_mid = std::clamp(-curv_mid / std::max(local_hs * 0.4, 0.02), 0.0, 2.0) * crest_sharpen_mid_weight;
+    const double crestness = crest_long + crest_mid;
+    const double face_slope = std::abs(l_r - l_l) / (2.0 * eps);
+    const double compression = smoothstep01(0.03, 0.22, face_slope);
+    const double sharpen = smoothstep01(crest_sharpen_threshold, crest_sharpen_threshold + 0.25, crestness)
+        * compression * crest_sharpen_strength;
+    const double delta_y = sharpen * crest_sharpen_max_gain * local_hs;
+    const double h_scale = 1.0 + sharpen * crest_sharpen_max_gain * 0.35;
+    h += delta_y;
+    dx *= h_scale;
+    dz *= h_scale;
+}
+
 size_t OceanQueryCore::coastal_pair_count() const {
     return cascades.empty() ? 0 : cascades[0].kx.size();
 }
@@ -454,6 +516,7 @@ void OceanQueryCore::sample_prepared_(double wx, double wz, double *out) {
     if (!converged) {
         diag_non_converged += 1;
     }
+    apply_crest_sharpen_(qx, qz, h, dx, dz); // 5R1D: crest sharpening (base FFT + corrección).
 
     // Construcción del sample (mismo orden que GDScript _build_sample).
     double disp[3] = {dx, h, dz};
@@ -512,6 +575,19 @@ void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n,
             batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
         }
         solve_avx2_batch_(n, out, true);
+        if (crest_sharpen_enabled) {
+            // 5R1D: post-pase de crest sharpening sobre el resultado batch (q resuelto).
+            for (size_t p = 0; p < n; ++p) {
+                double h = out[p * S_STRIDE + S_DY];
+                double dx = out[p * S_STRIDE + S_DX];
+                double dz = out[p * S_STRIDE + S_DZ];
+                apply_crest_sharpen_(batch_.qx[p], batch_.qz[p], h, dx, dz);
+                out[p * S_STRIDE + S_DY] = h;
+                out[p * S_STRIDE + S_DX] = dx;
+                out[p * S_STRIDE + S_DZ] = dz;
+                out[p * S_STRIDE + S_HEIGHT] = sea_level + h;
+            }
+        }
         return;
     }
     sample_batch_scalar_prepared(positions_xz, n, out);

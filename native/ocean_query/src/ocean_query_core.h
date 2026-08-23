@@ -125,6 +125,17 @@ public:
     bool prepared_valid = false;
     double prepared_time = 0.0;
     int diag_non_converged = 0;
+    // 5R1D: crest sharpening (paridad render/query, world-space).
+    bool crest_sharpen_enabled = false;
+    double crest_sharpen_strength = 1.0;
+    double crest_sharpen_threshold = 0.15;
+    double crest_sharpen_max_gain = 0.30;
+    double crest_sharpen_long_weight = 1.0;
+    double crest_sharpen_mid_weight = 0.5;
+    double crest_sharpen_dir_x = 1.0;
+    double crest_sharpen_dir_z = 0.0;
+    double crest_sharpen_eps = 1.92;
+    double crest_sharpen_local_hs = 0.5;
     // Diagnóstico de la última operación TRUE_BATCH: una evaluación equivale
     // a evaluar todos los modos de las cascadas para un punto activo.
     size_t diag_last_spectral_point_evaluations = 0;
@@ -162,6 +173,11 @@ public:
     size_t coastal_pair_count() const;
 
     void ensure_prepared(double simulation_time);
+
+    // 5R1D: configura el crest sharpening (misma matemática que render).
+    void set_crest_sharpen(double strength, double threshold, double max_gain,
+                           double long_weight, double mid_weight,
+                           double dir_x, double dir_z, double eps, double local_hs);
 
     // Evalúa una posición world y escribe el sample en out (S_STRIDE doubles).
     // Si out == nullptr, sólo mide tiempo.
@@ -225,6 +241,8 @@ private:
                                    double &vh, double &vx, double &vz) const;
 
     void sample_prepared_(double wx, double wz, double *out);
+    double band_height_(size_t band_index, double qx, double qz) const;
+    void apply_crest_sharpen_(double qx, double qz, double &h, double &dx, double &dz) const;
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);
     void evaluate_avx2_batch_(const size_t *indices, size_t active_count, bool vector_sincos);

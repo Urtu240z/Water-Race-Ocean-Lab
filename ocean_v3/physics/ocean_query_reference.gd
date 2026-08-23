@@ -62,6 +62,7 @@ var _cascades: Array[_CascadeData] = []
 var _sea_level := 0.0
 var _prepared_valid := false
 var _prepared_time := 0.0
+var _crest_sharpen: Dictionary = {} # 5R1D: config de crest sharpening.
 
 
 func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByteArray]) -> void:
@@ -74,6 +75,11 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 
 func set_sea_level(sea_level_y: float) -> void:
 	_sea_level = sea_level_y
+
+
+func set_crest_sharpen(config: Dictionary) -> void:
+	## 5R1D: misma configuración que render.
+	_crest_sharpen = config
 
 
 func is_ready() -> bool:
@@ -130,6 +136,54 @@ func sample_prepared(world_position: Vector3):
 	return _build_sample(solved.acc, solved.residual, solved.iterations, solved.converged)
 
 
+func _band_height(qx: float, qz: float, band_index: int) -> float:
+	## 5R1D: altura de UNA banda (LONG=0, MID=1) en q, con espectro prepared.
+	var cascade: _CascadeData = _cascades[band_index]
+	var total := 0.0
+	for mode in cascade.modes:
+		var phi := mode.kx * qx + mode.ky * qz
+		var p_re := mode.ev_h_re * cos(phi) - mode.ev_h_im * sin(phi)
+		total += mode.parity * p_re
+	return total * cascade.inv_n2
+
+
+func _apply_crest_sharpen(qx: float, qz: float, acc: Dictionary) -> void:
+	## 5R1D: misma matemática 5R.1C del shader (sobre FFT base, no recursiva).
+	if _crest_sharpen.is_empty():
+		return
+	var strength: float = float(_crest_sharpen.get("strength", 0.0))
+	if strength <= 0.0:
+		return
+	var threshold: float = float(_crest_sharpen.get("threshold", 0.15))
+	var max_gain: float = float(_crest_sharpen.get("max_gain", 0.30))
+	var long_w: float = float(_crest_sharpen.get("long_weight", 1.0))
+	var mid_w: float = float(_crest_sharpen.get("mid_weight", 0.5))
+	var dir := Vector2(float(_crest_sharpen.get("direction_x", 1.0)), float(_crest_sharpen.get("direction_z", 0.0)))
+	var eps: float = float(_crest_sharpen.get("eps", 1.92))
+	var local_hs: float = maxf(float(_crest_sharpen.get("local_hs", 0.5)), 0.05)
+
+	var l_c := _band_height(qx, qz, 0)
+	var l_l := _band_height(qx - dir.x * eps, qz - dir.y * eps, 0)
+	var l_r := _band_height(qx + dir.x * eps, qz + dir.y * eps, 0)
+	var m_c := _band_height(qx, qz, 1)
+	var m_l := _band_height(qx - dir.x * eps, qz - dir.y * eps, 1)
+	var m_r := _band_height(qx + dir.x * eps, qz + dir.y * eps, 1)
+
+	var curv_long := l_l - 2.0 * l_c + l_r
+	var curv_mid := m_l - 2.0 * m_c + m_r
+	var crest_long := clampf(-curv_long / local_hs, 0.0, 2.0) * long_w
+	var crest_mid := clampf(-curv_mid / maxf(local_hs * 0.4, 0.02), 0.0, 2.0) * mid_w
+	var crestness := crest_long + crest_mid
+	var face_slope := absf(l_r - l_l) / (2.0 * eps)
+	var compression := smoothstep(0.03, 0.22, face_slope)
+	var sharpen := smoothstep(threshold, threshold + 0.25, crestness) * compression * strength
+
+	acc["h"] += sharpen * max_gain * local_hs
+	var h_scale := 1.0 + sharpen * max_gain * 0.35
+	acc["dx"] *= h_scale
+	acc["dz"] *= h_scale
+
+
 ## --- Inversión world_xz -> q (Newton-Raphson 2D) ----------------------------
 
 func _solve_world_to_q(target_xz: Vector2) -> Dictionary:
@@ -157,6 +211,7 @@ func _solve_world_to_q(target_xz: Vector2) -> Dictionary:
 		residual = sqrt(fx * fx + fz * fz)
 		iterations += 1
 		converged = residual <= POSITION_TOLERANCE_M
+	_apply_crest_sharpen(q.x, q.y, acc)
 	return {
 		"acc": acc,
 		"residual": residual,
