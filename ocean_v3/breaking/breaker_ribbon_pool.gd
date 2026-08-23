@@ -96,7 +96,7 @@ var _anchors: Array[Dictionary] = []
 var _debug_mode: int = DebugMode.LIP
 var _debug_slot := 0 # -1 => ALL; sólo filtra visibilidad en REGION/FORCE_LIP.
 var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
-var _profile_forward_sign := 1.0 # 4C-S3: default FORWARD (+1) = labio hacia +direction_xz (avance real del FFT).
+var _profile_forward_sign := -1.0 # 4C-S3: default FLIPPED (-1) = alineado con el avance real del FFT.
 var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
 
@@ -237,9 +237,9 @@ func debug_profile_direction_name() -> String:
 
 
 func debug_profile_aligned() -> bool:
-	## FORWARD es el estado alineado con el avance real del FFT (verificado:
-	## las crestas LONG_COASTAL viajan hacia +direction_xz, es decir +wind).
-	return _profile_forward_sign > 0.0
+	## FLIPPED es el estado alineado con el avance real del FFT (convención
+	## actual: las crestas LONG viajan en -direction_xz).
+	return _profile_forward_sign < 0.0
 
 
 func toggle_takeover_mask() -> void:
@@ -429,7 +429,7 @@ func _sync_takeover_mask() -> void:
 		_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", false)
 		return
 	var anchor: Dictionary = _anchors[_debug_slot]
-	var scale: float = 0.5
+	var scale: float = 0.65
 	if _material != null:
 		var s: Variant = _material.get_shader_parameter(&"breaker_profile_length_scale")
 		if s != null and float(s) > 0.0:
@@ -440,7 +440,6 @@ func _sync_takeover_mask() -> void:
 	_surface_material.set_shader_parameter(&"breaker_takeover_length_m", float(anchor["wavelength_m"]) * ribbon_length_lambda * scale)
 	_surface_material.set_shader_parameter(&"breaker_takeover_width_m", ribbon_width_m)
 	_surface_material.set_shader_parameter(&"breaker_takeover_stage", _debug_stage)
-	# 4C-S3.1: la ventana longitudinal se mapea en el marco del perfil (FORWARD = alineado).
 	_surface_material.set_shader_parameter(&"breaker_takeover_forward_sign", _profile_forward_sign)
 
 
