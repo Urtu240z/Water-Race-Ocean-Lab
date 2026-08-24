@@ -339,10 +339,15 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
 	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
 
-	// Filtering por footprint: fade cuando el detalle de la cascade es subpixel.
+	// 5R.2B: footprint del píxel en metros de mundo (referencia del filtro y del
+	// fade terminal). Tamaño REAL de texel de MID/SHORT vía textureSize (sin
+	// supuesto rígido /256). Fade terminal: la cascada desaparece cuando ya es
+	// claramente subpixel (equivalente al fade previo, ahora con texel real).
 	float footprint = max(fwidth(world_xz.x), fwidth(world_xz.y));
-	short_weight *= 1.0 - smoothstep(domain_short_m / 256.0, domain_short_m / 128.0, footprint);
-	mid_weight *= 1.0 - smoothstep(domain_mid_m / 256.0, domain_mid_m / 128.0, footprint);
+	float mid_texel_m = domain_mid_m / float(textureSize(normal_mid, 0).x);
+	float short_texel_m = domain_short_m / float(textureSize(normal_short, 0).x);
+	short_weight *= 1.0 - smoothstep(short_texel_m, short_texel_m * 2.0, footprint);
+	mid_weight *= 1.0 - smoothstep(mid_texel_m, mid_texel_m * 2.0, footprint);
 
 	vec2 coast_uv = coastal_uv(world_xz);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
@@ -379,8 +384,39 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
 	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
 	slope += slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * remainder_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight * mid_short_weight;
+
+	// 5R.2B: MID con filtro espacial progresivo 4-tap en SLOPE space (no promediar
+	// normales). La muestra central siempre se hace; los 4 taps extra sólo cuando
+	// el filtro está activo y la cascada todavía tiene peso efectivo visible.
+	vec2 mid_center_slope = slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb));
+	float mid_filter_amount = smoothstep(mid_texel_m * 0.5, mid_texel_m * 1.5, footprint);
+	if (mid_filter_amount > 0.001 && mid_weight * mid_short_weight > 0.001) {
+		float mid_half_extent = clamp(footprint * 0.5, mid_texel_m * 0.5, mid_texel_m);
+		vec2 mid_filtered = (
+			slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz + vec2(mid_half_extent, mid_half_extent), domain_mid_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz + vec2(mid_half_extent, -mid_half_extent), domain_mid_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz + vec2(-mid_half_extent, mid_half_extent), domain_mid_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz + vec2(-mid_half_extent, -mid_half_extent), domain_mid_m), 0.0).rgb))
+		) * 0.25;
+		mid_center_slope = mix(mid_center_slope, mid_filtered, mid_filter_amount);
+	}
+	slope += mid_center_slope * mid_weight * mid_short_weight;
+
+	// 5R.2B: SHORT idéntico a MID con su propio texel size (microdetalle en
+	// media distancia se funde suavemente en vez de tiritar como líneas).
+	vec2 short_center_slope = slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb));
+	float short_filter_amount = smoothstep(short_texel_m * 0.5, short_texel_m * 1.5, footprint);
+	if (short_filter_amount > 0.001 && short_weight * mid_short_weight > 0.001) {
+		float short_half_extent = clamp(footprint * 0.5, short_texel_m * 0.5, short_texel_m);
+		vec2 short_filtered = (
+			slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz + vec2(short_half_extent, short_half_extent), domain_short_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz + vec2(short_half_extent, -short_half_extent), domain_short_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz + vec2(-short_half_extent, short_half_extent), domain_short_m), 0.0).rgb))
+			+ slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz + vec2(-short_half_extent, -short_half_extent), domain_short_m), 0.0).rgb))
+		) * 0.25;
+		short_center_slope = mix(short_center_slope, short_filtered, short_filter_amount);
+	}
+	slope += short_center_slope * short_weight * mid_short_weight;
 
 	// 5R.2: la cresta afilada 5R.1C es más empinada que la normal FFT base.
 	slope *= 1.0 + crest_sharpen_mask * ocean_crest_sharpen_max_gain * 0.5;
