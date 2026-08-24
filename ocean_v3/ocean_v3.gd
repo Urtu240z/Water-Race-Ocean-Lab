@@ -343,9 +343,40 @@ extends Node3D
 		foam_edge_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL") var foam_debug_mode: int = 0:
+@export_category("Whitecaps Foam Shaping")
+@export var foam_spectral_erosion_enabled: bool = true:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 13)
+		foam_spectral_erosion_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_mid_erosion_strength: float = 0.55:
+	set(value):
+		foam_mid_erosion_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_short_erosion_strength: float = 0.30:
+	set(value):
+		foam_short_erosion_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_fresh_erosion_ratio: float = 0.25:
+	set(value):
+		foam_fresh_erosion_ratio = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_detail_contribution: float = 0.35:
+	set(value):
+		foam_detail_contribution = value
+		_request_visual_sync()
+
+@export_range(0.01, 1.0, 0.01) var foam_erosion_softness: float = 0.18:
+	set(value):
+		foam_erosion_softness = value
+		_request_visual_sync()
+
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH") var foam_debug_mode: int = 0:
+	set(value):
+		foam_debug_mode = clampi(value, 0, 17)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -466,6 +497,12 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
+	material.set_shader_parameter(&"foam_spectral_erosion_enabled", foam_spectral_erosion_enabled)
+	material.set_shader_parameter(&"foam_mid_erosion_strength", foam_mid_erosion_strength)
+	material.set_shader_parameter(&"foam_short_erosion_strength", foam_short_erosion_strength)
+	material.set_shader_parameter(&"foam_fresh_erosion_ratio", foam_fresh_erosion_ratio)
+	material.set_shader_parameter(&"foam_detail_contribution", foam_detail_contribution)
+	material.set_shader_parameter(&"foam_erosion_softness", foam_erosion_softness)
 	# OpenOceanFFTModule is a non-tool node, so Godot exposes it as a placeholder
 	# while this @tool scene is edited. Its runtime foam transport API must only be
 	# synchronized in an actual game run.

@@ -175,10 +175,19 @@ uniform float foam_breakup_world_size : hint_range(1.0, 200.0, 0.5) = 14.0;
 uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.0;
 uniform float foam_edge_softness : hint_range(0.01, 0.49, 0.01) = 0.16;
 uniform bool foam_breakup_texture_ready = false;
+// Spectral erosion is presentation-only: MID/SHORT shape LONG without changing
+// the persistent RG16F simulation or its temporal transport.
+uniform bool foam_spectral_erosion_enabled = true;
+uniform float foam_mid_erosion_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
+uniform float foam_short_erosion_strength : hint_range(0.0, 1.0, 0.01) = 0.30;
+uniform float foam_fresh_erosion_ratio : hint_range(0.0, 1.0, 0.01) = 0.25;
+uniform float foam_detail_contribution : hint_range(0.0, 1.0, 0.01) = 0.35;
+uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 0 OFF, 1 OLD_RAW_FOAM_256, 2 SHAPED, 3 COMPRESSION, 4 SPECTRAL_JACOBIAN,
 // 5 SOURCE, 6 FILTERED_OLD_RAW_256, 7 HIRES_RAW_FOAM, 8 FOAM_SOURCE_HIRES,
 // 9 HIRES_FRESH, 10 HIRES_RESIDUAL, 11 HIRES_TOTAL, 12 FOAM_VELOCITY,
-// 13 FOAM_NORMAL.
+// 13 FOAM_NORMAL, 14 FOAM_SPECTRAL_DETAIL, 15 FOAM_EROSION_MASK,
+// 16 FOAM_ERODED_RESIDUAL, 17 FOAM_ERODED_FRESH.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -725,10 +734,23 @@ vec2 sample_foam_field_filtered(sampler2D tex, vec2 uv, vec2 base_xz, float doma
 }
 
 
+// A detail ridge is active only around an actual MID/SHORT structure. Empty
+// background therefore maps to neutral instead of eroding LONG everywhere.
+float foam_spectral_ridge(float structure, float active_start, float active_end,
+	float ridge_start, float ridge_end) {
+	float active = smoothstep(active_start, active_end, structure);
+	float rising = smoothstep(ridge_start, ridge_start + 0.16, structure);
+	float falling = 1.0 - smoothstep(ridge_end, ridge_end + 0.20, structure);
+	return active * rising * falling;
+}
+
+
 // Production composition of the high-resolution persistent field. It mirrors
 // the established coastal/open/deep coordinate policy, so coastal warp and
-// LONG split behavior remain unchanged while the state resolution rises.
-vec2 pixel_ocean_hires_foam(vec2 world_xz) {
+// LONG split behavior remain unchanged while MID/SHORT provide spectral
+// erosion and a small non-saturating detail contribution.
+// Return values: residual, fresh, signed spectral detail, erosion mask.
+vec4 pixel_ocean_hires_foam(vec2 world_xz) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -755,10 +777,51 @@ vec2 pixel_ocean_hires_foam(vec2 world_xz) {
 	vec2 remainder = sample_foam_field_filtered(foam_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), world_xz, domain_long_remainder_m);
 	vec2 mid = sample_foam_field_filtered(foam_mid, spectrum_uv(world_xz, domain_mid_m), world_xz, domain_mid_m);
 	vec2 short = sample_foam_field_filtered(foam_short, spectrum_uv(world_xz, domain_short_m), world_xz, domain_short_m);
-	vec2 combined = coastal * coastal_weight + remainder * remainder_weight;
-	combined += mid * mid_weight * mid_short_weight;
-	combined += short * short_weight * mid_short_weight;
-	return clamp(combined, 0.0, 1.0);
+
+	vec2 long_base = clamp(coastal * coastal_weight + remainder * remainder_weight, 0.0, 1.0);
+	float mid_structure = max(mid.x, mid.y) * mid_weight * mid_short_weight;
+	float short_structure = max(short.x, short.y) * short_weight * mid_short_weight;
+	float mid_ridge = foam_spectral_ridge(mid_structure, 0.035, 0.16, 0.09, 0.52);
+	float short_ridge = foam_spectral_ridge(short_structure, 0.012, 0.075, 0.028, 0.26);
+	float mid_centered = smoothstep(0.09, 0.48, mid_structure) * 2.0 - 1.0;
+	float short_centered = smoothstep(0.028, 0.24, short_structure) * 2.0 - 1.0;
+	float mid_signed = mid_ridge * mid_centered;
+	float short_signed = short_ridge * short_centered;
+	float erosion_enabled = foam_spectral_erosion_enabled ? 1.0 : 0.0;
+	float detail_signed = clamp(
+		(mid_signed * foam_mid_erosion_strength + short_signed * foam_short_erosion_strength)
+		* erosion_enabled,
+		-1.0,
+		1.0
+	);
+	float erosion_amount = max(detail_signed, 0.0);
+	float erosion_mask = 1.0 - erosion_amount;
+
+	// Smooth threshold erosion creates holes and tongues while leaving the LONG
+	// value untouched where no MID/SHORT ridge is active.
+	float residual_threshold = mix(0.16, 0.58, erosion_amount);
+	float residual_eroded_target = smoothstep(
+		residual_threshold,
+		min(residual_threshold + max(foam_erosion_softness, 0.01), 1.0),
+		long_base.x
+	);
+	float residual_eroded = mix(long_base.x, residual_eroded_target, erosion_amount);
+	float fresh_erosion_amount = erosion_amount * clamp(foam_fresh_erosion_ratio, 0.0, 1.0);
+	float fresh_threshold = mix(0.08, 0.34, fresh_erosion_amount);
+	float fresh_eroded_target = smoothstep(
+		fresh_threshold,
+		min(fresh_threshold + max(foam_erosion_softness, 0.01), 1.0),
+		long_base.y
+	);
+	float fresh_eroded = mix(long_base.y, fresh_eroded_target, fresh_erosion_amount);
+
+	// MID and SHORT remain physical contributors, but their addition is
+	// complementary rather than linear so they cannot turn the whole field white.
+	vec2 mid_detail = mid * (mid_weight * mid_short_weight) * foam_detail_contribution * 0.55;
+	vec2 short_detail = short * (short_weight * mid_short_weight) * foam_detail_contribution * 0.30;
+	vec2 detail_foam = 1.0 - (1.0 - mid_detail) * (1.0 - short_detail);
+	vec2 combined = 1.0 - (1.0 - vec2(residual_eroded, fresh_eroded)) * (1.0 - detail_foam);
+	return vec4(clamp(combined, 0.0, 1.0), clamp(0.5 + detail_signed * 0.5, 0.0, 1.0), clamp(erosion_mask, 0.0, 1.0));
 }
 
 
@@ -996,7 +1059,10 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 void fragment() {
 	vec3 color = base_color;
-	vec2 raw_foam_channels = pixel_ocean_hires_foam(ocean_base_xz);
+	vec4 hires_foam_composition = pixel_ocean_hires_foam(ocean_base_xz);
+	vec2 raw_foam_channels = hires_foam_composition.xy;
+	float eroded_residual_debug = clamp(hires_foam_composition.x, 0.0, 1.0);
+	float eroded_fresh_debug = clamp(hires_foam_composition.y, 0.0, 1.0);
 	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
@@ -1019,7 +1085,13 @@ void fragment() {
 			distance(ocean_world_xz, camera_world_xz)
 		);
 		float breakup = foam_breakup_mask(ocean_base_xz);
-		foam_mask = shaped_mask * breakup * clamp(foam_intensity, 0.0, 4.0) * distance_fade;
+		float intensity = clamp(foam_intensity, 0.0, 4.0);
+		// Preserve the public response through intensity 1.0, then apply a soft
+		// knee above it so high intensity cannot flatten all weak regions to white.
+		float intensity_gain = intensity <= 1.0
+			? intensity
+			: 1.0 + (intensity - 1.0) / (1.0 + (intensity - 1.0) * 1.5);
+		foam_mask = shaped_mask * breakup * intensity_gain * distance_fade;
 		foam_mask = clamp(foam_mask, 0.0, 1.0);
 		float raw_channel_sum = max(raw_residual + raw_fresh, 0.00001);
 		foam_fresh_mask = foam_mask * raw_fresh / raw_channel_sum;
@@ -1133,6 +1205,14 @@ void fragment() {
 	} else if (foam_debug_mode == 13) {
 		vec3 foam_normal_debug = normalize(vec3(-foam_shape_gradient.x * foam_normal_strength, 1.0, -foam_shape_gradient.y * foam_normal_strength));
 		color = foam_normal_debug * 0.5 + 0.5;
+	} else if (foam_debug_mode == 14) {
+		color = vec3(hires_foam_composition.z);
+	} else if (foam_debug_mode == 15) {
+		color = vec3(hires_foam_composition.w);
+	} else if (foam_debug_mode == 16) {
+		color = vec3(eroded_residual_debug);
+	} else if (foam_debug_mode == 17) {
+		color = vec3(eroded_fresh_debug);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
