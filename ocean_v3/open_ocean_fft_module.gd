@@ -93,6 +93,10 @@ var _foam_residual_decay_multiplier := 1.0
 var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
+var _surface_foam_enabled := true
+var _surface_foam_whitecap := 0.05
+var _surface_foam_amount := 8.0
+var _surface_foam_advection_strength := 0.0
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -173,7 +177,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"))
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _cascades[3].surface_foam)
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -195,6 +199,7 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 	var displacement := Texture2DRD.new()
 	var normal := Texture2DRD.new()
 	var foam := Texture2DRD.new()
+	var surface_foam := Texture2DRD.new()
 	var previous_displacement := Texture2DRD.new()
 	var solver := SolverScript.new()
 	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, foam_resolution))
@@ -204,6 +209,7 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 		"displacement": displacement,
 		"normal": normal,
 		"foam": foam,
+		"surface_foam": surface_foam,
 		"previous_displacement": previous_displacement,
 	}
 
@@ -231,6 +237,7 @@ func _exit_tree() -> void:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
 		cascade.foam.texture_rd_rid = RID()
+		cascade.surface_foam.texture_rd_rid = RID()
 		cascade.previous_displacement.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
@@ -920,6 +927,7 @@ func gpu_memory_bytes() -> int:
 		total += cascade["config"].approximate_gpu_bytes()
 		var solver_state: Dictionary = cascade["solver"].diagnostic_state()
 		total += int(solver_state.get("foam_gpu_bytes", 0))
+		total += int(solver_state.get("surface_foam_gpu_bytes", 0))
 		total += int(solver_state.get("previous_displacement_gpu_bytes", 0))
 	return total
 
@@ -950,6 +958,8 @@ func _publish_ready_textures() -> void:
 			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
 			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
 		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
+		if cascade.config.id == &"SHORT":
+			cascade.surface_foam.texture_rd_rid = cascade.solver.surface_foam_rid
 		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	_textures_published = true
 
@@ -965,6 +975,22 @@ func set_foam_transport_settings(residual_decay_multiplier: float, deposit_stren
 			_foam_deposit_strength,
 			_foam_advection_enabled,
 			_foam_advection_strength
+		))
+
+
+func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float) -> void:
+	_surface_foam_enabled = enabled
+	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
+	_surface_foam_amount = clampf(amount, 0.0, 10.0)
+	_surface_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
+	for cascade in _cascades:
+		if cascade.config.id != &"SHORT":
+			continue
+		RenderingServer.call_on_render_thread(cascade.solver.set_surface_foam_settings.bind(
+			_surface_foam_enabled,
+			_surface_foam_whitecap,
+			_surface_foam_amount,
+			_surface_foam_advection_strength
 		))
 
 

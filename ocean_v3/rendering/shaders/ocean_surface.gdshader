@@ -15,6 +15,7 @@ uniform sampler2D foam_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_mid : repeat_enable, filter_linear;
@@ -175,9 +176,24 @@ uniform float foam_breakup_world_size : hint_range(1.0, 200.0, 0.5) = 14.0;
 uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.0;
 uniform float foam_edge_softness : hint_range(0.01, 0.49, 0.01) = 0.16;
 uniform bool foam_breakup_texture_ready = false;
+// Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
+// GPU; these controls only shape its material presentation.
+uniform bool surface_foam_enabled = true;
+uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.05;
+uniform float surface_foam_strength : hint_range(0.0, 4.0, 0.01) = 1.0;
+uniform float surface_foam_threshold_visual : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float surface_foam_contrast_visual : hint_range(0.1, 4.0, 0.01) = 1.0;
+uniform vec4 surface_foam_color : source_color = vec4(0.78, 0.84, 0.82, 1.0);
+uniform float surface_foam_normal_strength : hint_range(0.0, 10.0, 0.01) = 0.55;
+uniform float foam_fresh_roughness : hint_range(0.0, 1.0, 0.01) = 0.95;
+uniform float foam_residual_roughness : hint_range(0.0, 1.0, 0.01) = 0.88;
+uniform float surface_foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.82;
+uniform float foam_fresh_specular : hint_range(0.0, 1.0, 0.01) = 0.12;
+uniform float foam_residual_specular : hint_range(0.0, 1.0, 0.01) = 0.18;
+uniform float surface_foam_specular : hint_range(0.0, 1.0, 0.01) = 0.20;
 // Spectral erosion is presentation-only: MID/SHORT shape LONG without changing
 // the persistent RG16F simulation or its temporal transport.
-uniform bool foam_spectral_erosion_enabled = true;
+uniform bool foam_spectral_erosion_enabled = false;
 uniform float foam_mid_erosion_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
 uniform float foam_short_erosion_strength : hint_range(0.0, 1.0, 0.01) = 0.30;
 uniform float foam_fresh_erosion_ratio : hint_range(0.0, 1.0, 0.01) = 0.25;
@@ -187,7 +203,9 @@ uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 5 SOURCE, 6 FILTERED_OLD_RAW_256, 7 HIRES_RAW_FOAM, 8 FOAM_SOURCE_HIRES,
 // 9 HIRES_FRESH, 10 HIRES_RESIDUAL, 11 HIRES_TOTAL, 12 FOAM_VELOCITY,
 // 13 FOAM_NORMAL, 14 FOAM_SPECTRAL_DETAIL, 15 FOAM_EROSION_MASK,
-// 16 FOAM_ERODED_RESIDUAL, 17 FOAM_ERODED_FRESH.
+// 16 FOAM_ERODED_RESIDUAL, 17 FOAM_ERODED_FRESH, 18 SURFACE_FOAM_SOURCE,
+// 19 SURFACE_FOAM_RAW, 20 SURFACE_FOAM_SHAPED, 21 CREST_FOAM_ONLY,
+// 22 SURFACE_PLUS_CREST.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -750,7 +768,7 @@ float foam_spectral_ridge(float structure, float active_start, float active_end,
 // LONG split behavior remain unchanged while MID/SHORT provide spectral
 // erosion and a small non-saturating detail contribution.
 // Return values: residual, fresh, signed spectral detail, erosion mask.
-vec4 pixel_ocean_hires_foam(vec2 world_xz) {
+vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -822,6 +840,41 @@ vec4 pixel_ocean_hires_foam(vec2 world_xz) {
 	vec2 detail_foam = 1.0 - (1.0 - mid_detail) * (1.0 - short_detail);
 	vec2 combined = 1.0 - (1.0 - vec2(residual_eroded, fresh_eroded)) * (1.0 - detail_foam);
 	return vec4(clamp(combined, 0.0, 1.0), clamp(0.5 + detail_signed * 0.5, 0.0, 1.0), clamp(erosion_mask, 0.0, 1.0));
+}
+
+
+float surface_foam_weight(vec2 world_xz) {
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	return short_weight * mid_short_weight;
+}
+
+
+// Surface foam is a separate R16F accumulator fed exclusively by SHORT J.
+// It shares only sampling/filtering policy with crest foam, not state or rates.
+float pixel_ocean_surface_foam_raw(vec2 world_xz) {
+	if (!surface_foam_enabled) {
+		return 0.0;
+	}
+	float surface_raw = sample_foam_field_filtered(
+		surface_foam_short,
+		spectrum_uv(world_xz, domain_short_m),
+		world_xz,
+		domain_short_m
+	).x;
+	return clamp(surface_raw * surface_foam_weight(world_xz), 0.0, 1.0);
+}
+
+
+// Diagnostic only: matches the dedicated compute path's interpolated SHORT-J
+// threshold before accumulation. It deliberately does not involve LONG/MID.
+float pixel_ocean_surface_foam_source(vec2 world_xz) {
+	float short_j = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
+	if (isnan(short_j) || isinf(short_j)) {
+		short_j = 1.0;
+	}
+	return clamp(max(0.0, surface_foam_whitecap - short_j) * surface_foam_weight(world_xz), 0.0, 1.0);
 }
 
 
@@ -1059,16 +1112,21 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 void fragment() {
 	vec3 color = base_color;
-	vec4 hires_foam_composition = pixel_ocean_hires_foam(ocean_base_xz);
+	vec4 hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
 	vec2 raw_foam_channels = hires_foam_composition.xy;
 	float eroded_residual_debug = clamp(hires_foam_composition.x, 0.0, 1.0);
 	float eroded_fresh_debug = clamp(hires_foam_composition.y, 0.0, 1.0);
 	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
+	float surface_foam_raw = pixel_ocean_surface_foam_raw(ocean_base_xz);
+	float surface_foam_source = pixel_ocean_surface_foam_source(ocean_base_xz);
+	float surface_foam_shaped = 0.0;
 	float foam_mask = 0.0;
 	float foam_fresh_mask = 0.0;
 	float foam_residual_mask = 0.0;
+	float crest_foam_mask = 0.0;
+	float surface_foam_mask = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 foam_motion = vec2(0.0);
 	vec2 compression_debug = vec2(0.0);
@@ -1091,11 +1149,16 @@ void fragment() {
 		float intensity_gain = intensity <= 1.0
 			? intensity
 			: 1.0 + (intensity - 1.0) / (1.0 + (intensity - 1.0) * 1.5);
-		foam_mask = shaped_mask * breakup * intensity_gain * distance_fade;
-		foam_mask = clamp(foam_mask, 0.0, 1.0);
+		crest_foam_mask = clamp(shaped_mask * breakup * intensity_gain * distance_fade, 0.0, 1.0);
 		float raw_channel_sum = max(raw_residual + raw_fresh, 0.00001);
-		foam_fresh_mask = foam_mask * raw_fresh / raw_channel_sum;
-		foam_residual_mask = foam_mask * raw_residual / raw_channel_sum;
+		foam_fresh_mask = crest_foam_mask * raw_fresh / raw_channel_sum;
+		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
+
+		float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
+		float surface_thresholded = smoothstep(surface_threshold, 1.0, surface_foam_raw);
+		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
+		surface_foam_mask = clamp(surface_foam_shaped * surface_foam_strength, 0.0, 1.0);
+		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
 	}
 	if (foam_debug_mode == 3) {
@@ -1213,6 +1276,16 @@ void fragment() {
 		color = vec3(eroded_residual_debug);
 	} else if (foam_debug_mode == 17) {
 		color = vec3(eroded_fresh_debug);
+	} else if (foam_debug_mode == 18) {
+		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode == 19) {
+		color = vec3(surface_foam_raw);
+	} else if (foam_debug_mode == 20) {
+		color = vec3(surface_foam_shaped);
+	} else if (foam_debug_mode == 21) {
+		color = vec3(crest_foam_mask);
+	} else if (foam_debug_mode == 22) {
+		color = vec3(foam_mask);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -1244,7 +1317,8 @@ void fragment() {
 		vec3 visual_normal = normalize((VIEW_MATRIX * vec4(shading_normal_world, 0.0)).xyz);
 		float camera_distance = distance(ocean_world_xz, camera_world_xz);
 		float foam_normal_mask = foam_fresh_mask * foam_fresh_normal_weight
-			+ foam_residual_mask * foam_residual_normal_weight;
+			+ foam_residual_mask * foam_residual_normal_weight
+			+ surface_foam_mask * surface_foam_normal_strength;
 		if (foam_normal_mask > 0.0001 && foam_normal_strength > 0.0) {
 			vec3 foam_shape_normal_world = normalize(vec3(
 				-foam_shape_gradient.x * foam_normal_strength,
@@ -1397,7 +1471,10 @@ void fragment() {
 				1.0
 			);
 
+			// Foam is composited after water optics, so Fresnel/reflection cannot be
+			// laid back on top of it when looking into a solar highlight.
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
+			final_color = mix(final_color, surface_foam_color.rgb, surface_foam_mask);
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
 			ALBEDO = final_color;
@@ -1407,15 +1484,19 @@ void fragment() {
 				ocean_roughness_far,
 				max(distance_opacity, fresnel)
 			);
-			ROUGHNESS = mix(ROUGHNESS, foam_roughness * 0.84, foam_residual_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_roughness, foam_fresh_mask);
-			SPECULAR = water_specular;
+			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
+			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
+			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
+			SPECULAR = mix(water_specular, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
+			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58) * foam_alpha_boost, 0.0, 1.0);
+			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
-			ALBEDO = mix(base_color, residual_foam_color, foam_residual_mask);
+			ALBEDO = mix(base_color, surface_foam_color.rgb, surface_foam_mask);
+			ALBEDO = mix(ALBEDO, residual_foam_color, foam_residual_mask);
 			ALBEDO = mix(ALBEDO, foam_fresh_color.rgb, foam_fresh_mask);
 			EMISSION = vec3(0.0);
 			float distance_factor = smoothstep(
@@ -1428,11 +1509,14 @@ void fragment() {
 				ocean_roughness_far,
 				distance_factor
 			);
-			ROUGHNESS = mix(ROUGHNESS, foam_roughness * 0.84, foam_residual_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_roughness, foam_fresh_mask);
-			SPECULAR = water_specular;
+			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
+			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
+			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
+			SPECULAR = mix(water_specular, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
+			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58) * foam_alpha_boost, 0.0, 1.0);
+			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
 }
