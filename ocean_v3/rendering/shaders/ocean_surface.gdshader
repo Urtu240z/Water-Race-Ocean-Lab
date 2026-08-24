@@ -62,7 +62,7 @@ uniform float coastal_warp_detj_safe = 0.5;
 uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
-uniform vec3 base_color : source_color = vec3(0.03, 0.16, 0.20);
+uniform vec3 base_color : source_color = vec3(0.018, 0.075, 0.095);
 // 5R.1: debug de forma (silueta/crest/valle/choppiness). Neutro, sin foam/emission.
 uniform bool ocean_shape_debug = false;
 // 5R.1C: crest sharpening por compresión/convergencia (geometría, sin lip).
@@ -74,8 +74,16 @@ uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform bool ocean_crest_sharpen_debug = false;
 // 5R.2: normal shading per-fragment + material físico de agua.
 uniform bool ocean_normal_fragment = true;   // A/B: FRAGMENT (true) vs VERTEX (false).
+// 5R.2 (superseded por 5R.3A): knob constante de roughness. El material de
+// producción usa ahora ocean_roughness_near/far (adaptativa); se conservan
+// declarados para no romper la API del material 5R.2.
 uniform float ocean_water_roughness = 0.08;  // dielectric agua (0.05–0.18).
-uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick).
+uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick, no usado).
+// 5R.3A: roughness adaptativa por distancia/footprint. Cerca ~near, lejos o
+// subpixel ~far. Sin texturas nuevas; sólo operaciones escalares en fragment.
+uniform float ocean_roughness_near = 0.10;
+uniform float ocean_roughness_far = 0.22;
+uniform vec2 ocean_roughness_distance_m = vec2(80.0, 600.0);
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -467,10 +475,21 @@ void fragment() {
 			shading_normal = normalize(derived_normal);
 		}
 		NORMAL = normalize((VIEW_MATRIX * vec4(shading_normal, 0.0)).xyz);
-		// Translucencia de cresta MUY sutil (sin foam, sin emission).
-		ALBEDO = mix(base_color, base_color * 1.25, crest_sharpen_mask * 0.35);
+		// 5R.3A: ALBEDO plano. Sin aclarado artificial de cresta: las crestas
+		// aparecen por geometría/normal/luz/reflexión, no por color más claro.
+		// crest_sharpen_mask se conserva para debug y pixel_ocean_normal().
+		ALBEDO = base_color;
 		EMISSION = vec3(0.0);
-		ROUGHNESS = ocean_water_roughness;
+		// 5R.3A: roughness adaptativa por distancia y footprint de píxel.
+		// Ensancha/estabiliza reflejos lejanos y subpixel sin tocar normales.
+		float camera_distance = distance(ocean_world_xz, camera_world_xz);
+		float distance_factor = smoothstep(
+			ocean_roughness_distance_m.x, ocean_roughness_distance_m.y, camera_distance);
+		float footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
+		float short_texel = domain_short_m / 256.0;
+		float footprint_factor = smoothstep(short_texel, short_texel * 3.0, footprint);
+		float roughness_factor = max(distance_factor, footprint_factor);
+		ROUGHNESS = mix(ocean_roughness_near, ocean_roughness_far, roughness_factor);
 		SPECULAR = 0.5;
 		METALLIC = 0.0;
 	}
