@@ -226,7 +226,13 @@ func _breaker_text() -> String:
 	var dir_text := "ProfileDir (X): %s" % _ocean.breaker_profile_direction_name()
 	var aligned_text := "Aligned: %s" % ("YES" if _ocean.breaker_profile_aligned() else "NO")
 	var mask_text := "TakeoverMask (Y): %s" % _ocean.breaker_takeover_mask_name()
-	return "Breakers (K): %s | debug (N): %s | %s | %s | %s | %s | %s | slots %d/%d\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, stage_text, dir_text, aligned_text, mask_text, summary["slots"], summary["max_slots"], body]
+	var detector_text := "Detector: %d Hz tick=%d queried=%d slots/%d pts" % [
+		int(summary.get("detector_hz", 0)),
+		int(summary.get("detector_tick", 0)),
+		int(summary.get("queried_slots_last_tick", 0)),
+		int(summary.get("queried_points_last_tick", 0)),
+	]
+	return "Breakers (K): %s | debug (N): %s | %s | %s | %s | %s | %s | slots %d/%d\n%s\n%s" % [enabled_text, _ocean.breaker_debug_name(), slot_text, stage_text, dir_text, aligned_text, mask_text, summary["slots"], summary["max_slots"], body, detector_text]
 
 
 func _set_camera_mode(mode: int) -> void:

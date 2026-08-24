@@ -131,6 +131,18 @@ var _query_batch: Callable = Callable() # 4C-S4: sample_water_batch_at_time del 
 var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz, h0, h3, h6} por slot.
 var _last_track_time := 0.0 # 4C-S4: último render_time usado por el tracker (HUD).
 
+## 5R.1F: scheduler del detector. El breaker ACTIVE es autónomo (nunca consulta
+## OceanQuery); COOLDOWN tampoco consulta; sólo los slots DETECT se consultan en
+## ticks de 20 Hz con round robin de DETECTOR_SLOTS_PER_TICK por tick.
+const DETECTOR_INTERVAL := 0.05
+const DETECTOR_SLOTS_PER_TICK := 2
+
+var _next_detector_time := 0.0
+var _detector_cursor := 0
+var _detector_tick := 0
+var _detector_queried_slots_last_tick := 0
+var _detector_queried_points_last_tick := 0
+
 
 # --- Réplicas CPU de los perfiles del shader (breaker_lip.gdshader / inc).
 # Mismas fórmulas, para validación y HUD; el shader es la fuente de verdad. ---
@@ -196,12 +208,14 @@ func set_energy_model(long_hs_m: float, coastal_fraction: float) -> void:
 		_anchors = _place_anchors()
 	else:
 		_anchors.clear()
+	_reset_scheduler()
 	_rebuild_instances()
 
 
 func disable() -> void:
 	## Coastal OFF / sin batimetría / PREBREAK inválido: ningún breaker visible.
 	_anchors.clear()
+	_reset_scheduler()
 	_rebuild_instances()
 	visible = false
 
@@ -350,6 +364,11 @@ func summary() -> Dictionary:
 		"max_slots": max_breakers,
 		"debug": breaker_debug_name(),
 		"anchors": anchor_snapshot(),
+		# 5R.1F: métricas del scheduler (sin queries adicionales).
+		"detector_hz": int(round(1.0 / DETECTOR_INTERVAL)),
+		"detector_tick": _detector_tick,
+		"queried_slots_last_tick": _detector_queried_slots_last_tick,
+		"queried_points_last_tick": _detector_queried_points_last_tick,
 	}
 
 
@@ -372,9 +391,14 @@ func _sync_uniforms() -> void:
 
 
 func _update_tracking() -> void:
-	## 4C-S4.2: detector de eventos de ola (batch única) + breaker autónomo por
-	## slot. El detector sólo decide el spawn; una vez spawneado, el breaker
-	## avanza por phase_speed y muere por su propio lifecycle (sin OceanQuery).
+	## 5R.1F: scheduling por estados (sin rediseñar el detector):
+	##  - ACTIVE: se actualiza CADA frame con _update_active_breaker() (autónomo,
+	##    sin OceanQuery).
+	##  - COOLDOWN: si render_time < next_spawn_time NO se consulta; sólo se
+	##    mantiene/publica el countdown.
+	##  - DETECT: sólo se consulta en ticks de DETECTOR_INTERVAL (20 Hz), con
+	##    round robin de DETECTOR_SLOTS_PER_TICK slots por tick y UNA llamada
+	##    batch por tick. Sin catch-up de ticks perdidos.
 	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
 		return
 	if not _query_batch.is_valid():
@@ -382,9 +406,77 @@ func _update_tracking() -> void:
 		return
 	var render_time: float = SimulationClock.get_render_time()
 	_last_track_time = render_time
+	_update_active_slots(render_time)
+	_update_cooldown_slots(render_time)
+	if render_time < _next_detector_time:
+		return
+	_run_detector_tick(render_time)
+	_next_detector_time = render_time + DETECTOR_INTERVAL
+
+
+func _update_active_slots(render_time: float) -> void:
+	## 5R.1F: todos los slots ACTIVE avanzan su lifecycle autónomo cada frame.
+	for index in _anchors.size():
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		if bool(entry.get("active", false)):
+			_update_active_breaker(index, entry, render_time)
+
+
+func _update_cooldown_slots(render_time: float) -> void:
+	## 5R.1F: slots en COOLDOWN (active=false y render_time < next_spawn_time) no
+	## consultan OceanQuery; sólo se refresca/publica el countdown para el HUD.
+	for index in _anchors.size():
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		if bool(entry.get("active", false)):
+			continue
+		var next_spawn: float = float(entry.get("next_spawn_time", 0.0))
+		if render_time >= next_spawn:
+			continue # DETECT: lo gestiona el detector tick.
+		var state := _base_state(entry)
+		state["active"] = false
+		state["valid"] = 0.0
+		state["stage"] = 0.0
+		state["alpha"] = 0.0
+		state["remaining"] = maxf(0.0, next_spawn - render_time)
+		_publish_slot(index, state)
+
+
+func _reset_scheduler() -> void:
+	## 5R.1F: reinicio determinista del scheduler en rebuild/reset.
+	_next_detector_time = 0.0
+	_detector_cursor = 0
+	_detector_tick = 0
+	_detector_queried_slots_last_tick = 0
+	_detector_queried_points_last_tick = 0
+
+
+func _run_detector_tick(render_time: float) -> void:
+	## 5R.1F: un tick de detector. Selecciona como máximo DETECTOR_SLOTS_PER_TICK
+	## slots DETECT recorriendo circularmente desde _detector_cursor (ignora
+	## ACTIVE y COOLDOWN) y consulta TODOS en UNA única batch.
+	_detector_tick += 1
+	var anchor_count := _anchors.size()
+	var selected: Array[int] = []
+	var inspected := 0
+	var cursor := _detector_cursor
+	while selected.size() < DETECTOR_SLOTS_PER_TICK and inspected < anchor_count:
+		var index: int = cursor % anchor_count
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		var active: bool = bool(entry.get("active", false))
+		var next_spawn: float = float(entry.get("next_spawn_time", 0.0))
+		if not active and render_time >= next_spawn:
+			selected.append(index)
+		inspected += 1
+		cursor += 1
+	_detector_cursor = cursor % anchor_count
+	if selected.is_empty():
+		_detector_queried_slots_last_tick = 0
+		_detector_queried_points_last_tick = 0
+		return
 	var positions: Array[Vector3] = []
 	var base_index: Array[int] = []
-	for anchor in _anchors:
+	for index in selected:
+		var anchor: Dictionary = _anchors[index]
 		var travel_dir := -Vector2(anchor["direction"])
 		var wavelength := float(anchor["wavelength_m"])
 		base_index.append(positions.size())
@@ -395,9 +487,12 @@ func _update_tracking() -> void:
 	if samples.size() != positions.size():
 		_clear_tracking()
 		return
-	for index in _anchors.size():
+	_detector_queried_slots_last_tick = selected.size()
+	_detector_queried_points_last_tick = positions.size()
+	for sel in selected.size():
+		var index: int = selected[sel]
 		var anchor: Dictionary = _anchors[index]
-		var base: int = base_index[index]
+		var base: int = base_index[sel]
 		var heights := PackedFloat32Array()
 		var all_valid := true
 		for k in CREST_SAMPLE_OFFSETS.size():
