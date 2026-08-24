@@ -248,6 +248,21 @@ extends Node3D
 		foam_distance_fade_end = value
 		_request_visual_sync()
 
+@export var foam_filter_bicubic_enabled: bool = true:
+	set(value):
+		foam_filter_bicubic_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1000.0, 1.0) var foam_filter_fade_start: float = 72.0:
+	set(value):
+		foam_filter_fade_start = value
+		_request_visual_sync()
+
+@export_range(1.0, 2000.0, 1.0) var foam_filter_fade_end: float = 224.0:
+	set(value):
+		foam_filter_fade_end = value
+		_request_visual_sync()
+
 @export_range(0.0, 1.0, 0.01) var foam_breakup_strength: float = 0.45:
 	set(value):
 		foam_breakup_strength = value
@@ -258,7 +273,7 @@ extends Node3D
 		foam_breakup_world_size = value
 		_request_visual_sync()
 
-@export_range(-2.0, 2.0, 0.01) var foam_breakup_speed: float = 0.04:
+@export_range(-2.0, 2.0, 0.01) var foam_breakup_speed: float = 0.0:
 	set(value):
 		foam_breakup_speed = value
 		_request_visual_sync()
@@ -268,9 +283,9 @@ extends Node3D
 		foam_edge_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE") var foam_debug_mode: int = 0:
+@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_RAW_FOAM") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 5)
+		foam_debug_mode = clampi(value, 0, 6)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -375,6 +390,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_alpha_boost", foam_alpha_boost)
 	material.set_shader_parameter(&"foam_distance_fade_start", foam_distance_fade_start)
 	material.set_shader_parameter(&"foam_distance_fade_end", foam_distance_fade_end)
+	material.set_shader_parameter(&"foam_filter_bicubic_enabled", foam_filter_bicubic_enabled)
+	material.set_shader_parameter(&"foam_filter_fade_start", foam_filter_fade_start)
+	material.set_shader_parameter(&"foam_filter_fade_end", foam_filter_fade_end)
 	material.set_shader_parameter(&"foam_breakup_strength", foam_breakup_strength)
 	material.set_shader_parameter(&"foam_breakup_world_size", foam_breakup_world_size)
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)

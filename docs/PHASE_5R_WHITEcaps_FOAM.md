@@ -82,3 +82,30 @@ positive source.
 Breakup samples the existing `surface_warp_texture` in base coordinates and
 multiplies the shaped mask: it cuts small holes and irregular edges but cannot
 create foam where RAW is zero. `foam_edge_softness` controls its transition.
+
+## Spatial reconstruction
+
+The persistent alpha is generated at each cascade FFT resolution; it is not
+resampled into another physical texture. To avoid the 512 m LONG domain's
+roughly 2 m cells appearing as painted blocks over the dense near clipmap,
+`ocean_surface.gdshader` reconstructs only normal-map alpha with a positive
+cubic B-spline. It uses four hardware-bilinear taps (not sixteen direct texel
+fetches), derives its true resolution from `textureSize()`, and relies on the
+existing repeat sampler for periodic FFT wrapping.
+
+LONG_COASTAL (both open and warped coordinates), LONG_REMAINDER and MID use the
+adaptive bicubic path close to camera. It transitions continuously to the
+existing bilinear sample using both `fwidth(ocean_base_xz)` against each
+cascade's real texel size and `foam_filter_fade_start/end`. SHORT remains
+bilinear because it has the lowest physical foam weight and finer texels.
+
+`RAW_FOAM` remains the original bilinear reconstruction. `FILTERED_RAW_FOAM`
+shows the adaptive reconstruction for A/B. Breakup defaults to zero speed and
+is anchored to `ocean_base_xz`; its remap retains a non-zero floor, preventing
+the noise from becoming a binary moving threshold. Final visual shaping is:
+
+```text
+thresholded = smoothstep(foam_threshold, 1, raw)
+shaped = pow(thresholded, 1 / max(foam_contrast, 0.1))
+final = shaped * breakup * foam_intensity * distance_fade
+```

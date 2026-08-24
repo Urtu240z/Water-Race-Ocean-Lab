@@ -146,12 +146,19 @@ uniform float foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.88;
 uniform float foam_alpha_boost : hint_range(0.0, 1.0, 0.01) = 0.18;
 uniform float foam_distance_fade_start : hint_range(0.0, 4000.0, 1.0) = 180.0;
 uniform float foam_distance_fade_end : hint_range(1.0, 5000.0, 1.0) = 900.0;
+// Reconstruct the coarse persistent alpha smoothly near the camera. This is a
+// presentation filter only: normal RGB and the stored physical foam stay intact.
+uniform bool foam_filter_bicubic_enabled = true;
+uniform float foam_filter_fade_start : hint_range(0.0, 1000.0, 1.0) = 72.0;
+uniform float foam_filter_fade_end : hint_range(1.0, 2000.0, 1.0) = 224.0;
 uniform float foam_breakup_strength : hint_range(0.0, 1.0, 0.01) = 0.45;
 uniform float foam_breakup_world_size : hint_range(1.0, 200.0, 0.5) = 14.0;
-uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.04;
+// Zero keeps the breakup attached to ocean_base_xz instead of crawling.
+uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.0;
 uniform float foam_edge_softness : hint_range(0.01, 0.49, 0.01) = 0.16;
 uniform bool foam_breakup_texture_ready = false;
-// 0 OFF, 1 RAW, 2 SHAPED, 3 central-difference A/B, 4 spectral J, 5 source.
+// 0 OFF, 1 RAW bilinear, 2 SHAPED, 3 central-difference A/B, 4 spectral J,
+// 5 source, 6 filtered RAW (adaptive bicubic A/B).
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -512,10 +519,90 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 }
 
 
+// Positive cubic B-spline weights. Unlike Catmull-Rom they cannot overshoot the
+// [0, 1] persistent alpha field, avoiding ringing around whitecap edges.
+vec4 foam_bspline_weights(float t) {
+	float t2 = t * t;
+	float t3 = t2 * t;
+	return vec4(
+		(1.0 - 3.0 * t + 3.0 * t2 - t3) / 6.0,
+		(4.0 - 6.0 * t2 + 3.0 * t3) / 6.0,
+		(1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3) / 6.0,
+		t3 / 6.0
+	);
+}
+
+
+// Four hardware-bilinear taps reconstruct a 4x4 cubic B-spline footprint.
+// UVs are deliberately allowed outside [0, 1]; the sampler repeat mode keeps
+// the FFT domain periodic without special edge branches.
+float sample_foam_bicubic(sampler2D tex, vec2 uv) {
+	vec2 size = vec2(textureSize(tex, 0));
+	vec2 texel_position = uv * size - 0.5;
+	vec2 cell = floor(texel_position);
+	vec2 fraction = fract(texel_position);
+	vec4 weight_x = foam_bspline_weights(fraction.x);
+	vec4 weight_y = foam_bspline_weights(fraction.y);
+	vec2 pair_x = vec2(weight_x.x + weight_x.y, weight_x.z + weight_x.w);
+	vec2 pair_y = vec2(weight_y.x + weight_y.y, weight_y.z + weight_y.w);
+	vec2 sample_x = vec2(
+		cell.x - 1.0 + weight_x.y / max(pair_x.x, 0.00001),
+		cell.x + 1.0 + weight_x.w / max(pair_x.y, 0.00001)
+	);
+	vec2 sample_y = vec2(
+		cell.y - 1.0 + weight_y.y / max(pair_y.x, 0.00001),
+		cell.y + 1.0 + weight_y.w / max(pair_y.y, 0.00001)
+	);
+	float sample_00 = textureLod(tex, (vec2(sample_x.x, sample_y.x) + 0.5) / size, 0.0).a;
+	float sample_10 = textureLod(tex, (vec2(sample_x.y, sample_y.x) + 0.5) / size, 0.0).a;
+	float sample_01 = textureLod(tex, (vec2(sample_x.x, sample_y.y) + 0.5) / size, 0.0).a;
+	float sample_11 = textureLod(tex, (vec2(sample_x.y, sample_y.y) + 0.5) / size, 0.0).a;
+	return clamp(
+		sample_00 * pair_x.x * pair_y.x
+		+ sample_10 * pair_x.y * pair_y.x
+		+ sample_01 * pair_x.x * pair_y.y
+		+ sample_11 * pair_x.y * pair_y.y,
+		0.0,
+		1.0
+	);
+}
+
+
+float foam_filter_amount(sampler2D tex, vec2 base_xz, float domain_size_m) {
+	if (!foam_filter_bicubic_enabled) {
+		return 1.0;
+	}
+	float distance_amount = smoothstep(
+		foam_filter_fade_start,
+		max(foam_filter_fade_end, foam_filter_fade_start + 0.001),
+		distance(base_xz, camera_world_xz)
+	);
+	float texel_m = domain_size_m / float(textureSize(tex, 0).x);
+	float footprint_m = max(fwidth(base_xz.x), fwidth(base_xz.y));
+	float footprint_amount = smoothstep(texel_m * 0.55, texel_m * 1.25, footprint_m);
+	return max(distance_amount, footprint_amount);
+}
+
+
+float sample_foam_filtered(sampler2D tex, vec2 uv, vec2 base_xz, float domain_size_m) {
+	float filter_amount = foam_filter_amount(tex, base_xz, domain_size_m);
+	if (filter_amount <= 0.001) {
+		return sample_foam_bicubic(tex, uv);
+	}
+	float bilinear = textureLod(tex, uv, 0.0).a;
+	if (filter_amount >= 0.999) {
+		return bilinear;
+	}
+	float bicubic = sample_foam_bicubic(tex, uv);
+	return mix(bicubic, bilinear, filter_amount);
+}
+
+
 // 5R.4: compose the persistent alpha channel with the same LONG split/MID/
 // SHORT spatial weights as the FFT normal path. Surface Detail is deliberately
 // absent: it is decorative normal detail, not a whitecap source.
-float pixel_ocean_foam(vec2 world_xz) {
+// filtered=false is retained exclusively for the RAW_FOAM reconstruction A/B.
+float pixel_ocean_foam(vec2 world_xz, bool filtered) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -537,11 +624,25 @@ float pixel_ocean_foam(vec2 world_xz) {
 	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
 	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
 
-	float coastal_foam_open = textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).a;
-	float coastal_foam_warped = textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).a;
+	vec2 coastal_uv_open = spectrum_uv(world_xz, domain_long_coastal_m);
+	vec2 coastal_uv_warped = spectrum_uv(deep_xz, domain_long_coastal_m);
+	float coastal_foam_open = filtered
+		? sample_foam_filtered(normal_long_coastal, coastal_uv_open, world_xz, domain_long_coastal_m)
+		: textureLod(normal_long_coastal, coastal_uv_open, 0.0).a;
+	float coastal_foam_warped = filtered
+		? sample_foam_filtered(normal_long_coastal, coastal_uv_warped, world_xz, domain_long_coastal_m)
+		: textureLod(normal_long_coastal, coastal_uv_warped, 0.0).a;
 	float coastal_foam = mix(coastal_foam_open, coastal_foam_warped, warp_confidence) * coastal_gain;
-	float remainder_foam = textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).a;
-	float mid_foam = textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).a;
+	vec2 remainder_uv = spectrum_uv(world_xz, domain_long_remainder_m);
+	vec2 mid_uv = spectrum_uv(world_xz, domain_mid_m);
+	float remainder_foam = filtered
+		? sample_foam_filtered(normal_long_remainder, remainder_uv, world_xz, domain_long_remainder_m)
+		: textureLod(normal_long_remainder, remainder_uv, 0.0).a;
+	float mid_foam = filtered
+		? sample_foam_filtered(normal_mid, mid_uv, world_xz, domain_mid_m)
+		: textureLod(normal_mid, mid_uv, 0.0).a;
+	// SHORT has a much smaller physical foam weight and naturally finer texels;
+	// retain the existing bilinear path there to keep the near-field cost bounded.
 	float short_foam = textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
 
 	// The cascade weight is already applied when each GPU alpha is grown. Do
@@ -664,7 +765,9 @@ float foam_breakup_mask(vec2 base_xz) {
 	vec2 flow = vec2(0.43, -0.91) * coastal_time_s * foam_breakup_speed / world_size;
 	float breakup_noise = texture(surface_warp_texture, base_xz / world_size + flow).r;
 	float softness = clamp(foam_edge_softness, 0.01, 0.49);
-	float breakup = smoothstep(0.5 - softness, 0.5 + softness, breakup_noise);
+	// Keep a non-zero floor. This is a continuous modulation, not a binary cutout,
+	// so small RAW changes cannot turn an entire foam cell on/off.
+	float breakup = mix(0.25, 1.0, smoothstep(0.5 - softness, 0.5 + softness, breakup_noise));
 	return mix(1.0, breakup, foam_breakup_strength);
 }
 
@@ -731,18 +834,16 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 
 void fragment() {
 	vec3 color = base_color;
-	float raw_foam = pixel_ocean_foam(ocean_base_xz);
+	float raw_foam = pixel_ocean_foam(ocean_base_xz, true);
 	float foam_mask = 0.0;
 	vec2 compression_debug = vec2(0.0);
 	vec2 spectral_debug = vec2(1.0, 0.0);
 	if (foam_enabled) {
 		float visual_threshold = clamp(foam_threshold, 0.0, 0.999);
-		float thresholded_foam = max(raw_foam - visual_threshold, 0.0)
-			/ max(1.0 - visual_threshold, 0.001);
-		float shaped_foam = clamp(thresholded_foam * max(foam_contrast, 0.1), 0.0, 1.0);
-		// Single monotonic shaping step. At threshold 0 this is simply
-		// smoothstep(0, 1, raw_foam * foam_contrast).
-		float shaped_mask = smoothstep(0.0, 1.0, shaped_foam);
+		float thresholded_foam = smoothstep(visual_threshold, 1.0, raw_foam);
+		// Smooth monotonic response: contrast changes curvature, while intensity
+		// remains a post-shape multiplier and never shifts the effective threshold.
+		float shaped_mask = pow(thresholded_foam, 1.0 / max(foam_contrast, 0.1));
 		float distance_fade = 1.0 - smoothstep(
 			foam_distance_fade_start,
 			max(foam_distance_fade_end, foam_distance_fade_start + 0.001),
@@ -820,7 +921,7 @@ void fragment() {
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
 	if (foam_debug_mode == 1) {
-		color = vec3(raw_foam);
+		color = vec3(pixel_ocean_foam(ocean_base_xz, false));
 	} else if (foam_debug_mode == 2) {
 		color = vec3(foam_mask);
 	} else if (foam_debug_mode == 3) {
@@ -833,6 +934,8 @@ void fragment() {
 	} else if (foam_debug_mode == 5) {
 		// Current source only: black when J >= whitecap.
 		color = vec3(spectral_debug.y);
+	} else if (foam_debug_mode == 6) {
+		color = vec3(raw_foam);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
