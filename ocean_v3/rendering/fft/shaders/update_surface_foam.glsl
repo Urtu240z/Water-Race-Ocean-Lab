@@ -44,11 +44,12 @@ void main() {
 	}
 
 	float source = max(0.0, params.foam.x - jacobian) * clamp(params.foam.w, 0.0, 1.0);
-	float target = clamp(source, 0.0, 1.0);
-	float growth_alpha = 1.0 - exp(-max(params.foam.y, 0.0) * delta_s);
 	float decayed = previous * exp(-max(params.foam.z, 0.0) * delta_s);
-	// The max preserves a slowly decaying spectral accumulator while high growth
-	// rapidly reaches new selective SHORT-J targets without frame-rate dependence.
-	float next = max(decayed, mix(previous, target, growth_alpha));
+	// Match OceanWaves' temporal dynamics: a persistent, even small, SHORT-J
+	// source deposits foam every frame while existing foam decays continuously.
+	// Both terms use rates per second and the real delta, so the integration is
+	// independent of frame rate rather than converging to source's amplitude.
+	float deposited = source * max(params.foam.y, 0.0) * delta_s;
+	float next = clamp(decayed + deposited, 0.0, 1.0);
 	imageStore(surface_foam_next, coord, vec4(clamp(next, 0.0, 1.0), 0.0, 0.0, 1.0));
 }
