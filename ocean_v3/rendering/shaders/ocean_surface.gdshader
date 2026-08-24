@@ -405,7 +405,7 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	// 5R.2B: SHORT idéntico a MID con su propio texel size (microdetalle en
 	// media distancia se funde suavemente en vez de tiritar como líneas).
 	vec2 short_center_slope = slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb));
-	float short_filter_amount = smoothstep(short_texel_m * 0.5, short_texel_m * 1.5, footprint);
+	float short_filter_amount = smoothstep(short_texel_m * 0.25, short_texel_m * 1.0, footprint);
 	if (short_filter_amount > 0.001 && short_weight * mid_short_weight > 0.001) {
 		float short_half_extent = clamp(footprint * 0.5, short_texel_m * 0.5, short_texel_m);
 		vec2 short_filtered = (
