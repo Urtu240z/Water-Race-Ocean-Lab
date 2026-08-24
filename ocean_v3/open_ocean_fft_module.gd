@@ -14,6 +14,7 @@ const CoastalBakerScript := preload("res://ocean_v3/coastal/coastal_propagation_
 const CoastalEikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 const WarpBakerScript := preload("res://ocean_v3/coastal/coastal_warp_baker.gd")
 const BreakerPoolScript := preload("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
+const DEFAULT_FOAM_RESOLUTION := 1024
 
 enum BandDebug {
 	ALL,
@@ -48,6 +49,13 @@ enum BandDebug {
 # Phase 4B: pool de geometría local de breaker. ON por defecto; la visibilidad
 # real depende del campo PREBREAK (Coastal OFF / sin batimetría => sin breakers).
 @export var breaker_enabled := true
+# Technical foam-field resolution, deliberately independent from FFT resolution.
+# Changing it recreates only the R16F foam ping-pong images; H0 and the FFT stay intact.
+@export_enum("256", "512", "1024") var foam_resolution: int = DEFAULT_FOAM_RESOLUTION:
+	set(value):
+		foam_resolution = _validated_foam_resolution(value)
+		if is_inside_tree() and not _cascades.is_empty():
+			_rebuild_foam_resolution()
 
 @onready var surface: Node3D = $OceanClipmapSurface
 
@@ -161,7 +169,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"))
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -182,13 +190,15 @@ func _ready() -> void:
 func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resource_prefix: String) -> Dictionary:
 	var displacement := Texture2DRD.new()
 	var normal := Texture2DRD.new()
+	var foam := Texture2DRD.new()
 	var solver := SolverScript.new()
-	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix))
+	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, foam_resolution))
 	return {
 		"config": config,
 		"solver": solver,
 		"displacement": displacement,
 		"normal": normal,
+		"foam": foam,
 	}
 
 
@@ -214,6 +224,7 @@ func _exit_tree() -> void:
 	for cascade in _cascades:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
+		cascade.foam.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
 
@@ -897,6 +908,8 @@ func gpu_memory_bytes() -> int:
 	var total := 0
 	for cascade in _cascades:
 		total += cascade["config"].approximate_gpu_bytes()
+		var solver_state: Dictionary = cascade["solver"].diagnostic_state()
+		total += int(solver_state.get("foam_gpu_bytes", 0))
 	return total
 
 
@@ -919,14 +932,29 @@ func _textures_for(key: StringName) -> Array[Texture2DRD]:
 
 
 func _publish_ready_textures() -> void:
-	if _textures_published:
-		return
 	for cascade in _cascades:
 		if not cascade.solver.ready:
 			return
-		cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
-		cascade.normal.texture_rd_rid = cascade.solver.normal_rid
+		if not _textures_published:
+			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
+			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
+		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
 	_textures_published = true
+
+
+func _rebuild_foam_resolution() -> void:
+	# GPU-only resource rebuild: no H0 upload, spectrum rebuild or CPU readback.
+	_textures_published = false
+	for cascade in _cascades:
+		RenderingServer.call_on_render_thread(cascade.solver.set_foam_resolution.bind(foam_resolution))
+
+
+func _validated_foam_resolution(value: int) -> int:
+	if value <= 256:
+		return 256
+	if value <= 512:
+		return 512
+	return 1024
 
 
 func _band_index(cascade_id: StringName) -> int:

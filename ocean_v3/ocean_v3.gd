@@ -283,9 +283,9 @@ extends Node3D
 		foam_edge_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_RAW_FOAM") var foam_debug_mode: int = 0:
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 6)
+		foam_debug_mode = clampi(value, 0, 8)
 		foam_mask_debug = false
 		_request_visual_sync()
 

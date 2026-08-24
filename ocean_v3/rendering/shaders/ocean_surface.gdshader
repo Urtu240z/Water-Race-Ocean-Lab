@@ -9,6 +9,12 @@ uniform sampler2D normal_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D normal_mid : repeat_enable, filter_linear;
 uniform sampler2D normal_short : repeat_enable, filter_linear;
+// Dedicated persistent R16F foam fields. Production foam is sourced here;
+// normal_map.a remains only for the OLD_RAW_FOAM_256 diagnostic.
+uniform sampler2D foam_long_coastal : repeat_enable, filter_linear;
+uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
+uniform sampler2D foam_mid : repeat_enable, filter_linear;
+uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
@@ -134,9 +140,9 @@ uniform float reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 
-// Persistent FFT whitecaps. The mask comes only from normal_map.a, which is
-// accumulated from horizontal displacement compression in assemble_maps.
-// These controls affect presentation only; they do not alter water optics.
+// Persistent high-resolution FFT whitecaps. The R16F fields are updated from
+// spectral Jacobian compression after each FFT assemble; controls below are
+// presentation-only and do not alter water optics.
 uniform bool foam_enabled = true;
 uniform vec4 foam_color : source_color = vec4(0.82, 0.91, 0.90, 1.0);
 uniform float foam_intensity : hint_range(0.0, 4.0, 0.01) = 1.0;
@@ -157,8 +163,8 @@ uniform float foam_breakup_world_size : hint_range(1.0, 200.0, 0.5) = 14.0;
 uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.0;
 uniform float foam_edge_softness : hint_range(0.01, 0.49, 0.01) = 0.16;
 uniform bool foam_breakup_texture_ready = false;
-// 0 OFF, 1 RAW bilinear, 2 SHAPED, 3 central-difference A/B, 4 spectral J,
-// 5 source, 6 filtered RAW (adaptive bicubic A/B).
+// 0 OFF, 1 OLD_RAW_FOAM_256, 2 SHAPED, 3 COMPRESSION, 4 SPECTRAL_JACOBIAN,
+// 5 SOURCE, 6 FILTERED_OLD_RAW_256, 7 HIRES_RAW_FOAM, 8 FOAM_SOURCE_HIRES.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -598,11 +604,12 @@ float sample_foam_filtered(sampler2D tex, vec2 uv, vec2 base_xz, float domain_si
 }
 
 
-// 5R.4: compose the persistent alpha channel with the same LONG split/MID/
+// Legacy 256² alpha composition, retained for diagnostic A/B only. Production
+// uses pixel_ocean_hires_foam() below.
 // SHORT spatial weights as the FFT normal path. Surface Detail is deliberately
 // absent: it is decorative normal detail, not a whitecap source.
-// filtered=false is retained exclusively for the RAW_FOAM reconstruction A/B.
-float pixel_ocean_foam(vec2 world_xz, bool filtered) {
+// filtered=false is retained exclusively for the OLD_RAW_FOAM_256 A/B.
+float pixel_ocean_legacy_foam(vec2 world_xz, bool filtered) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -652,6 +659,91 @@ float pixel_ocean_foam(vec2 world_xz, bool filtered) {
 	float combined = coastal_foam * coastal_weight + remainder_foam * remainder_weight;
 	combined += mid_foam * mid_weight * mid_short_weight * MID_FOAM_WEIGHT;
 	combined += short_foam * short_weight * mid_short_weight * SHORT_FOAM_WEIGHT;
+	return clamp(combined, 0.0, 1.0);
+}
+
+
+// The high-resolution field is R16F, so fetch its red channel rather than the
+// legacy normal-map alpha. This retains the positive B-spline reconstruction
+// for presentation without making it the mechanism that fixes foam birth.
+float sample_foam_field_bicubic(sampler2D tex, vec2 uv) {
+	vec2 size = vec2(textureSize(tex, 0));
+	vec2 texel_position = uv * size - 0.5;
+	vec2 cell = floor(texel_position);
+	vec2 fraction = fract(texel_position);
+	vec4 weight_x = foam_bspline_weights(fraction.x);
+	vec4 weight_y = foam_bspline_weights(fraction.y);
+	vec2 pair_x = vec2(weight_x.x + weight_x.y, weight_x.z + weight_x.w);
+	vec2 pair_y = vec2(weight_y.x + weight_y.y, weight_y.z + weight_y.w);
+	vec2 sample_x = vec2(
+		cell.x - 1.0 + weight_x.y / max(pair_x.x, 0.00001),
+		cell.x + 1.0 + weight_x.w / max(pair_x.y, 0.00001)
+	);
+	vec2 sample_y = vec2(
+		cell.y - 1.0 + weight_y.y / max(pair_y.x, 0.00001),
+		cell.y + 1.0 + weight_y.w / max(pair_y.y, 0.00001)
+	);
+	float sample_00 = textureLod(tex, (vec2(sample_x.x, sample_y.x) + 0.5) / size, 0.0).r;
+	float sample_10 = textureLod(tex, (vec2(sample_x.y, sample_y.x) + 0.5) / size, 0.0).r;
+	float sample_01 = textureLod(tex, (vec2(sample_x.x, sample_y.y) + 0.5) / size, 0.0).r;
+	float sample_11 = textureLod(tex, (vec2(sample_x.y, sample_y.y) + 0.5) / size, 0.0).r;
+	return clamp(
+		sample_00 * pair_x.x * pair_y.x
+		+ sample_10 * pair_x.y * pair_y.x
+		+ sample_01 * pair_x.x * pair_y.y
+		+ sample_11 * pair_x.y * pair_y.y,
+		0.0,
+		1.0
+	);
+}
+
+
+float sample_foam_field_filtered(sampler2D tex, vec2 uv, vec2 base_xz, float domain_size_m) {
+	float filter_amount = foam_filter_amount(tex, base_xz, domain_size_m);
+	if (filter_amount <= 0.001) {
+		return sample_foam_field_bicubic(tex, uv);
+	}
+	float bilinear = textureLod(tex, uv, 0.0).r;
+	if (filter_amount >= 0.999) {
+		return bilinear;
+	}
+	return mix(sample_foam_field_bicubic(tex, uv), bilinear, filter_amount);
+}
+
+
+// Production composition of the high-resolution persistent field. It mirrors
+// the established coastal/open/deep coordinate policy, so coastal warp and
+// LONG split behavior remain unchanged while the state resolution rises.
+float pixel_ocean_hires_foam(vec2 world_xz) {
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
+	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+
+	vec2 coast_uv = coastal_uv(world_xz);
+	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
+	bool coast_transform_active = coastal_transform_enabled && has_coastal_data(coast_uv, field_data);
+	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
+	if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
+		warp_sample = warp_deep_sample(world_xz);
+	}
+	float warp_confidence = warp_sample.z;
+	vec2 deep_xz = warp_sample.xy;
+
+	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+
+	float coastal_open = sample_foam_field_filtered(foam_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), world_xz, domain_long_coastal_m);
+	float coastal_warped = sample_foam_field_filtered(foam_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), world_xz, domain_long_coastal_m);
+	float coastal = mix(coastal_open, coastal_warped, warp_confidence) * coastal_gain;
+	float remainder = sample_foam_field_filtered(foam_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), world_xz, domain_long_remainder_m);
+	float mid = sample_foam_field_filtered(foam_mid, spectrum_uv(world_xz, domain_mid_m), world_xz, domain_mid_m);
+	float short = sample_foam_field_filtered(foam_short, spectrum_uv(world_xz, domain_short_m), world_xz, domain_short_m);
+	float combined = coastal * coastal_weight + remainder * remainder_weight;
+	combined += mid * mid_weight * mid_short_weight;
+	combined += short * short_weight * mid_short_weight;
 	return clamp(combined, 0.0, 1.0);
 }
 
@@ -834,7 +926,7 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 
 void fragment() {
 	vec3 color = base_color;
-	float raw_foam = pixel_ocean_foam(ocean_base_xz, true);
+	float raw_foam = pixel_ocean_hires_foam(ocean_base_xz);
 	float foam_mask = 0.0;
 	vec2 compression_debug = vec2(0.0);
 	vec2 spectral_debug = vec2(1.0, 0.0);
@@ -857,6 +949,11 @@ void fragment() {
 		compression_debug = pixel_ocean_compression_debug(ocean_base_xz);
 	}
 	if (foam_debug_mode == 4 || foam_debug_mode == 5) {
+		spectral_debug = pixel_ocean_spectral_debug(ocean_base_xz);
+	}
+	if (foam_debug_mode == 8) {
+		// Same bilinear J source evaluated by update_foam.glsl at its high-res
+		// cell centers; diagnostic only, no extra persistent texture needed.
 		spectral_debug = pixel_ocean_spectral_debug(ocean_base_xz);
 	}
 	if (debug_mode == 2) {
@@ -921,7 +1018,7 @@ void fragment() {
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
 	if (foam_debug_mode == 1) {
-		color = vec3(pixel_ocean_foam(ocean_base_xz, false));
+		color = vec3(pixel_ocean_legacy_foam(ocean_base_xz, false));
 	} else if (foam_debug_mode == 2) {
 		color = vec3(foam_mask);
 	} else if (foam_debug_mode == 3) {
@@ -935,7 +1032,11 @@ void fragment() {
 		// Current source only: black when J >= whitecap.
 		color = vec3(spectral_debug.y);
 	} else if (foam_debug_mode == 6) {
+		color = vec3(pixel_ocean_legacy_foam(ocean_base_xz, true));
+	} else if (foam_debug_mode == 7) {
 		color = vec3(raw_foam);
+	} else if (foam_debug_mode == 8) {
+		color = vec3(spectral_debug.y);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

@@ -24,8 +24,12 @@ foam_source = max(0, foam_whitecap - J)
 The old central difference is retained only by the `COMPRESSION` A/B debug. The
 production Jacobian is stored in `displacement_map.a` for GPU-only diagnostics.
 
-The persistent value is stored in `normal_map.a`. Each assemble dispatch reads
-the previous alpha and applies a bounded, FPS-independent birth/residual rule:
+`normal_map.a` preserves the former 256² persistent value strictly for
+`OLD_RAW_FOAM_256` diagnostic A/B. Production state lives in a dedicated,
+high-resolution `R16F` foam field per render cascade. After `assemble_maps`
+has written its current `J`, `update_foam.glsl` samples `displacement_map.a`
+with repeat + hardware-linear filtering at each foam cell and applies a
+bounded, FPS-independent birth/residual rule:
 
 ```text
 residual = previous_foam * exp(-decay_rate * delta_seconds)
@@ -34,12 +38,15 @@ birth = 1 - exp(-growth_rate * delta_seconds)
 foam = max(residual, mix(residual, target, birth))
 ```
 
-The normal RGB and foam alpha share the existing persistent normal texture; no
-GPU-to-CPU readback or extra foam texture is introduced. `delta_seconds` is the
-actual module frame delta, so the update is independent of a fixed 60 Hz rate.
+Each field is ping-ponged (`read previous`, `write next`) so no compute dispatch
+reads and writes the same image. `delta_seconds` is the actual module frame
+delta, so the update is independent of a fixed 60 Hz rate. There is no
+GPU-to-CPU readback.
 
 The additional derivative packing needs one extra ping-pong RGBA32F pair per
-cascade (two textures). It does not add another complete FFT dispatch sequence.
+cascade (two textures). The foam architecture adds one R16F ping-pong pair and
+one compute dispatch after assemble per render cascade; it does not modify the
+spectrum, H0, FFT resolution or FFT domains.
 
 ## Cascade policy
 
@@ -68,30 +75,40 @@ needed; adding it would double-transport this Lagrangian representation.
 
 `OceanV3` exposes the `Whitecaps Foam` group for color, intensity, visual
 threshold/contrast, roughness, alpha boost, distance fade, enable, breakup, and
-debug mode. `ocean_surface.gdshader` samples alpha from all four normal maps
-using the same band/coastal composition weights and adds contributions without
-dividing by a total weight. Foam mixes into ALBEDO, increases roughness and
-opacity, and never writes emission or changes the base Fresnel path.
+debug mode. `OpenOceanFFTModule.foam_resolution` is an independent technical
+setting with choices 256, 512 and 1024 (default). It rebuilds only the foam
+ping-pong images, not H0 or the FFT. `ocean_surface.gdshader` samples the four
+R16F fields using the same band/coastal composition weights and adds
+contributions without dividing by a total weight. Foam mixes into ALBEDO,
+increases roughness and opacity, and never writes emission or changes the base
+Fresnel path.
 
-Debug modes are `OFF`, `RAW_FOAM`, `SHAPED_FOAM`, `COMPRESSION`,
-`SPECTRAL_JACOBIAN` and `FOAM_SOURCE`. RAW reads persistent alpha before visual
-shaping; COMPRESSION is the old central-difference A/B; SPECTRAL_JACOBIAN reads
-the production `J`; FOAM_SOURCE is black for `J >= whitecap` and bright for
-positive source.
+Debug modes are `OFF`, `OLD_RAW_FOAM_256`, `SHAPED_FOAM`, `COMPRESSION`,
+`SPECTRAL_JACOBIAN`, `FOAM_SOURCE`, `FILTERED_OLD_RAW_256`,
+`HIRES_RAW_FOAM` and `FOAM_SOURCE_HIRES`. The first/filtered pair exposes the
+legacy alpha only. `HIRES_RAW_FOAM` is the production field before visual
+shaping. `FOAM_SOURCE_HIRES` evaluates the same bilinear `J` source used at
+high-resolution field cell centers, without allocating a debug-only texture.
 
 Breakup samples the existing `surface_warp_texture` in base coordinates and
 multiplies the shaped mask: it cuts small holes and irregular edges but cannot
 create foam where RAW is zero. `foam_edge_softness` controls its transition.
 
-## Spatial reconstruction
+## High-resolution field and spatial reconstruction
 
-The persistent alpha is generated at each cascade FFT resolution; it is not
-resampled into another physical texture. To avoid the 512 m LONG domain's
-roughly 2 m cells appearing as painted blocks over the dense near clipmap,
-`ocean_surface.gdshader` reconstructs only normal-map alpha with a positive
-cubic B-spline. It uses four hardware-bilinear taps (not sixteen direct texel
-fetches), derives its true resolution from `textureSize()`, and relies on the
-existing repeat sampler for periodic FFT wrapping.
+The foam field is deliberately independent from the 256² FFT maps. At the
+default 1024² it costs 2 MiB per R16F texture; the two-image ping-pong pair is
+4 MiB per cascade and 16 MiB for LONG_COASTAL, LONG_REMAINDER, MID and SHORT.
+The corresponding totals are 4 MiB at 512² and 1 MiB at 256². This independent
+grid is what removes the blocky *birth* quantization; the source `J` itself is
+interpolated before threshold/growth/decay, rather than merely filtering a
+coarse stored alpha after the fact.
+
+The material may additionally reconstruct the R16F field with a positive cubic
+B-spline close to the camera. It uses four hardware-bilinear taps (not sixteen
+direct texel fetches), derives resolution from `textureSize()`, and relies on
+the existing repeat sampler for periodic FFT wrapping. It is a presentation
+quality layer only, not the source of the increased simulation resolution.
 
 LONG_COASTAL (both open and warped coordinates), LONG_REMAINDER and MID use the
 adaptive bicubic path close to camera. It transitions continuously to the
@@ -99,8 +116,9 @@ existing bilinear sample using both `fwidth(ocean_base_xz)` against each
 cascade's real texel size and `foam_filter_fade_start/end`. SHORT remains
 bilinear because it has the lowest physical foam weight and finer texels.
 
-`RAW_FOAM` remains the original bilinear reconstruction. `FILTERED_RAW_FOAM`
-shows the adaptive reconstruction for A/B. Breakup defaults to zero speed and
+`OLD_RAW_FOAM_256` remains the original bilinear reconstruction.
+`FILTERED_OLD_RAW_256` shows the legacy adaptive reconstruction for A/B.
+`HIRES_RAW_FOAM` shows the production high-resolution field. Breakup defaults to zero speed and
 is anchored to `ocean_base_xz`; its remap retains a non-zero floor, preventing
 the noise from becoming a binary moving threshold. Final visual shaping is:
 

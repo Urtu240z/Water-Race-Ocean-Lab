@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ctnu1iyi2t3gj"
+path="res://.godot/imported/update_foam.glsl-6428037ea8246bc7b02375bf19ed4b0b.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/fft/shaders/update_foam.glsl"
+dest_files=["res://.godot/imported/update_foam.glsl-6428037ea8246bc7b02375bf19ed4b0b.res"]
+
+[params]
+
