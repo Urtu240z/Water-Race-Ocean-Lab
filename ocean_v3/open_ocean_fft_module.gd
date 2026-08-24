@@ -72,7 +72,7 @@ var _breaking_coastal_fraction := 0.0
 var _spectrum_model: int = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
 var _ocean_shape_debug := false # 5R.1: vista neutra de forma (silueta/crest/valle).
 var _ocean_crest_sharpen_debug := false # 5R1C: vista de zonas de crest sharpening.
-var _ocean_normal_fragment := true # 5R2: normal shading FRAGMENT (true) vs VERTEX (false).
+var _ocean_normal_fragment := false # 5R2: normal shading FRAGMENT (true) vs VERTEX (false).
 # 5R1D: autoridad única de los parámetros de crest sharpening (render + query).
 var _crest_sharpen := {
 	"strength": 1.0,

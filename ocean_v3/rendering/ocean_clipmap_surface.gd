@@ -1,3 +1,4 @@
+@tool
 class_name OceanClipmapSurface
 extends Node3D
 ## Renderer geométrico centrado en cámara; no conoce ni modifica el campo FFT.
@@ -62,6 +63,11 @@ var _coastal_debug_field: int = CoastalDebugField.OFF
 var _breaking_debug: int = BreakingDebug.OFF
 var _tracking_camera: Camera3D
 var _triangle_count := 0
+
+
+func _ready() -> void:
+	if Engine.is_editor_hint():
+		_prepare_editor_preview()
 
 
 func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
@@ -289,6 +295,13 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 	_surface_material.set_shader_parameter(&"normal_mid", normals[2])
 	_surface_material.set_shader_parameter(&"normal_short", normals[3])
 
+
+func _prepare_editor_preview() -> void:
+	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
+	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
+	if _levels.is_empty() and clipmap_config.is_valid():
+		_rebuild_levels()
+	_apply_debug_mode()
 
 func _rebuild_levels() -> void:
 	for level in _levels:

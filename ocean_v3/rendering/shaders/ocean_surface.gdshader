@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
+render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx;
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
@@ -81,25 +81,63 @@ uniform float ocean_water_roughness = 0.08;  // dielectric agua (0.05–0.18).
 uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick, no usado).
 // 5R.3A: roughness adaptativa por distancia/footprint. Cerca ~near, lejos o
 // subpixel ~far. Sin texturas nuevas; sólo operaciones escalares en fragment.
-uniform float ocean_roughness_near = 0.10;
-uniform float ocean_roughness_far = 0.34;
-uniform vec2 ocean_roughness_distance_m = vec2(40.0, 300.0);
+uniform float ocean_roughness_near = 0.055;
+uniform float ocean_roughness_far = 0.23;
+uniform vec2 ocean_roughness_distance_m = vec2(80.0, 220.0);
 
-// 5R.3B visual baseline:
-// La geometría SHORT queda deliberadamente secundaria. LONG+MID construyen el
-// cuerpo de la ola; SHORT aporta sólo una deformación pequeña y el detalle fino
-// se recupera como normal per-fragment sobre la normal VERTEX.
-uniform float short_geometry_strength = 0.25;
-uniform float short_vertex_normal_strength = 0.0;
-uniform float short_micro_normal_strength = 0.55;
-uniform vec2 short_micro_normal_fade_m = vec2(80.0, 600.0);
+// 5R.3B: SHORT deja de dominar la malla. LONG+MID forman el cuerpo de ola;
+// SHORT conserva una aportación física pequeña y su normal VERTEX queda fuera
+// por defecto para no dibujar los anillos/cuadrados del clipmap.
+uniform float short_geometry_strength : hint_range(0.0, 1.0, 0.01) = 0.25;
+uniform float short_vertex_normal_strength : hint_range(0.0, 1.0, 0.01) = 0.0;
 
-// Colores de cuerpo del agua. No son foam ni pintado de crestas.
-uniform vec3 water_deep_color : source_color = vec3(0.012, 0.060, 0.082);
-uniform vec3 water_body_color : source_color = vec3(0.025, 0.115, 0.145);
-uniform vec3 water_grazing_color : source_color = vec3(0.055, 0.165, 0.190);
-uniform float water_body_strength = 0.72;
-uniform float water_grazing_strength = 0.22;
+// 5R.3B: microdetalle dedicado estilo Water Race. Estas texturas NO desplazan
+// geometría: sólo rompen reflejos y specular en fragment.
+// Déjalo false hasta asignar las mismas tres texturas del material de Water Race.
+uniform bool surface_detail_enabled = false;
+uniform sampler2D surface_normal_texture_a : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D surface_normal_texture_b : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
+uniform sampler2D surface_warp_texture : repeat_enable, filter_linear_mipmap;
+uniform float surface_normal_world_size_a : hint_range(0.25, 100.0, 0.05) = 7.5;
+uniform float surface_normal_world_size_b : hint_range(0.25, 100.0, 0.05) = 3.25;
+uniform float surface_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.62;
+uniform vec2 surface_flow_direction_a = vec2(0.82, 0.57);
+uniform vec2 surface_flow_direction_b = vec2(-0.46, 0.89);
+uniform float surface_flow_speed_a : hint_range(-3.0, 3.0, 0.01) = 0.24;
+uniform float surface_flow_speed_b : hint_range(-3.0, 3.0, 0.01) = -0.17;
+uniform float surface_warp_world_size : hint_range(2.0, 300.0, 0.5) = 46.0;
+uniform float surface_warp_strength : hint_range(0.0, 12.0, 0.05) = 2.4;
+uniform float surface_detail_fade_start : hint_range(0.0, 2000.0, 1.0) = 180.0;
+uniform float surface_detail_fade_end : hint_range(1.0, 4000.0, 1.0) = 800.0;
+// El microdetalle no desaparece por completo en el horizonte: los mipmaps lo
+// convierten en una rugosidad estable en vez de dejar el océano liso.
+uniform float surface_detail_far_strength : hint_range(0.0, 1.0, 0.01) = 0.18;
+uniform int ocean_surface_detail_quality : hint_range(0, 2, 1) = 2;
+
+// 5R.3C: óptica base trasladada del agua de Water Race.
+// Screen/depth sólo afectan al material; no tocan FFT, query, coastal ni breakers.
+uniform bool water_optics_enabled = true;
+uniform bool water_refraction_enabled = true;
+uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
+uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
+uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
+uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
+uniform vec4 horizon_water_color : source_color = vec4(0.025, 0.22, 0.34, 1.0);
+uniform vec4 reflection_tint : source_color = vec4(0.36, 0.70, 0.86, 1.0);
+uniform vec4 trough_tint : source_color = vec4(0.002, 0.025, 0.075, 1.0);
+uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
+uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
+uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
+uniform float shallow_depth_range : hint_range(0.1, 20.0, 0.1) = 5.5;
+uniform float near_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.77;
+uniform float deep_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.92;
+uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
+uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
+uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
+uniform float fresnel_power : hint_range(0.5, 12.0, 0.1) = 4.8;
+uniform float reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
+uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
+uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
@@ -137,6 +175,7 @@ varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
+varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cresta/valle.
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -245,9 +284,8 @@ void vertex() {
 	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
 	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
 	vec3 displacement = long_coastal * coastal_weight * coastal_gain + long_remainder * remainder_weight;
-	// SHORT deja de dominar la silueta. Mantiene el fade original 24-80 m,
-	// pero con amplitud geométrica reducida; el detalle fino se recupera en
-	// fragment como micro-normal.
+	// SHORT geométrico secundario: conserva su fade físico/cámara original,
+	// pero a amplitud reducida para que MID defina la ola visible.
 	float short_geometry_weight = short_weight * short_geometry_strength;
 	displacement += mid_displacement * mid_weight * mid_short_weight
 		+ short_displacement * short_geometry_weight * mid_short_weight;
@@ -268,8 +306,7 @@ void vertex() {
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
 	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
 	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
-	// Evita que la banda SHORT marque los cuadrados del clipmap al interpolarse
-	// por vértice. Por defecto queda a 0 y SHORT vuelve después como normal por píxel.
+	// SHORT no debe grabar los anillos del clipmap en la normal VERTEX.
 	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb))
 		* short_weight * mid_short_weight * short_vertex_normal_strength;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
@@ -350,6 +387,7 @@ void vertex() {
 		crest_sharpen_mask = sharpen;
 	}
 
+	ocean_wave_height = displacement.y;
 	VERTEX += displacement;
 	NORMAL = ocean_normal;
 	derived_normal = ocean_normal;
@@ -450,6 +488,66 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 }
 
 
+vec2 surface_safe_direction(vec2 direction, vec2 fallback) {
+	float magnitude = length(direction);
+	return magnitude > 0.00001 ? direction / magnitude : fallback;
+}
+
+
+// 5R.3B: mismo concepto de micro-normal que Water Race.
+// Devuelve normal local donde XY se interpreta como slope world XZ.
+vec3 sample_surface_detail(vec2 world_xz, float camera_distance) {
+	vec2 warp = vec2(0.0);
+	if (ocean_surface_detail_quality >= 2) {
+		vec2 warp_uv = world_xz / max(surface_warp_world_size, 0.001)
+			+ vec2(0.31, -0.95) * coastal_time_s * 0.035;
+		warp = (texture(surface_warp_texture, warp_uv).rg * 2.0 - 1.0)
+			* surface_warp_strength;
+	}
+
+	vec2 uv_a = (world_xz + warp) / max(surface_normal_world_size_a, 0.001)
+		+ surface_safe_direction(surface_flow_direction_a, vec2(1.0, 0.0))
+			* coastal_time_s * surface_flow_speed_a
+			/ max(surface_normal_world_size_a, 0.001);
+	vec2 uv_b = (world_xz - warp * 0.57) / max(surface_normal_world_size_b, 0.001)
+		+ surface_safe_direction(surface_flow_direction_b, vec2(0.0, 1.0))
+			* coastal_time_s * surface_flow_speed_b
+			/ max(surface_normal_world_size_b, 0.001);
+
+	vec3 normal_a = texture(surface_normal_texture_a, uv_a).xyz * 2.0 - 1.0;
+	vec3 combined = normalize(normal_a);
+	if (ocean_surface_detail_quality >= 1) {
+		vec3 normal_b = texture(surface_normal_texture_b, uv_b).xyz * 2.0 - 1.0;
+		combined = normalize(vec3(
+			normal_a.xy * 0.58 + normal_b.xy * 0.42,
+			max(normal_a.z * 0.58 + normal_b.z * 0.42, 0.08)
+		));
+	}
+
+	float detail_distance = 1.0 - smoothstep(
+		surface_detail_fade_start,
+		max(surface_detail_fade_end, surface_detail_fade_start + 0.001),
+		camera_distance
+	);
+	float detail_fade = mix(
+		surface_detail_far_strength,
+		1.0,
+		detail_distance
+	);
+	return vec3(combined.xy * detail_fade, combined.z);
+}
+
+
+float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_projection) {
+	vec4 view_position = inverse_projection * vec4(
+		screen_uv * 2.0 - 1.0,
+		raw_depth,
+		1.0
+	);
+	return max(-view_position.z / view_position.w, 0.0);
+}
+
+
 void fragment() {
 	vec3 color = base_color;
 	if (debug_mode == 2) {
@@ -520,58 +618,195 @@ void fragment() {
 		EMISSION = color;
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
+		ALPHA = 1.0;
 	} else if (ocean_shape_debug) {
 		// 5R.1: vista neutra de silueta/crest/valle/choppiness. Sin foam ni emission.
 		ALBEDO = vec3(0.52, 0.56, 0.60);
 		EMISSION = vec3(0.0);
 		ROUGHNESS = 0.7;
 		SPECULAR = 0.2;
+		ALPHA = 1.0;
 	} else {
-		// 5R.2: material físico de agua (dielectric). La NORMAL world-space se
-		// transforma a view-space (NORMAL en fragment es view-space en Godot).
-		vec3 shading_normal;
+		// 5R.3B/3C: VERTEX es la base de producción. FRAGMENT completo queda
+		// únicamente como A/B con G. El detalle fino SIEMPRE se añade después
+		// mediante normal maps por fragment, de modo que haya riqueza cerca y
+		// también a distancia sin marcar la cuadrícula del clipmap.
+		vec3 shading_normal_world;
 		if (ocean_normal_fragment) {
-			// A/B antiguo: normal FFT completa por fragment.
-			shading_normal = pixel_ocean_normal(ocean_world_xz);
+			shading_normal_world = pixel_ocean_normal(ocean_world_xz);
 		} else {
-			// Producción: LONG+MID por VERTEX, con SHORT fino reinyectado por píxel.
-			// Es mucho más barato que pixel_ocean_normal() completo y evita que SHORT
-			// dibuje los cuadrados del clipmap.
-			shading_normal = normalize(derived_normal);
-			vec2 base_slope = slope_from_normal(shading_normal);
-			vec2 short_micro_slope = slope_from_normal(normalize(
-				textureLod(normal_short, spectrum_uv(ocean_world_xz, domain_short_m), 0.0).rgb));
-			float camera_distance_micro = distance(ocean_world_xz, camera_world_xz);
-			float short_micro_weight = band_mask.z
-				* distance_fade(short_micro_normal_fade_m, camera_distance_micro)
-				* short_micro_normal_strength;
-			base_slope += short_micro_slope * short_micro_weight;
-			shading_normal = normalize(vec3(-base_slope.x, 1.0, -base_slope.y));
+			shading_normal_world = normalize(derived_normal);
 		}
 
-		vec3 normal_vs = normalize((VIEW_MATRIX * vec4(shading_normal, 0.0)).xyz);
-		NORMAL = normal_vs;
-
-		// 5R.3B visual: cuerpo de agua oscuro + leve variación angular.
-		// No pinta crestas ni añade foam. El brillo fuerte sigue viniendo del
-		// specular/reflection del material dieléctrico.
-		float NoV = clamp(dot(normal_vs, normalize(VIEW)), 0.0, 1.0);
-		float grazing = pow(1.0 - NoV, 3.0);
-		vec3 facing_color = mix(water_deep_color, water_body_color, water_body_strength);
-		vec3 water_color = mix(facing_color, water_grazing_color, grazing * water_grazing_strength);
-		ALBEDO = water_color;
-		EMISSION = vec3(0.0);
-
-		// 5R.3A: roughness adaptativa por distancia y footprint de píxel.
+		vec3 visual_normal = normalize((VIEW_MATRIX * vec4(shading_normal_world, 0.0)).xyz);
 		float camera_distance = distance(ocean_world_xz, camera_world_xz);
-		float distance_factor = smoothstep(
-			ocean_roughness_distance_m.x, ocean_roughness_distance_m.y, camera_distance);
-		float footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
-		float short_texel = domain_short_m / float(textureSize(normal_short, 0).x);
-		float footprint_factor = smoothstep(short_texel, short_texel * 3.0, footprint);
-		float roughness_factor = max(distance_factor, footprint_factor);
-		ROUGHNESS = mix(ocean_roughness_near, ocean_roughness_far, roughness_factor);
-		SPECULAR = 0.5;
-		METALLIC = 0.0;
+
+		// Dos normal maps + warp: detalle fino sin añadir geometría ni marcar
+		// los cuadrados del clipmap.
+		if (surface_detail_enabled) {
+			vec3 detail_normal = sample_surface_detail(ocean_world_xz, camera_distance);
+			vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
+			vec3 detail_offset_view = mat3(VIEW_MATRIX) * vec3(
+				detail_slope.x,
+				0.0,
+				detail_slope.y
+			);
+			visual_normal = normalize(
+				visual_normal + detail_offset_view * surface_normal_strength
+			);
+		}
+		NORMAL = visual_normal;
+
+		if (water_optics_enabled) {
+			// 5R.3C: profundidad óptica real desde el depth buffer.
+			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
+			bool scene_is_sky = scene_raw_depth <= 0.000001;
+			float scene_linear_depth = linear_depth_from_buffer(
+				SCREEN_UV,
+				scene_raw_depth,
+				INV_PROJECTION_MATRIX
+			);
+			float water_linear_depth = linear_depth_from_buffer(
+				SCREEN_UV,
+				FRAGCOORD.z,
+				INV_PROJECTION_MATRIX
+			);
+			float water_thickness = scene_is_sky
+				? maximum_optical_depth
+				: clamp(
+					scene_linear_depth - water_linear_depth,
+					0.0,
+					maximum_optical_depth
+				);
+
+			float absorption = 1.0 - exp(-water_thickness * absorption_density);
+			float depth_factor = clamp(
+				water_thickness / max(shallow_depth_range, 0.001),
+				0.0,
+				1.0
+			);
+			float water_density = max(absorption, depth_factor * 0.48);
+
+			// Tinte suave por altura: valle profundo / cresta algo más transmisiva.
+			float height_scale = max(breaking_long_hs_m * 2.0, 0.25);
+			float height_position = clamp(
+				0.5 + ocean_wave_height / height_scale,
+				0.0,
+				1.0
+			);
+			height_position = height_position * height_position
+				* (3.0 - 2.0 * height_position);
+
+			vec3 body_color = mix(
+				shallow_water_color.rgb,
+				deep_water_color.rgb,
+				water_density
+			);
+			body_color = mix(
+				body_color,
+				mix(trough_tint.rgb, crest_tint.rgb, height_position),
+				0.24
+			);
+
+			vec3 view_direction = normalize(VIEW);
+			float facing = clamp(dot(visual_normal, view_direction), 0.0, 1.0);
+			float fresnel = pow(1.0 - facing, fresnel_power);
+			float distance_opacity = smoothstep(
+				opacity_distance_start,
+				max(opacity_distance_end, opacity_distance_start + 0.001),
+				camera_distance
+			);
+			float reflection_factor = clamp(
+				fresnel * reflection_strength + distance_opacity * 0.30,
+				0.0,
+				1.0
+			);
+
+			vec3 surface_color = mix(
+				body_color,
+				horizon_water_color.rgb,
+				reflection_factor
+			);
+			surface_color = mix(
+				surface_color,
+				reflection_tint.rgb,
+				reflection_factor * 0.19
+			);
+
+			// Refracción screen-space ligera. Se puede apagar de forma aislada
+			// con water_refraction_enabled si causa cualquier artefacto.
+			vec3 transmitted_scene = body_color;
+			if (water_refraction_enabled) {
+				vec2 refraction_offset = visual_normal.xy
+					* refraction_strength
+					* (1.0 - fresnel)
+					* (1.0 - distance_opacity);
+				vec2 refracted_uv = clamp(
+					SCREEN_UV + refraction_offset,
+					vec2(0.001),
+					vec2(0.999)
+				);
+				vec3 refracted_scene = textureLod(
+					screen_texture,
+					refracted_uv,
+					0.0
+				).rgb;
+				transmitted_scene = refracted_scene * mix(
+					vec3(1.0),
+					shallow_water_color.rgb,
+					absorption * 0.30
+				);
+			}
+
+			float body_mix = clamp(
+				water_density + max(fresnel, distance_opacity) * 0.72,
+				0.0,
+				1.0
+			);
+			vec3 final_color = mix(transmitted_scene, surface_color, body_mix);
+
+			float local_alpha = mix(
+				near_water_alpha,
+				deep_water_alpha,
+				water_density
+			);
+			float final_alpha = clamp(
+				mix(
+					local_alpha,
+					horizon_water_alpha,
+					max(distance_opacity, fresnel)
+				),
+				0.55,
+				1.0
+			);
+
+			ALBEDO = final_color;
+			EMISSION = vec3(0.0);
+			ROUGHNESS = mix(
+				ocean_roughness_near,
+				ocean_roughness_far,
+				max(distance_opacity, fresnel)
+			);
+			SPECULAR = water_specular;
+			METALLIC = 0.0;
+			ALPHA = final_alpha;
+		} else {
+			// Fallback de debug: material simple sin screen/depth.
+			ALBEDO = base_color;
+			EMISSION = vec3(0.0);
+			float distance_factor = smoothstep(
+				ocean_roughness_distance_m.x,
+				ocean_roughness_distance_m.y,
+				camera_distance
+			);
+			ROUGHNESS = mix(
+				ocean_roughness_near,
+				ocean_roughness_far,
+				distance_factor
+			);
+			SPECULAR = water_specular;
+			METALLIC = 0.0;
+			ALPHA = 1.0;
+		}
 	}
 }
