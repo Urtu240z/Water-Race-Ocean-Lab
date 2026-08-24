@@ -73,7 +73,7 @@ uniform float ocean_crest_sharpen_long_weight = 1.0;
 uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform bool ocean_crest_sharpen_debug = false;
 // 5R.2: normal shading per-fragment + material físico de agua.
-uniform bool ocean_normal_fragment = true;   // A/B: FRAGMENT (true) vs VERTEX (false).
+uniform bool ocean_normal_fragment = false;   // A/B: FRAGMENT (true) vs VERTEX (false).
 // 5R.2 (superseded por 5R.3A): knob constante de roughness. El material de
 // producción usa ahora ocean_roughness_near/far (adaptativa); se conservan
 // declarados para no romper la API del material 5R.2.
@@ -84,6 +84,23 @@ uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick, no
 uniform float ocean_roughness_near = 0.10;
 uniform float ocean_roughness_far = 0.34;
 uniform vec2 ocean_roughness_distance_m = vec2(40.0, 300.0);
+
+// 5R.3B visual baseline:
+// La geometría SHORT queda deliberadamente secundaria. LONG+MID construyen el
+// cuerpo de la ola; SHORT aporta sólo una deformación pequeña y el detalle fino
+// se recupera como normal per-fragment sobre la normal VERTEX.
+uniform float short_geometry_strength = 0.25;
+uniform float short_vertex_normal_strength = 0.0;
+uniform float short_micro_normal_strength = 0.55;
+uniform vec2 short_micro_normal_fade_m = vec2(80.0, 600.0);
+
+// Colores de cuerpo del agua. No son foam ni pintado de crestas.
+uniform vec3 water_deep_color : source_color = vec3(0.012, 0.060, 0.082);
+uniform vec3 water_body_color : source_color = vec3(0.025, 0.115, 0.145);
+uniform vec3 water_grazing_color : source_color = vec3(0.055, 0.165, 0.190);
+uniform float water_body_strength = 0.72;
+uniform float water_grazing_strength = 0.22;
+
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -228,7 +245,12 @@ void vertex() {
 	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
 	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
 	vec3 displacement = long_coastal * coastal_weight * coastal_gain + long_remainder * remainder_weight;
-	displacement += mid_displacement * mid_weight * mid_short_weight + short_displacement * short_weight * mid_short_weight;
+	// SHORT deja de dominar la silueta. Mantiene el fade original 24-80 m,
+	// pero con amplitud geométrica reducida; el detalle fino se recupera en
+	// fragment como micro-normal.
+	float short_geometry_weight = short_weight * short_geometry_strength;
+	displacement += mid_displacement * mid_weight * mid_short_weight
+		+ short_displacement * short_geometry_weight * mid_short_weight;
 
 	// Normales en slope space: slope_total = suma de slopes por banda.
 	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
@@ -246,7 +268,10 @@ void vertex() {
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
 	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
 	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * short_weight * mid_short_weight;
+	// Evita que la banda SHORT marque los cuadrados del clipmap al interpolarse
+	// por vértice. Por defecto queda a 0 y SHORT vuelve después como normal por píxel.
+	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb))
+		* short_weight * mid_short_weight * short_vertex_normal_strength;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
 	if (coastal_monochromatic_debug) {
@@ -506,23 +531,43 @@ void fragment() {
 		// transforma a view-space (NORMAL en fragment es view-space en Godot).
 		vec3 shading_normal;
 		if (ocean_normal_fragment) {
+			// A/B antiguo: normal FFT completa por fragment.
 			shading_normal = pixel_ocean_normal(ocean_world_xz);
 		} else {
+			// Producción: LONG+MID por VERTEX, con SHORT fino reinyectado por píxel.
+			// Es mucho más barato que pixel_ocean_normal() completo y evita que SHORT
+			// dibuje los cuadrados del clipmap.
 			shading_normal = normalize(derived_normal);
+			vec2 base_slope = slope_from_normal(shading_normal);
+			vec2 short_micro_slope = slope_from_normal(normalize(
+				textureLod(normal_short, spectrum_uv(ocean_world_xz, domain_short_m), 0.0).rgb));
+			float camera_distance_micro = distance(ocean_world_xz, camera_world_xz);
+			float short_micro_weight = band_mask.z
+				* distance_fade(short_micro_normal_fade_m, camera_distance_micro)
+				* short_micro_normal_strength;
+			base_slope += short_micro_slope * short_micro_weight;
+			shading_normal = normalize(vec3(-base_slope.x, 1.0, -base_slope.y));
 		}
-		NORMAL = normalize((VIEW_MATRIX * vec4(shading_normal, 0.0)).xyz);
-		// 5R.3A: ALBEDO plano. Sin aclarado artificial de cresta: las crestas
-		// aparecen por geometría/normal/luz/reflexión, no por color más claro.
-		// crest_sharpen_mask se conserva para debug y pixel_ocean_normal().
-		ALBEDO = base_color;
+
+		vec3 normal_vs = normalize((VIEW_MATRIX * vec4(shading_normal, 0.0)).xyz);
+		NORMAL = normal_vs;
+
+		// 5R.3B visual: cuerpo de agua oscuro + leve variación angular.
+		// No pinta crestas ni añade foam. El brillo fuerte sigue viniendo del
+		// specular/reflection del material dieléctrico.
+		float NoV = clamp(dot(normal_vs, normalize(VIEW)), 0.0, 1.0);
+		float grazing = pow(1.0 - NoV, 3.0);
+		vec3 facing_color = mix(water_deep_color, water_body_color, water_body_strength);
+		vec3 water_color = mix(facing_color, water_grazing_color, grazing * water_grazing_strength);
+		ALBEDO = water_color;
 		EMISSION = vec3(0.0);
+
 		// 5R.3A: roughness adaptativa por distancia y footprint de píxel.
-		// Ensancha/estabiliza reflejos lejanos y subpixel sin tocar normales.
 		float camera_distance = distance(ocean_world_xz, camera_world_xz);
 		float distance_factor = smoothstep(
 			ocean_roughness_distance_m.x, ocean_roughness_distance_m.y, camera_distance);
 		float footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
-		float short_texel = domain_short_m / 256.0;
+		float short_texel = domain_short_m / float(textureSize(normal_short, 0).x);
 		float footprint_factor = smoothstep(short_texel, short_texel * 3.0, footprint);
 		float roughness_factor = max(distance_factor, footprint_factor);
 		ROUGHNESS = mix(ocean_roughness_near, ocean_roughness_far, roughness_factor);
