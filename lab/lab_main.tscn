@@ -8,21 +8,32 @@
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
-sky_top_color = Color(0.035, 0.065, 0.12, 1)
-sky_horizon_color = Color(0.22, 0.32, 0.42, 1)
+sky_top_color = Color(0.06812644, 0.110983275, 0.18569785, 1)
+sky_horizon_color = Color(0.11112737, 0.17615071, 0.23699433, 1)
+sky_curve = 4.636485
+sky_energy_multiplier = 1.38
 ground_bottom_color = Color(0.035, 0.04, 0.05, 1)
 ground_horizon_color = Color(0.14, 0.17, 0.2, 1)
+sun_angle_max = 147.16
+sun_curve = 1.4773726
+energy_multiplier = 2.46
 
 [sub_resource type="Sky" id="Sky_lab"]
 sky_material = SubResource("ProceduralSkyMaterial_lab")
 
 [sub_resource type="Environment" id="Environment_lab"]
 background_mode = 2
-background_energy_multiplier = 4.0
+background_energy_multiplier = 2.22
 sky = SubResource("Sky_lab")
 ambient_light_source = 3
-ambient_light_color = Color(0.55, 0.65, 0.8, 1)
-ambient_light_energy = 0.65
+ambient_light_color = Color(0.2593698, 0.35220206, 0.48798662, 1)
+ambient_light_energy = 16.0
+tonemap_mode = 4
+tonemap_exposure = 2.38
+tonemap_agx_white = 16.5
+tonemap_agx_contrast = 1.15
+adjustment_enabled = true
+adjustment_saturation = 0.81
 
 [node name="LabMain" type="Node3D" unique_id=1698941175]
 script = ExtResource("1_main")
@@ -32,7 +43,7 @@ environment = SubResource("Environment_lab")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
 transform = Transform3D(0.8480481, 0.3938068, -0.35458517, 0, 0.66913056, 0.74314487, 0.52991927, -0.63022256, 0.5674549, 0, 0, 0)
-light_energy = 5.8
+light_energy = 0.0
 shadow_enabled = true
 
 [node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
@@ -61,21 +72,33 @@ script = ExtResource("4_metrics")
 
 [node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
 surface_normal_world_size_a = 34.15
-surface_normal_world_size_b = 13.05
-surface_normal_strength = 0.91
+surface_normal_world_size_b = 2.4
+surface_normal_strength = 0.66
 surface_warp_world_size = 14.5
-surface_warp_strength = 0.95
+surface_warp_strength = 1.15
 surface_detail_far_strength = 0.0
 short_geometry_strength = 0.0
 shallow_water_color = Color(0.009116277, 0.21723914, 0.2830262, 1)
 horizon_water_color = Color(0.01229849, 0.15447968, 0.24721026, 1)
 reflection_tint = Color(0.07881095, 0.24364921, 0.3152109, 1)
-crest_tint = Color(0.04962855, 0.360436, 0.39651754, 1)
-near_water_alpha = 0.6
-deep_water_alpha = 0.73
+trough_tint = Color(0.40742716, 0.6239729, 0.92509526, 1)
+crest_tint = Color(0.020826068, 0.22670513, 0.25059068, 1)
+near_water_alpha = 0.9099999999999999
+deep_water_alpha = 1.0
 horizon_water_alpha = 1.0
-fresnel_power = 8.7
-water_specular = 0.29
+fresnel_power = 9.4
+near_roughness = 0.2
+water_specular = 0.4
+foam_enabled = null
+foam_color = null
+foam_intensity = null
+foam_threshold = null
+foam_contrast = null
+foam_roughness = null
+foam_alpha_boost = null
+foam_distance_fade_start = null
+foam_distance_fade_end = null
+foam_mask_debug = null
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true

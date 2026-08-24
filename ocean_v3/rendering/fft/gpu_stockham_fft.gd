@@ -46,7 +46,12 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingA%d" % index)
 		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingB%d" % index)
 	displacement_rid = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".Displacement")
-	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, resource_prefix + ".Normal")
+	# Alpha is persistent foam state. Initialize it once so the first assemble
+	# dispatch cannot consume undefined contents; subsequent frames read/write
+	# the same GPU image without a readback.
+	var normal_initial_data := PackedByteArray()
+	normal_initial_data.resize(_config.resolution * _config.resolution * 8)
+	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, resource_prefix + ".Normal", normal_initial_data)
 
 	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0]])
 	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]])
@@ -81,7 +86,7 @@ func update_config(config: Resource) -> void:
 	_config = config
 
 
-func dispatch(render_time: float) -> void:
+func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	if not ready:
 		return
 	var groups = ceili(float(_config.resolution) / 8.0)
@@ -114,8 +119,12 @@ func dispatch(render_time: float) -> void:
 		1.0 / float(_config.resolution * _config.resolution),
 		_config.domain_size_m / float(_config.resolution),
 		0.0,
+		_config.foam_whitecap,
+		maxf(delta_s, 0.0) * _config.foam_amount,
+		maxf(delta_s, 0.0) * _config.foam_decay,
+		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
 	])
-	_rd.compute_list_set_push_constant(compute_list, assemble_push.to_byte_array(), 16)
+	_rd.compute_list_set_push_constant(compute_list, assemble_push.to_byte_array(), 32)
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	_rd.compute_list_end()
 

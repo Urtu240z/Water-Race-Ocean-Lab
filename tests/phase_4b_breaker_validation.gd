@@ -1,7 +1,7 @@
 extends SceneTree
 ## Phase 4B: valida el contrato del takeover de geometría local de breaker.
 ## Sin render ni readback: comprueba el contrato de shaders/inc, los mirrors CPU
-## de los perfiles del labio y el comportamiento determinista del pool de slots.
+## de edge/envelope y el comportamiento determinista del pool de slots.
 
 const PoolScript := preload("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
 const PropagationDataScript := preload("res://ocean_v3/coastal/coastal_propagation_data.gd")
@@ -23,13 +23,17 @@ func _initialize() -> void:
 
 func _validate_shader_contract() -> void:
 	var inc := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc")
+	var lip_common := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_breaker_lip_common.gdshaderinc")
 	var ribbon := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/breaker_lip.gdshader")
 	var surface := FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	var pool := FileAccess.get_file_as_string("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
 
-	_check(not inc.is_empty() and not ribbon.is_empty(), "inc y shader del labio existen")
+	_check(not inc.is_empty() and not lip_common.is_empty() and not ribbon.is_empty(), "inc, include del labio y shader existen")
 	_check(ribbon.contains("ocean_breaking_common.gdshaderinc"), "breaker_lip comparte el detector vía include")
+	_check(ribbon.contains("ocean_breaker_lip_common.gdshaderinc"), "breaker_lip incluye sus funciones específicas sin contaminar el clipmap")
 	_check(surface.contains("ocean_breaking_common.gdshaderinc"), "el clipmap incluye el detector compartido")
+	_check(not surface.contains("ocean_breaker_lip_common.gdshaderinc"), "el clipmap no incluye funciones específicas del ribbon")
+	_check(lip_common.contains("surface_displacement_break") and lip_common.contains("surface_slope_break") and lip_common.contains("breaker_edge_fade") and lip_common.contains("breaker_envelope"), "el include del ribbon contiene sólo sus funciones específicas activas")
 	_check(inc.contains("prebreak_indices_at") and inc.contains("long_height_at") and inc.contains("breaking_local_state_at"), "el inc expone el campo PREBREAK y el estado local")
 	# El trigger (long_height_at / prebreak_indices_at) no debe tocar MID/SHORT;
 	# las funciones de integración visual (surface_*) sí los usan, y eso es legal.
@@ -49,22 +53,6 @@ func _validate_shader_contract() -> void:
 
 
 func _validate_lip_mirrors() -> void:
-	var lift0 := PoolScript.lip_lift_profile(0.0)
-	var lift_crest := PoolScript.lip_lift_profile(0.545)
-	var lift1 := PoolScript.lip_lift_profile(1.0)
-	_check(lift0 < 0.05, "lift: 0 en el borde de aguas profundas")
-	_check(lift_crest > 0.95, "lift: máximo en la cresta (u=0.545)")
-	_check(lift1 < 0.05, "lift: 0 hacia el borde de costa")
-
-	var adv0 := PoolScript.lip_advance_profile(0.0)
-	var adv_crest := PoolScript.lip_advance_profile(0.545)
-	var adv_peak := PoolScript.lip_advance_profile(0.705)
-	var adv1 := PoolScript.lip_advance_profile(1.0)
-	_check(adv0 < 0.05, "advance: 0 detrás de la cresta")
-	_check(adv_crest < 0.05, "advance: 0 en la cresta (sólo adelanta delante)")
-	_check(adv_peak > 0.9 and adv_peak > adv_crest, "advance: pico justo delante de la cresta (adelantar horizontal)")
-	_check(adv1 < 0.05, "advance: 0 en el borde final")
-
 	_check(PoolScript.breaker_envelope(0.0) == 0.0, "envolvente: prebreak 0 -> 0 (sin estado binario)")
 	_check(PoolScript.breaker_envelope(0.5) > 0.99, "envolvente: prebreak alto -> 1")
 	_check(PoolScript.breaker_envelope(0.1) < PoolScript.breaker_envelope(0.3), "envolvente: monótona creciente")

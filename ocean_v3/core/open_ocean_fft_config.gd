@@ -31,6 +31,16 @@ enum SpectrumModel {
 # 5R.1: mezcla direccional JONSWAP. 0 = Hasselmann (direccional), 1 = flat/isotrópico.
 @export_range(0.0, 1.0, 0.05) var jonswap_spread := 0.2
 
+# Whitecaps: persistent compression mask stored in normal_map.a. These are
+# physical per-band controls; the root OceanV3 owns only the visual material
+# controls. Rates are interpreted per second and multiplied by the real frame
+# delta by GPUStockhamFFT before dispatch.
+@export var foam_enabled := true
+@export_range(0.0, 2.0, 0.01) var foam_whitecap := 0.5
+@export_range(0.0, 4.0, 0.01) var foam_amount := 0.8
+@export_range(0.0, 4.0, 0.01) var foam_decay := 1.0
+@export_range(0.0, 1.0, 0.01) var foam_cascade_weight := 1.0
+
 # Métricas de inicialización: no se actualizan por frame ni requieren readback GPU.
 var measured_hs_m := 0.0
 var out_of_band_energy_ratio := 0.0
@@ -49,6 +59,11 @@ func is_valid() -> bool:
 		and wind_speed_mps >= 0.0
 		and energy >= 0.0
 		and target_hs_m >= 0.0
+		and foam_whitecap >= 0.0
+		and foam_amount >= 0.0
+		and foam_decay >= 0.0
+		and foam_cascade_weight >= 0.0
+		and foam_cascade_weight <= 1.0
 		# La configuración pública es positiva; Tessendorf aplica lambda negativa
 		# internamente para comprimir crestas. No se permite choppiness negativo.
 		and choppiness >= 0.0

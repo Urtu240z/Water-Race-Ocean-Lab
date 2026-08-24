@@ -217,7 +217,7 @@ func _exit_tree() -> void:
 	_cascades.clear()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_publish_ready_textures()
 	surface.set_coastal_time(SimulationClock.get_render_time())
 	if not _enabled:
@@ -227,7 +227,9 @@ func _process(_delta: float) -> void:
 		if not is_visible_band:
 			continue
 		if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
-			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time()))
+			# The solver converts the actual frame delta into exponential decay and
+			# growth increments. No fixed-FPS assumption is made here.
+			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta))
 	_dispatch_requested = false
 
 

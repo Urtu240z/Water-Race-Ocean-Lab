@@ -59,11 +59,6 @@ uniform float coastal_warp_detj_safe = 0.5;
 uniform float coastal_k0_rad_m = 0.392699;
 // Parámetros propios del takeover 4B.
 uniform float sea_level_y = 0.0;
-uniform float breaker_lift_fraction = 0.55;
-uniform float breaker_advance_fraction = 0.45;
-uniform float breaker_lip_slope = 0.7;
-// 4C: ángulo máximo de curl antiguo (legacy; ya no usado en S4).
-uniform float breaker_curl_angle_deg = 90.0;
 // 4C-S2: LUT de cross-section aprobada (horneada offline). R = x_norm ABSOLUTO,
 // G = (y - y_stage0)/HEIGHT_REF, B = d(x_norm)/du, A = dG/du. 4C-S4: la usan
 // LIP/TAKEOVER (stage = lifecycle) y FORCE_LIP (stage = debug manual Q/E).
@@ -87,10 +82,10 @@ instance uniform float ribbon_wavelength_m;
 instance uniform float ribbon_width_m;
 // 4C-S4: crest-following lifecycle (por slot). tracked_crest_xz es la autoridad
 // de posición de la cross-section; breaker_lifecycle_stage avanza 0..1 con la
-// cresta; breaker_tracking_valid (0/1) apaga el breaker si no hay cresta fiable.
+// cresta. Un breaker ya activo continúa con su estado capturado si el detector
+// deja de ser válido.
 instance uniform vec2 tracked_crest_xz;
 instance uniform float breaker_lifecycle_stage;
-instance uniform float breaker_tracking_valid;
 // 4C-S4.1: continuidad temporal (fade in/out del lifecycle). Sólo LIP/TAKEOVER.
 instance uniform float breaker_lifecycle_alpha;
 // 4C-S4.2: intensidad y altura capturadas al spawn (autónomo). LIP/TAKEOVER ya
@@ -103,9 +98,10 @@ varying float breaker_env;
 varying float breaker_u;
 varying float breaker_v;
 
-// Detector GPU compartido (campo PREBREAK 4A + perfiles del labio 4B). Incluido
-// después de los uniforms para que las funciones compartidas puedan referenciarlos.
+// Detector GPU compartido. Incluido después de los uniforms para que sus
+// funciones puedan referenciarlos.
 #include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
+#include "res://ocean_v3/rendering/shaders/ocean_breaker_lip_common.gdshaderinc"
 
 vec3 breaker_heat(float value) {
 	vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));

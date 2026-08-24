@@ -26,7 +26,6 @@ enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, OFF }
 
 const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "OFF"]
 const BREAKER_GAMMA := 0.78
-const BREAKER_CREST_U := 0.545
 
 ## 4C-S4.2: detector de eventos de ola + breaker autónomo. OceanQuery ya NO
 ## trackea continuamente: sólo detecta candidatos y decide un spawn por ola.
@@ -144,21 +143,7 @@ var _detector_queried_slots_last_tick := 0
 var _detector_queried_points_last_tick := 0
 
 
-# --- Réplicas CPU de los perfiles del shader (breaker_lip.gdshader / inc).
-# Mismas fórmulas, para validación y HUD; el shader es la fuente de verdad. ---
-
-static func lip_lift_profile(u: float) -> float:
-	var rise := _smoothstep(0.40, BREAKER_CREST_U, u)
-	var fall := 1.0 - _smoothstep(BREAKER_CREST_U, 0.68, u)
-	return rise * fall
-
-
-static func lip_advance_profile(u: float) -> float:
-	var rise := _smoothstep(BREAKER_CREST_U, BREAKER_CREST_U + 0.08, u)
-	var fall := 1.0 - _smoothstep(BREAKER_CREST_U + 0.08, BREAKER_CREST_U + 0.20, u)
-	return rise * fall
-
-
+# --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
 static func edge_fade(u: float, v: float) -> float:
 	var uf := _smoothstep(0.02, 0.12, u) * (1.0 - _smoothstep(0.88, 0.98, u))
 	var vf := _smoothstep(0.04, 0.22, v) * (1.0 - _smoothstep(0.78, 0.96, v))
@@ -455,12 +440,12 @@ func _run_detector_tick(render_time: float) -> void:
 	## slots DETECT recorriendo circularmente desde _detector_cursor (ignora
 	## ACTIVE y COOLDOWN) y consulta TODOS en UNA única batch.
 	_detector_tick += 1
-	var anchor_count := _anchors.size()
+	var total_anchors := _anchors.size()
 	var selected: Array[int] = []
 	var inspected := 0
 	var cursor := _detector_cursor
-	while selected.size() < DETECTOR_SLOTS_PER_TICK and inspected < anchor_count:
-		var index: int = cursor % anchor_count
+	while selected.size() < DETECTOR_SLOTS_PER_TICK and inspected < total_anchors:
+		var index: int = cursor % total_anchors
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 		var active: bool = bool(entry.get("active", false))
 		var next_spawn: float = float(entry.get("next_spawn_time", 0.0))
@@ -468,7 +453,7 @@ func _run_detector_tick(render_time: float) -> void:
 			selected.append(index)
 		inspected += 1
 		cursor += 1
-	_detector_cursor = cursor % anchor_count
+	_detector_cursor = cursor % total_anchors
 	if selected.is_empty():
 		_detector_queried_slots_last_tick = 0
 		_detector_queried_points_last_tick = 0
@@ -548,17 +533,17 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	var age: float = maxf(0.0, render_time - spawn_time)
 	var life_t: float = clampf(age / duration, 0.0, 1.0)
 	if life_t >= 1.0:
-		var state := _base_state(entry)
-		state["active"] = false
-		state["valid"] = 0.0
-		state["stage"] = 0.0
-		state["alpha"] = 0.0
-		state["tracked_xz"] = Vector2(entry.get("spawn_xz", Vector2.ZERO))
-		state["detector_initialized"] = false
-		state["detector_prev_s"] = 0.0
-		state["life_t"] = 1.0
-		state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", render_time)) - render_time)
-		_publish_slot(index, state)
+		var finished_state := _base_state(entry)
+		finished_state["active"] = false
+		finished_state["valid"] = 0.0
+		finished_state["stage"] = 0.0
+		finished_state["alpha"] = 0.0
+		finished_state["tracked_xz"] = Vector2(entry.get("spawn_xz", Vector2.ZERO))
+		finished_state["detector_initialized"] = false
+		finished_state["detector_prev_s"] = 0.0
+		finished_state["life_t"] = 1.0
+		finished_state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", render_time)) - render_time)
+		_publish_slot(index, finished_state)
 		return
 	var stage: float = _smoothstep(0.0, STAGE_LIFE_END, life_t)
 	var fade_in: float = _smoothstep(0.0, FADE_IN_END_LIFE, life_t)
@@ -566,16 +551,16 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	var alpha: float = fade_in * fade_out
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	var breaker_xz: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO)) + Vector2(entry.get("spawn_direction", Vector2.RIGHT)) * (phase_speed * age)
-	var state := _base_state(entry)
-	state["active"] = true
-	state["valid"] = 1.0
-	state["stage"] = stage
-	state["alpha"] = alpha
-	state["tracked_xz"] = breaker_xz
-	state["life_t"] = life_t
-	state["phase_speed"] = phase_speed
-	state["remaining"] = 0.0
-	_publish_slot(index, state)
+	var active_state := _base_state(entry)
+	active_state["active"] = true
+	active_state["valid"] = 1.0
+	active_state["stage"] = stage
+	active_state["alpha"] = alpha
+	active_state["tracked_xz"] = breaker_xz
+	active_state["life_t"] = life_t
+	active_state["phase_speed"] = phase_speed
+	active_state["remaining"] = 0.0
+	_publish_slot(index, active_state)
 
 
 func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render_time: float) -> void:
@@ -590,15 +575,15 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	var candidate_s: float = float(candidate["s"])
 
 	if not detector_initialized:
-		var state := _base_state(entry)
-		state["detector_initialized"] = true
-		state["detector_prev_s"] = candidate_s
-		state["active"] = false
-		state["valid"] = 0.0
-		state["tracked_xz"] = Vector2(anchor["xz"])
-		state["candidate_s"] = candidate_s
-		state["remaining"] = maxf(0.0, next_spawn_time - render_time)
-		_publish_slot(index, state)
+		var initial_state := _base_state(entry)
+		initial_state["detector_initialized"] = true
+		initial_state["detector_prev_s"] = candidate_s
+		initial_state["active"] = false
+		initial_state["valid"] = 0.0
+		initial_state["tracked_xz"] = Vector2(anchor["xz"])
+		initial_state["candidate_s"] = candidate_s
+		initial_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+		_publish_slot(index, initial_state)
 		return
 
 	# Identificar nueva ola: wrap shoreward -> offshore.
@@ -612,30 +597,30 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	var in_window: bool = candidate_s >= s_start and candidate_s <= s_end
 	var cooldown_done: bool = render_time >= next_spawn_time
 
-	var state := _base_state(entry)
-	state["detector_initialized"] = true
-	state["detector_prev_s"] = detector_prev_s
-	state["wave_serial"] = wave_serial
-	state["active"] = false
-	state["valid"] = 0.0
-	state["stage"] = 0.0
-	state["alpha"] = 0.0
-	state["tracked_xz"] = Vector2(anchor["xz"])
-	state["candidate_s"] = candidate_s
-	state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+	var candidate_state := _base_state(entry)
+	candidate_state["detector_initialized"] = true
+	candidate_state["detector_prev_s"] = detector_prev_s
+	candidate_state["wave_serial"] = wave_serial
+	candidate_state["active"] = false
+	candidate_state["valid"] = 0.0
+	candidate_state["stage"] = 0.0
+	candidate_state["alpha"] = 0.0
+	candidate_state["tracked_xz"] = Vector2(anchor["xz"])
+	candidate_state["candidate_s"] = candidate_s
+	candidate_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
 
 	if in_window and advancing and wave_serial != last_decided and cooldown_done:
-		state["last_decided_wave_serial"] = wave_serial
+		candidate_state["last_decided_wave_serial"] = wave_serial
 		var score: float = _break_score(anchor, candidate, travel_dir)
 		var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, score)
 		var roll: float = _deterministic_roll(index, wave_serial)
-		state["score"] = score
-		state["probability"] = probability
-		state["roll"] = roll
+		candidate_state["score"] = score
+		candidate_state["probability"] = probability
+		candidate_state["roll"] = roll
 		if roll < probability:
-			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, score, render_time, state)
+			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, score, render_time, candidate_state)
 			return
-	_publish_slot(index, state)
+	_publish_slot(index, candidate_state)
 
 
 func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_dir: Vector2, wavelength: float, score: float, render_time: float, state: Dictionary) -> void:
@@ -678,11 +663,11 @@ func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2
 
 
 func _deterministic_roll(slot: int, wave_serial: int) -> float:
-	var seed: int = int(SimulationClock.simulation_seed) & 0x7FFFFFFF
-	seed ^= ((slot + 1) * 0x9E3779B1) & 0x7FFFFFFF
-	seed ^= ((wave_serial + 1) * 0x85EBCA6B) & 0x7FFFFFFF
+	var rng_seed: int = int(SimulationClock.simulation_seed) & 0x7FFFFFFF
+	rng_seed ^= ((slot + 1) * 0x9E3779B1) & 0x7FFFFFFF
+	rng_seed ^= ((wave_serial + 1) * 0x85EBCA6B) & 0x7FFFFFFF
 	var rng := RandomNumberGenerator.new()
-	rng.seed = seed
+	rng.seed = rng_seed
 	return rng.randf()
 
 
@@ -726,7 +711,6 @@ func _publish_slot(index: int, state: Dictionary) -> void:
 		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(state.get("tracked_xz", Vector2.ZERO)))
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", float(state.get("stage", 0.0)))
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", float(state.get("alpha", 0.0)))
-		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", float(state.get("valid", 0.0)))
 		ribbon.set_instance_shader_parameter(&"breaker_spawn_strength", float(state.get("spawn_strength", 0.0)))
 		ribbon.set_instance_shader_parameter(&"breaker_spawn_hs_m", float(state.get("spawn_local_hs", 0.0)))
 
@@ -754,7 +738,6 @@ func _clear_tracking() -> void:
 		ribbon.set_instance_shader_parameter(&"tracked_crest_xz", Vector2.ZERO)
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
 		ribbon.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
-		ribbon.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
 		ribbon.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
 		ribbon.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)
 		if index < _tracking.size():
@@ -879,7 +862,6 @@ func _rebuild_instances() -> void:
 		# 4C-S4.2: breaker autónomo (fallback = anchor + stage 0 + sin spawn).
 		instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
 		instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
-		instance.set_instance_shader_parameter(&"breaker_tracking_valid", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
 		instance.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)

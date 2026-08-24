@@ -74,11 +74,6 @@ uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform bool ocean_crest_sharpen_debug = false;
 // 5R.2: normal shading per-fragment + material físico de agua.
 uniform bool ocean_normal_fragment = false;   // A/B: FRAGMENT (true) vs VERTEX (false).
-// 5R.2 (superseded por 5R.3A): knob constante de roughness. El material de
-// producción usa ahora ocean_roughness_near/far (adaptativa); se conservan
-// declarados para no romper la API del material 5R.2.
-uniform float ocean_water_roughness = 0.08;  // dielectric agua (0.05–0.18).
-uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick, no usado).
 // 5R.3A: roughness adaptativa por distancia/footprint. Cerca ~near, lejos o
 // subpixel ~far. Sin texturas nuevas; sólo operaciones escalares en fragment.
 uniform float ocean_roughness_near = 0.055;
@@ -139,6 +134,20 @@ uniform float reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 
+// Persistent FFT whitecaps. The mask comes only from normal_map.a, which is
+// accumulated from horizontal displacement compression in assemble_maps.
+// These controls affect presentation only; they do not alter water optics.
+uniform bool foam_enabled = true;
+uniform vec4 foam_color : source_color = vec4(0.82, 0.91, 0.90, 1.0);
+uniform float foam_intensity : hint_range(0.0, 4.0, 0.01) = 1.0;
+uniform float foam_threshold : hint_range(0.0, 1.0, 0.01) = 0.18;
+uniform float foam_contrast : hint_range(0.1, 4.0, 0.01) = 1.35;
+uniform float foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.88;
+uniform float foam_alpha_boost : hint_range(0.0, 1.0, 0.01) = 0.18;
+uniform float foam_distance_fade_start : hint_range(0.0, 4000.0, 1.0) = 180.0;
+uniform float foam_distance_fade_end : hint_range(1.0, 5000.0, 1.0) = 900.0;
+uniform bool foam_mask_debug = false;
+
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
@@ -180,7 +189,7 @@ varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cres
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
 // warp_deep_sample, warp_jacobian_sample, coastal_long_state, long_height_at,
-// breaking_local_state_at, prebreak_indices_at y los perfiles del labio 4B.
+// breaking_local_state_at y prebreak_indices_at.
 #include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
 
 vec3 level_color(float level) {
@@ -488,6 +497,49 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 }
 
 
+// 5R.4: compose the persistent alpha channel with the same LONG split/MID/
+// SHORT spatial weights as the FFT normal path. Surface Detail is deliberately
+// absent: it is decorative normal detail, not a whitecap source.
+float pixel_ocean_foam(vec2 world_xz) {
+	if (!foam_enabled) {
+		return 0.0;
+	}
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
+	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+
+	vec2 coast_uv = coastal_uv(world_xz);
+	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
+	bool coast_active = has_coastal_data(coast_uv, field_data);
+	bool coast_transform_active = coastal_transform_enabled && coast_active;
+	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
+	if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
+		warp_sample = warp_deep_sample(world_xz);
+	}
+	float warp_confidence = warp_sample.z;
+	vec2 deep_xz = warp_sample.xy;
+
+	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+
+	float coastal_foam_open = textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).a;
+	float coastal_foam_warped = textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).a;
+	float coastal_foam = mix(coastal_foam_open, coastal_foam_warped, warp_confidence) * coastal_gain;
+	float remainder_foam = textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).a;
+	float mid_foam = textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).a;
+	float short_foam = textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
+
+	float combined = coastal_foam * coastal_weight + remainder_foam * remainder_weight;
+	combined += mid_foam * mid_weight * mid_short_weight;
+	combined += short_foam * short_weight * mid_short_weight;
+	float total_weight = coastal_weight + remainder_weight + mid_weight * mid_short_weight + short_weight * mid_short_weight;
+	return clamp(combined / max(total_weight, 0.001), 0.0, 1.0);
+}
+
+
 vec2 surface_safe_direction(vec2 direction, vec2 fallback) {
 	float magnitude = length(direction);
 	return magnitude > 0.00001 ? direction / magnitude : fallback;
@@ -550,6 +602,20 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 
 void fragment() {
 	vec3 color = base_color;
+	float foam_mask = 0.0;
+	if (foam_enabled) {
+		float raw_foam = pixel_ocean_foam(ocean_world_xz);
+		float shaped_foam = pow(clamp(raw_foam, 0.0, 1.0), max(foam_contrast, 0.01));
+		float threshold_end = min(1.0, foam_threshold + 0.22);
+		float distance_fade = 1.0 - smoothstep(
+			foam_distance_fade_start,
+			max(foam_distance_fade_end, foam_distance_fade_start + 0.001),
+			distance(ocean_world_xz, camera_world_xz)
+		);
+		foam_mask = smoothstep(foam_threshold, max(threshold_end, foam_threshold + 0.001), shaped_foam)
+			* clamp(foam_intensity, 0.0, 4.0) * distance_fade;
+		foam_mask = clamp(foam_mask, 0.0, 1.0);
+	}
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
 	} else if (debug_mode == 3) {
@@ -611,8 +677,13 @@ void fragment() {
 
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
+	if (foam_mask_debug) {
+		// El camino unlit de abajo muestra la máscara como blanco/negro en
+		// emisión, evitando alterar la óptica de producción.
+		color = vec3(foam_mask);
+	}
 
-	bool unlit = debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = foam_mask_debug || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -780,6 +851,7 @@ void fragment() {
 				1.0
 			);
 
+			final_color = mix(final_color, foam_color.rgb, foam_mask);
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
 			ROUGHNESS = mix(
@@ -787,12 +859,13 @@ void fragment() {
 				ocean_roughness_far,
 				max(distance_opacity, fresnel)
 			);
+			ROUGHNESS = mix(ROUGHNESS, foam_roughness, foam_mask);
 			SPECULAR = water_specular;
 			METALLIC = 0.0;
-			ALPHA = final_alpha;
+			ALPHA = clamp(final_alpha + foam_mask * foam_alpha_boost, 0.0, 1.0);
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
-			ALBEDO = base_color;
+			ALBEDO = mix(base_color, foam_color.rgb, foam_mask);
 			EMISSION = vec3(0.0);
 			float distance_factor = smoothstep(
 				ocean_roughness_distance_m.x,
@@ -804,9 +877,10 @@ void fragment() {
 				ocean_roughness_far,
 				distance_factor
 			);
+			ROUGHNESS = mix(ROUGHNESS, foam_roughness, foam_mask);
 			SPECULAR = water_specular;
 			METALLIC = 0.0;
-			ALPHA = 1.0;
+			ALPHA = clamp(1.0 + foam_mask * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
 }

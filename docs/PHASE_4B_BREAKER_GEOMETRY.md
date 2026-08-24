@@ -32,7 +32,8 @@ Reglas de la fase:
 OpenOceanFFTModule (open_ocean_fft_module.gd)
 └─ OceanClipmapSurface (ocean_clipmap_surface.gd)  -> ocean_surface.gdshader
 └─ BreakerRibbonPool (breaker_ribbon_pool.gd)      -> breaker_lip.gdshader
-                                                    └─ ocean_breaking_common.gdshaderinc
+                                                    ├─ ocean_breaking_common.gdshaderinc
+                                                    └─ ocean_breaker_lip_common.gdshaderinc
 ```
 
 El detector GPU de 4A (warp world→deep, shoaling, LONG_COASTAL +
@@ -40,7 +41,9 @@ LONG_REMAINDER, dirección local, lambda/16, índices continuos) se extrajo a
 `ocean_breaking_common.gdshaderinc`, incluido por ambos shaders: el clipmap
 sigue evaluando exactamente el mismo campo (comportamiento idéntico, verificado
 por `tests/phase_4a_prebreak_validation.gd`) y el ribetón reutiliza el mismo
-código sin duplicarlo.
+código sin duplicarlo. Las funciones de integración de superficie y de alpha
+del ribbon viven en `ocean_breaker_lip_common.gdshaderinc`, incluido sólo por
+`breaker_lip.gdshader`.
 
 `BreakerRibbonPool` (hijo del módulo, creado en `_ready`) gestiona un pool
 fijo de slots `MeshInstance3D` que comparten una malla plantilla unitaria
@@ -67,10 +70,9 @@ Todo el cálculo vive en el vertex shader del ribetón (`breaker_lip.gdshader`):
   `surface_slope_break` (mismas 4 cascadas, warp, shoaling, fades y
   composición que el clipmap): con envolvente 0 el ribetón queda pegado a la
   ola visible y su alpha cae a 0 (sin stain ni z-fighting).
-- El labio levanta y ADELANTA: `lift = env·Hs_local·fraction·lift_profile(u)` y
-  `advance = env·Hs_local·fraction·advance_profile(u)` a lo largo de la
-  dirección de propagación (desplazamiento horizontal, no sólo elevación de
-  vértices), más una inclinación de normal hacia costa.
+- La cross-section aprobada se obtiene de la LUT: su posición, altura y
+  derivadas controlan el levantamiento, el avance y la normal del labio. No hay
+  perfiles paramétricos legacy de lift/advance/curl en runtime.
 - Al crecer el campo PREBREAK (la cresta LONG pasa por el slot) el labio sube y
   se adelanta; al decrecer, vuelve a integrarse. Como el campo es continuo en
   espacio y tiempo, el labio "cabalga" la misma cresta sin popping: no hay
@@ -96,8 +98,9 @@ apagado, alpha = 0.
 - `anchor_min_spacing_m` (9.0): separación mínima entre slots.
 - `breaker_fade_range_m` (6..200): fade de distancia.
 
-`breaker_lip.gdshader` (defaults): `breaker_lift_fraction` 0.55,
-`breaker_advance_fraction` 0.45, `breaker_lip_slope` 0.7, `breaker_debug_mode` 0.
+`breaker_lip.gdshader`: la geometría de producción usa
+`breaker_profile_lut`; los controles activos son `breaker_profile_height_hs`,
+`breaker_profile_length_scale` y `breaker_profile_forward_sign`.
 
 ## Controles de debug
 

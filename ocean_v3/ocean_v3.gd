@@ -202,6 +202,58 @@ extends Node3D
 		_request_visual_sync()
 
 
+@export_group("Whitecaps Foam")
+@export var foam_enabled: bool = true:
+	set(value):
+		foam_enabled = value
+		_request_visual_sync()
+
+@export var foam_color: Color = Color(0.82, 0.91, 0.90, 1.0):
+	set(value):
+		foam_color = value
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var foam_intensity: float = 1.0:
+	set(value):
+		foam_intensity = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_threshold: float = 0.18:
+	set(value):
+		foam_threshold = value
+		_request_visual_sync()
+
+@export_range(0.1, 4.0, 0.01) var foam_contrast: float = 1.35:
+	set(value):
+		foam_contrast = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_roughness: float = 0.88:
+	set(value):
+		foam_roughness = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var foam_alpha_boost: float = 0.18:
+	set(value):
+		foam_alpha_boost = value
+		_request_visual_sync()
+
+@export_range(0.0, 4000.0, 1.0) var foam_distance_fade_start: float = 180.0:
+	set(value):
+		foam_distance_fade_start = value
+		_request_visual_sync()
+
+@export_range(1.0, 5000.0, 1.0) var foam_distance_fade_end: float = 900.0:
+	set(value):
+		foam_distance_fade_end = value
+		_request_visual_sync()
+
+@export var foam_mask_debug: bool = false:
+	set(value):
+		foam_mask_debug = value
+		_request_visual_sync()
+
+
 var _visual_sync_pending := true
 
 
@@ -283,5 +335,16 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"ocean_roughness_near", near_roughness)
 	material.set_shader_parameter(&"ocean_roughness_far", horizon_roughness)
 	material.set_shader_parameter(&"water_specular", water_specular)
+
+	material.set_shader_parameter(&"foam_enabled", foam_enabled)
+	material.set_shader_parameter(&"foam_color", foam_color)
+	material.set_shader_parameter(&"foam_intensity", foam_intensity)
+	material.set_shader_parameter(&"foam_threshold", foam_threshold)
+	material.set_shader_parameter(&"foam_contrast", foam_contrast)
+	material.set_shader_parameter(&"foam_roughness", foam_roughness)
+	material.set_shader_parameter(&"foam_alpha_boost", foam_alpha_boost)
+	material.set_shader_parameter(&"foam_distance_fade_start", foam_distance_fade_start)
+	material.set_shader_parameter(&"foam_distance_fade_end", foam_distance_fade_end)
+	material.set_shader_parameter(&"foam_mask_debug", foam_mask_debug)
 
 	_visual_sync_pending = false
