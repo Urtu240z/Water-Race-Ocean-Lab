@@ -35,9 +35,11 @@ The physical controls live in `OpenOceanFFTConfig` and are populated by
 - MID contributes with physical weight `0.35`.
 - SHORT is disabled with weight `0.0`.
 
-CALM uses a high compression threshold and low growth, RACE is occasional, and
-ROUGH lowers the threshold and increases growth while retaining exponential
-decay. The two LONG split cascades remain part of the FFT path; breakers do not
+CALM uses a low compression threshold and low growth, RACE is occasional, and
+ROUGH raises the threshold and increases growth while retaining exponential
+decay. Since `foam_source = max(foam_whitecap - J, 0)`, a higher threshold is
+more permissive and a lower threshold is more restrictive. The two LONG split
+cascades remain part of the FFT path; breakers do not
 participate in this mask.
 
 ## Material and debug

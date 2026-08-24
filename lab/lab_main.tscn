@@ -89,6 +89,7 @@ horizon_water_alpha = 1.0
 fresnel_power = 9.4
 near_roughness = 0.2
 water_specular = 0.4
+foam_debug_mode = null
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
