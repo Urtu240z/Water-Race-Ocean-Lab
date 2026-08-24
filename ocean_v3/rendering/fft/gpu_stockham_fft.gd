@@ -111,7 +111,7 @@ func diagnostic_state() -> Dictionary:
 		"surface_foam_rid": surface_foam_rid.get_id() if surface_foam_rid.is_valid() else -1,
 		"previous_displacement_rid": previous_displacement_rid.get_id() if previous_displacement_rid.is_valid() else -1,
 		"foam_resolution": _foam_resolution,
-		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2,
+		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2 if _has_crest_foam() else 0,
 		"surface_foam_gpu_bytes": _foam_resolution * _foam_resolution * 2 * 2 if _is_surface_foam_source() else 0,
 		"previous_displacement_gpu_bytes": _config.resolution * _config.resolution * 4 * 3,
 	}
@@ -192,31 +192,32 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	_rd.compute_list_add_barrier(compute_list)
 
-	# Fresh whitecaps are born from current J; only residual history is advected.
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
-	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
-	_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
-	# update_foam receives rates per second and the real frame delta; the shader
-	# applies the exponential attack/release and residual decay internally.
-	var foam_push := PackedFloat32Array([
-		_config.foam_whitecap,
-		maxf(_config.foam_amount, 0.0) * 7.5,
-		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
-		_foam_deposit_strength,
-		maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
-		maxf(delta_s, 0.0),
-		1.0 if _foam_advection_enabled else 0.0,
-		_foam_advection_strength,
-		_config.domain_size_m,
-		0.0,
-		0.0,
-		0.0,
-	])
-	_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
-	_rd.compute_list_dispatch(compute_list, foam_groups, foam_groups, 1)
-	_foam_read_index = 1 - _foam_read_index
-	foam_rid = _foam_ping[_foam_read_index]
-	_rd.compute_list_add_barrier(compute_list)
+	if _has_crest_foam():
+		# Fresh whitecaps are born from current J; only residual history is advected.
+		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
+		_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
+		# update_foam receives rates per second and the real frame delta; the shader
+		# applies the exponential attack/release and residual decay internally.
+		var foam_push := PackedFloat32Array([
+			_config.foam_whitecap,
+			maxf(_config.foam_amount, 0.0) * 7.5,
+			_config.foam_cascade_weight if _config.foam_enabled else 0.0,
+			_foam_deposit_strength,
+			maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
+			maxf(delta_s, 0.0),
+			1.0 if _foam_advection_enabled else 0.0,
+			_foam_advection_strength,
+			_config.domain_size_m,
+			0.0,
+			0.0,
+			0.0,
+		])
+		_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
+		_rd.compute_list_dispatch(compute_list, foam_groups, foam_groups, 1)
+		_foam_read_index = 1 - _foam_read_index
+		foam_rid = _foam_ping[_foam_read_index]
+		_rd.compute_list_add_barrier(compute_list)
 
 	if _is_surface_foam_source():
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[5])
@@ -338,10 +339,11 @@ func _create_image_set(shader: RID, textures: Array[RID]) -> RID:
 
 
 func _create_foam_resources(resource_prefix: String) -> void:
-	var initial_data := PackedByteArray()
-	initial_data.resize(_foam_resolution * _foam_resolution * 4)
-	_foam_ping[0] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamA", initial_data, false, _foam_resolution)
-	_foam_ping[1] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamB", initial_data, false, _foam_resolution)
+	if _has_crest_foam():
+		var initial_data := PackedByteArray()
+		initial_data.resize(_foam_resolution * _foam_resolution * 4)
+		_foam_ping[0] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamA", initial_data, false, _foam_resolution)
+		_foam_ping[1] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamB", initial_data, false, _foam_resolution)
 	if _is_surface_foam_source():
 		var surface_initial_data := PackedByteArray()
 		surface_initial_data.resize(_foam_resolution * _foam_resolution * 2)
@@ -359,9 +361,11 @@ func _create_foam_resources(resource_prefix: String) -> void:
 	sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 	_linear_repeat_sampler = _rd.sampler_create(sampler_state)
 	_foam_sets.clear()
+	_surface_foam_sets.clear()
 	for snapshot_index in 3:
 		for foam_index in 2:
-			_foam_sets.append(_create_foam_set(_shaders[3], displacement_rid, _previous_displacement_ping[snapshot_index], _foam_ping[foam_index], _foam_ping[1 - foam_index]))
+			if _has_crest_foam():
+				_foam_sets.append(_create_foam_set(_shaders[3], displacement_rid, _previous_displacement_ping[snapshot_index], _foam_ping[foam_index], _foam_ping[1 - foam_index]))
 			if _is_surface_foam_source():
 				_surface_foam_sets.append(_create_surface_foam_set(_shaders[5], displacement_rid, _previous_displacement_ping[snapshot_index], _surface_foam_ping[foam_index], _surface_foam_ping[1 - foam_index]))
 	_store_displacement_sets.clear()
@@ -370,7 +374,7 @@ func _create_foam_resources(resource_prefix: String) -> void:
 	_foam_read_index = 0
 	_surface_foam_read_index = 0
 	_previous_displacement_read_index = 0
-	foam_rid = _foam_ping[0]
+	foam_rid = _foam_ping[0] if _has_crest_foam() else RID()
 	surface_foam_rid = _surface_foam_ping[0] if _is_surface_foam_source() else RID()
 	previous_displacement_rid = _previous_displacement_ping[0]
 
@@ -463,11 +467,14 @@ func _free_foam_resources() -> void:
 
 
 func _foam_resources_ready() -> bool:
-	if _foam_sets.size() != 6 or _store_displacement_sets.size() != 3:
+	if _store_displacement_sets.size() != 3:
 		return false
-	for uniform_set in _foam_sets:
-		if not uniform_set.is_valid():
+	if _has_crest_foam():
+		if _foam_sets.size() != 6:
 			return false
+		for uniform_set in _foam_sets:
+			if not uniform_set.is_valid():
+				return false
 	for uniform_set in _store_displacement_sets:
 		if not uniform_set.is_valid():
 			return false
@@ -481,7 +488,11 @@ func _foam_resources_ready() -> bool:
 
 
 func _is_surface_foam_source() -> bool:
-	return _config != null and _config.id == &"SHORT"
+	return _config != null and _config.id == &"SURFACE_FOAM"
+
+
+func _has_crest_foam() -> bool:
+	return _config != null and _config.id != &"SURFACE_FOAM"
 
 
 func _validated_foam_resolution(value: int) -> int:

@@ -16,6 +16,7 @@ uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_displacement : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_mid : repeat_enable, filter_linear;
@@ -179,7 +180,8 @@ uniform bool foam_breakup_texture_ready = false;
 // Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
 // GPU; these controls only shape its material presentation.
 uniform bool surface_foam_enabled = true;
-uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.05;
+uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
+uniform float surface_foam_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
 uniform float surface_foam_strength : hint_range(0.0, 4.0, 0.01) = 1.0;
 uniform float surface_foam_threshold_visual : hint_range(0.0, 1.0, 0.01) = 0.0;
 uniform float surface_foam_contrast_visual : hint_range(0.1, 4.0, 0.01) = 1.0;
@@ -205,7 +207,8 @@ uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 13 FOAM_NORMAL, 14 FOAM_SPECTRAL_DETAIL, 15 FOAM_EROSION_MASK,
 // 16 FOAM_ERODED_RESIDUAL, 17 FOAM_ERODED_FRESH, 18 SURFACE_FOAM_SOURCE,
 // 19 SURFACE_FOAM_RAW, 20 SURFACE_FOAM_SHAPED, 21 CREST_FOAM_ONLY,
-// 22 SURFACE_PLUS_CREST.
+// 22 SURFACE_PLUS_CREST, 23 SURFACE_FOAM_JACOBIAN,
+// 24 SURFACE_FOAM_SOURCE_SHORT_LEGACY.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -851,7 +854,8 @@ float surface_foam_weight(vec2 world_xz) {
 }
 
 
-// Surface foam is a separate R16F accumulator fed exclusively by SHORT J.
+// Surface foam is a separate R16F accumulator fed exclusively by its dedicated
+// technical spectrum; it never contributes displacement to the clipmap.
 // It shares only sampling/filtering policy with crest foam, not state or rates.
 float pixel_ocean_surface_foam_raw(vec2 world_xz) {
 	if (!surface_foam_enabled) {
@@ -859,17 +863,30 @@ float pixel_ocean_surface_foam_raw(vec2 world_xz) {
 	}
 	float surface_raw = sample_foam_field_filtered(
 		surface_foam_short,
-		spectrum_uv(world_xz, domain_short_m),
+		spectrum_uv(world_xz, surface_foam_domain_m),
 		world_xz,
-		domain_short_m
+		surface_foam_domain_m
 	).x;
 	return clamp(surface_raw * surface_foam_weight(world_xz), 0.0, 1.0);
 }
 
 
-// Diagnostic only: matches the dedicated compute path's interpolated SHORT-J
-// threshold before accumulation. It deliberately does not involve LONG/MID.
+float pixel_ocean_surface_foam_jacobian(vec2 world_xz) {
+	float jacobian = textureLod(surface_foam_displacement, spectrum_uv(world_xz, surface_foam_domain_m), 0.0).a;
+	return isnan(jacobian) || isinf(jacobian) ? 1.0 : jacobian;
+}
+
+
+// Diagnostic only: matches the dedicated compute path's interpolated J
+// threshold before accumulation. It deliberately does not involve LONG/MID/SHORT.
 float pixel_ocean_surface_foam_source(vec2 world_xz) {
+	return clamp(max(0.0, surface_foam_whitecap - pixel_ocean_surface_foam_jacobian(world_xz)) * surface_foam_weight(world_xz), 0.0, 1.0);
+}
+
+
+// Temporary A/B reference: the former SHORT-driven source, never used by the
+// production accumulator after the dedicated spectrum was introduced.
+float pixel_ocean_surface_foam_source_short_legacy(vec2 world_xz) {
 	float short_j = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
 	if (isnan(short_j) || isinf(short_j)) {
 		short_j = 1.0;
@@ -1121,6 +1138,8 @@ void fragment() {
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	float surface_foam_raw = pixel_ocean_surface_foam_raw(ocean_base_xz);
 	float surface_foam_source = pixel_ocean_surface_foam_source(ocean_base_xz);
+	float surface_foam_jacobian = pixel_ocean_surface_foam_jacobian(ocean_base_xz);
+	float surface_foam_source_short_legacy = pixel_ocean_surface_foam_source_short_legacy(ocean_base_xz);
 	float surface_foam_shaped = 0.0;
 	float foam_mask = 0.0;
 	float foam_fresh_mask = 0.0;
@@ -1286,6 +1305,10 @@ void fragment() {
 		color = vec3(crest_foam_mask);
 	} else if (foam_debug_mode == 22) {
 		color = vec3(foam_mask);
+	} else if (foam_debug_mode == 23) {
+		color = vec3(clamp(surface_foam_jacobian, 0.0, 1.0));
+	} else if (foam_debug_mode == 24) {
+		color = vec3(surface_foam_source_short_legacy);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

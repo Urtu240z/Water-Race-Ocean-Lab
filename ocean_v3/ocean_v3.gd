@@ -349,12 +349,12 @@ extends Node3D
 		surface_foam_enabled = value
 		_request_visual_sync()
 
-@export_range(0.0, 1.5, 0.01) var surface_foam_whitecap: float = 0.05:
+@export_range(0.0, 1.5, 0.01) var surface_foam_whitecap: float = 0.0:
 	set(value):
 		surface_foam_whitecap = value
 		_request_visual_sync()
 
-@export_range(0.0, 10.0, 0.01) var surface_foam_amount: float = 8.0:
+@export_range(0.0, 10.0, 0.01) var surface_foam_amount: float = 8.57:
 	set(value):
 		surface_foam_amount = value
 		_request_visual_sync()
@@ -419,6 +419,58 @@ extends Node3D
 		surface_foam_specular = value
 		_request_visual_sync()
 
+@export_category("Whitecaps Foam / Surface Foam Spectrum")
+@export_enum("256", "512") var surface_foam_fft_resolution: int = 256:
+	set(value):
+		surface_foam_fft_resolution = 512 if value > 256 else 256
+		_request_visual_sync()
+
+@export_range(8.0, 256.0, 0.5) var surface_foam_domain_m: float = 88.0:
+	set(value):
+		surface_foam_domain_m = value
+		_request_visual_sync()
+
+@export_range(0.1, 60.0, 0.1) var surface_foam_wind_speed_mps: float = 25.0:
+	set(value):
+		surface_foam_wind_speed_mps = value
+		_request_visual_sync()
+
+@export_range(-180.0, 180.0, 0.5) var surface_foam_wind_direction_deg: float = 110.0:
+	set(value):
+		surface_foam_wind_direction_deg = value
+		_request_visual_sync()
+
+@export_range(1.0, 50000.0, 1.0) var surface_foam_fetch_m: float = 6000.0:
+	set(value):
+		surface_foam_fetch_m = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var surface_foam_swell: float = 0.78:
+	set(value):
+		surface_foam_swell = value
+		_request_visual_sync()
+
+# JONSWAP semantics: 0 = narrow/full Hasselmann directionality; 1 = isotropic.
+@export_range(0.0, 1.0, 0.01) var surface_foam_directional_spread: float = 0.0:
+	set(value):
+		surface_foam_directional_spread = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var surface_foam_detail: float = 1.0:
+	set(value):
+		surface_foam_detail = value
+		_request_visual_sync()
+
+@export_range(0.25, 32.0, 0.25) var surface_foam_min_wavelength_m: float = 2.0:
+	set(value):
+		surface_foam_min_wavelength_m = value
+		_request_visual_sync()
+
+@export_range(1.0, 88.0, 0.25) var surface_foam_max_wavelength_m: float = 32.0:
+	set(value):
+		surface_foam_max_wavelength_m = value
+		_request_visual_sync()
+
 @export_category("Whitecaps Foam Shaping")
 @export var foam_spectral_erosion_enabled: bool = false:
 	set(value):
@@ -450,9 +502,9 @@ extends Node3D
 		foam_erosion_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST") var foam_debug_mode: int = 0:
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_SOURCE_SHORT_LEGACY") var foam_debug_mode: int = 18:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 22)
+		foam_debug_mode = clampi(value, 0, 24)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -609,6 +661,18 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_whitecap,
 				surface_foam_amount,
 				surface_foam_advection_strength
+			)
+			fft_module.set_surface_foam_spectrum_settings(
+				surface_foam_fft_resolution,
+				surface_foam_domain_m,
+				surface_foam_wind_speed_mps,
+				surface_foam_wind_direction_deg,
+				surface_foam_fetch_m,
+				surface_foam_swell,
+				surface_foam_directional_spread,
+				surface_foam_detail,
+				surface_foam_min_wavelength_m,
+				surface_foam_max_wavelength_m
 			)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:

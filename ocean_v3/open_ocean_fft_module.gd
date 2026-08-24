@@ -94,9 +94,25 @@ var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
 var _surface_foam_enabled := true
-var _surface_foam_whitecap := 0.05
-var _surface_foam_amount := 8.0
+var _surface_foam_whitecap := 0.0
+var _surface_foam_amount := 8.57
 var _surface_foam_advection_strength := 0.0
+# Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
+var _surface_foam_fft_resolution := 256
+var _surface_foam_domain_m := 88.0
+var _surface_foam_wind_speed_mps := 25.0
+var _surface_foam_wind_direction_deg := 110.0
+var _surface_foam_fetch_m := 6000.0
+var _surface_foam_swell := 0.78
+# JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
+var _surface_foam_directional_spread := 0.0
+var _surface_foam_detail := 1.0
+var _surface_foam_min_wavelength_m := 2.0
+var _surface_foam_max_wavelength_m := 32.0
+var _surface_foam_config: OpenOceanFFTConfig = null
+var _surface_foam_solver = null
+var _surface_foam_texture := Texture2DRD.new()
+var _surface_foam_displacement := Texture2DRD.new()
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -154,6 +170,7 @@ func _ready() -> void:
 	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
 	for index in [1, 2]:
 		_cascades.append(_make_cascade(configs[index], h0_datas[index], "Ocean2B.%s" % configs[index].id))
+	_initialize_surface_foam_solver()
 
 	_enabled = enabled_on_start
 	dispatches_per_update = 0
@@ -177,7 +194,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _cascades[3].surface_foam)
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_displacement, _surface_foam_domain_m)
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -241,6 +258,12 @@ func _exit_tree() -> void:
 		cascade.previous_displacement.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
+	_surface_foam_texture.texture_rd_rid = RID()
+	_surface_foam_displacement.texture_rd_rid = RID()
+	if _surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
+	_surface_foam_solver = null
+	_surface_foam_config = null
 
 
 func _process(delta: float) -> void:
@@ -259,6 +282,8 @@ func _process(delta: float) -> void:
 			# The snapshot ring exposes the exact old displacement consumed by this
 			# update, while the copy writes a different ring entry for next frame.
 			cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
+	if _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+		RenderingServer.call_on_render_thread(_surface_foam_solver.dispatch.bind(SimulationClock.get_render_time(), delta))
 	_dispatch_requested = false
 
 
@@ -929,6 +954,11 @@ func gpu_memory_bytes() -> int:
 		total += int(solver_state.get("foam_gpu_bytes", 0))
 		total += int(solver_state.get("surface_foam_gpu_bytes", 0))
 		total += int(solver_state.get("previous_displacement_gpu_bytes", 0))
+	if _surface_foam_solver != null and _surface_foam_config != null:
+		var surface_foam_state: Dictionary = _surface_foam_solver.diagnostic_state()
+		total += _surface_foam_config.approximate_gpu_bytes()
+		total += int(surface_foam_state.get("surface_foam_gpu_bytes", 0))
+		total += int(surface_foam_state.get("previous_displacement_gpu_bytes", 0))
 	return total
 
 
@@ -941,6 +971,67 @@ func combined_hs_m() -> float:
 
 func _build_h0(config: Resource, simulation_seed: int) -> PackedByteArray:
 	return SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id))
+
+
+func _make_surface_foam_config() -> OpenOceanFFTConfig:
+	var config := FFTConfigScript.new()
+	config.id = &"SURFACE_FOAM"
+	config.resolution = _surface_foam_fft_resolution
+	config.domain_size_m = _surface_foam_domain_m
+	config.min_wavelength_m = _surface_foam_min_wavelength_m
+	config.max_wavelength_m = _surface_foam_max_wavelength_m
+	config.transition_width_m = 0.75
+	var direction := deg_to_rad(_surface_foam_wind_direction_deg)
+	config.wind_direction = Vector2(cos(direction), sin(direction))
+	config.wind_speed_mps = _surface_foam_wind_speed_mps
+	config.fetch_length_m = _surface_foam_fetch_m
+	config.swell = _surface_foam_swell
+	config.detail = _surface_foam_detail
+	# 0 is the narrow/full Hasselmann directional distribution; 1 is flat.
+	config.jonswap_spread = _surface_foam_directional_spread
+	config.spectrum_model = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
+	# Technical amplitude only: this spectrum is never included in ocean Hs/query.
+	config.target_hs_m = 2.5
+	config.choppiness = 1.25
+	config.foam_enabled = false
+	config.foam_cascade_weight = 0.0
+	return config
+
+
+func _initialize_surface_foam_solver() -> void:
+	_surface_foam_config = _make_surface_foam_config()
+	if not _surface_foam_config.is_valid():
+		push_error("Configuración FFT de Surface Foam inválida.")
+		return
+	_surface_foam_solver = SolverScript.new()
+	var h0_data := _build_h0(_surface_foam_config, SimulationClock.simulation_seed)
+	# The existing 1024² R16F accumulator remains independent from the 256² FFT.
+	RenderingServer.call_on_render_thread(_surface_foam_solver.initialize.bind(
+		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", DEFAULT_FOAM_RESOLUTION
+	))
+	RenderingServer.call_on_render_thread(_surface_foam_solver.set_surface_foam_settings.bind(
+		_surface_foam_enabled, _surface_foam_whitecap, _surface_foam_amount,
+		_surface_foam_advection_strength
+	))
+
+
+func _rebuild_surface_foam_solver() -> void:
+	_surface_foam_texture.texture_rd_rid = RID()
+	_surface_foam_displacement.texture_rd_rid = RID()
+	if _surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
+	_surface_foam_solver = null
+	_initialize_surface_foam_solver()
+	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_displacement, _surface_foam_domain_m)
+	_dispatch_requested = true
+
+
+func _rebuild_surface_foam_h0(simulation_seed: int) -> void:
+	if _surface_foam_solver == null or _surface_foam_config == null:
+		return
+	RenderingServer.call_on_render_thread(_surface_foam_solver.upload_h0.bind(
+		_build_h0(_surface_foam_config, simulation_seed)
+	))
 
 
 func _textures_for(key: StringName) -> Array[Texture2DRD]:
@@ -958,9 +1049,10 @@ func _publish_ready_textures() -> void:
 			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
 			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
 		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
-		if cascade.config.id == &"SHORT":
-			cascade.surface_foam.texture_rd_rid = cascade.solver.surface_foam_rid
 		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
+	if _surface_foam_solver != null and _surface_foam_solver.ready:
+		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
+		_surface_foam_displacement.texture_rd_rid = _surface_foam_solver.displacement_rid
 	_textures_published = true
 
 
@@ -983,15 +1075,46 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, ad
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
-	for cascade in _cascades:
-		if cascade.config.id != &"SHORT":
-			continue
-		RenderingServer.call_on_render_thread(cascade.solver.set_surface_foam_settings.bind(
+	if _surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_solver.set_surface_foam_settings.bind(
 			_surface_foam_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
 			_surface_foam_advection_strength
 		))
+
+
+func set_surface_foam_spectrum_settings(resolution: int, domain_m: float,
+		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
+		directional_spread: float, detail: float, min_wavelength_m: float,
+		max_wavelength_m: float) -> void:
+	var next_resolution := 512 if resolution > 256 else 256
+	var next_domain := maxf(domain_m, 8.0)
+	var next_min_wavelength := maxf(min_wavelength_m, 0.25)
+	var next_max_wavelength := maxf(max_wavelength_m, next_min_wavelength)
+	var changed := next_resolution != _surface_foam_fft_resolution \
+		or not is_equal_approx(next_domain, _surface_foam_domain_m) \
+		or not is_equal_approx(wind_speed_mps, _surface_foam_wind_speed_mps) \
+		or not is_equal_approx(wind_direction_deg, _surface_foam_wind_direction_deg) \
+		or not is_equal_approx(fetch_m, _surface_foam_fetch_m) \
+		or not is_equal_approx(swell, _surface_foam_swell) \
+		or not is_equal_approx(directional_spread, _surface_foam_directional_spread) \
+		or not is_equal_approx(detail, _surface_foam_detail) \
+		or not is_equal_approx(next_min_wavelength, _surface_foam_min_wavelength_m) \
+		or not is_equal_approx(next_max_wavelength, _surface_foam_max_wavelength_m)
+	if not changed:
+		return
+	_surface_foam_fft_resolution = next_resolution
+	_surface_foam_domain_m = next_domain
+	_surface_foam_wind_speed_mps = maxf(wind_speed_mps, 0.1)
+	_surface_foam_wind_direction_deg = wind_direction_deg
+	_surface_foam_fetch_m = maxf(fetch_m, 1.0)
+	_surface_foam_swell = clampf(swell, 0.0, 1.0)
+	_surface_foam_directional_spread = clampf(directional_spread, 0.0, 1.0)
+	_surface_foam_detail = clampf(detail, 0.0, 1.0)
+	_surface_foam_min_wavelength_m = next_min_wavelength
+	_surface_foam_max_wavelength_m = next_max_wavelength
+	_rebuild_surface_foam_solver()
 
 
 func _rebuild_foam_resolution() -> void:
@@ -1028,6 +1151,7 @@ func _on_module_state_changed(module_id: StringName, enabled: bool) -> void:
 
 func _on_seed_changed(simulation_seed: int) -> void:
 	_rebuild_h0_all(simulation_seed)
+	_rebuild_surface_foam_h0(simulation_seed)
 
 
 func _on_reset_completed(_seed: int) -> void:

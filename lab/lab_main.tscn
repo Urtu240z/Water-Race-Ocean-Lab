@@ -100,6 +100,7 @@ foam_micro_normal_strength = 1.6
 foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
+foam_debug_mode = 0
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
