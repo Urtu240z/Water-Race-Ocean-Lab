@@ -82,8 +82,8 @@ uniform float ocean_water_f0 = 0.02;         // F0 del agua (Fresnel Schlick, no
 // 5R.3A: roughness adaptativa por distancia/footprint. Cerca ~near, lejos o
 // subpixel ~far. Sin texturas nuevas; sólo operaciones escalares en fragment.
 uniform float ocean_roughness_near = 0.10;
-uniform float ocean_roughness_far = 0.22;
-uniform vec2 ocean_roughness_distance_m = vec2(80.0, 600.0);
+uniform float ocean_roughness_far = 0.34;
+uniform vec2 ocean_roughness_distance_m = vec2(40.0, 300.0);
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
