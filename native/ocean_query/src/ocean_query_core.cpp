@@ -108,6 +108,15 @@ void BatchWorkspace::ensure_capacity(size_t required) {
     coastal_deep_h.resize(capacity); coastal_deep_dx.resize(capacity); coastal_deep_dz.resize(capacity);
     coastal_deep_dhx.resize(capacity); coastal_deep_dhz.resize(capacity); coastal_deep_dxx.resize(capacity); coastal_deep_dxz.resize(capacity);
     coastal_deep_dzx.resize(capacity); coastal_deep_dzz.resize(capacity); coastal_deep_vh.resize(capacity); coastal_deep_vx.resize(capacity); coastal_deep_vz.resize(capacity);
+    // 5R.1E: scratch del batch sharpened.
+    sharpen_cdx.resize(capacity); sharpen_cdz.resize(capacity);
+    sharpen_lqx.resize(capacity); sharpen_lqz.resize(capacity);
+    sharpen_rqx.resize(capacity); sharpen_rqz.resize(capacity);
+    band_l_c.resize(capacity); band_l_l.resize(capacity); band_l_r.resize(capacity);
+    band_m_c.resize(capacity); band_m_l.resize(capacity); band_m_r.resize(capacity);
+    jac_a.resize(capacity); jac_b.resize(capacity); jac_c.resize(capacity); jac_d.resize(capacity);
+    fd_dx.resize(capacity); fd_dz.resize(capacity);
+    fd_save_qx.resize(capacity); fd_save_qz.resize(capacity);
 }
 
 void OceanQueryCore::set_cascade_data(size_t cascade_index, double inv_n2,
@@ -599,8 +608,19 @@ void OceanQueryCore::sample_world(double wx, double wz, double simulation_time, 
 
 void OceanQueryCore::sample_batch_prepared(const double *positions_xz, size_t n, double *out) {
     if (crest_sharpen_enabled) {
-        // 5R1D-hotfix: con sharpening la inversión usa displacement FINAL + Jacobian
-        // finito; la ruta scalar (correcta) sustituye a AVX2 (que resuelve con base).
+        // 5R.1E: con sharpening la inversión usa displacement FINAL + Jacobian
+        // finito. Ahora existe una ruta AVX2 específica (misma matemática del
+        // hotfix); scalar queda como fallback para CPUs sin AVX2, force_scalar
+        // y batches pequeños.
+        if (avx2_supported() && !force_scalar && n >= 4) {
+            batch_.ensure_capacity(n);
+            for (size_t p = 0; p < n; ++p) {
+                batch_.wx[p] = positions_xz[2 * p]; batch_.wz[p] = positions_xz[2 * p + 1];
+                batch_.qx[p] = batch_.wx[p]; batch_.qz[p] = batch_.wz[p];
+            }
+            solve_avx2_batch_sharpened_(n, out, true);
+            return;
+        }
         sample_batch_scalar_prepared(positions_xz, n, out);
         return;
     }
@@ -942,6 +962,173 @@ void OceanQueryCore::solve_avx2_batch_(size_t n, double *out, bool vector_sincos
         }
         active_count = next_count;
     }
+    for (size_t p = 0; p < n; ++p) {
+        const bool converged = batch_.done[p] != 0;
+        if (converged) { ++diag_last_newton_histogram[batch_.iterations[p]]; }
+        else { ++diag_last_newton_histogram[4]; ++diag_non_converged; }
+        build_sample_from_fields_(p, converged, out + p * S_STRIDE);
+    }
+}
+
+// --- 5R.1E: batch sharpened (crest sharpening ON) ----------------------------
+// Replica EXACTAMENTE la matemática del hotfix scalar (sample_prepared_ y
+// finite_jacobian_) pero procesando lanes en AVX2. La base FFT + coastal se
+// reutiliza de evaluate_avx2_batch_; el crest sharpening se vectoriza con
+// evaluate_band_height_avx2 (LONG/MID × center/left/right). El Jacobian finito
+// evalúa el displacement FINAL en 4 offsets (±0.05 m) por diferencias centrales.
+
+void OceanQueryCore::apply_crest_sharpen_batch_(const size_t *indices, size_t active_count, bool vector_sincos) {
+    if (!crest_sharpen_enabled || cascades.size() < 2 || active_count == 0) { return; }
+    const double local_hs = std::max(crest_sharpen_local_hs, 0.05);
+    const double eps = crest_sharpen_eps;
+    const double dirx = crest_sharpen_dir_x, dirz = crest_sharpen_dir_z;
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        const double qx = batch_.qx[p], qz = batch_.qz[p];
+        batch_.sharpen_lqx[p] = qx - dirx * eps;
+        batch_.sharpen_lqz[p] = qz - dirz * eps;
+        batch_.sharpen_rqx[p] = qx + dirx * eps;
+        batch_.sharpen_rqz[p] = qz + dirz * eps;
+    }
+    evaluate_band_height_avx2(cascades[0], batch_.qx.data(), batch_.qz.data(), indices, active_count, batch_.band_l_c.data(), vector_sincos);
+    evaluate_band_height_avx2(cascades[0], batch_.sharpen_lqx.data(), batch_.sharpen_lqz.data(), indices, active_count, batch_.band_l_l.data(), vector_sincos);
+    evaluate_band_height_avx2(cascades[0], batch_.sharpen_rqx.data(), batch_.sharpen_rqz.data(), indices, active_count, batch_.band_l_r.data(), vector_sincos);
+    evaluate_band_height_avx2(cascades[1], batch_.qx.data(), batch_.qz.data(), indices, active_count, batch_.band_m_c.data(), vector_sincos);
+    evaluate_band_height_avx2(cascades[1], batch_.sharpen_lqx.data(), batch_.sharpen_lqz.data(), indices, active_count, batch_.band_m_l.data(), vector_sincos);
+    evaluate_band_height_avx2(cascades[1], batch_.sharpen_rqx.data(), batch_.sharpen_rqz.data(), indices, active_count, batch_.band_m_r.data(), vector_sincos);
+    const double strength = crest_sharpen_strength;
+    const double threshold = crest_sharpen_threshold;
+    const double max_gain = crest_sharpen_max_gain;
+    const double long_w = crest_sharpen_long_weight, mid_w = crest_sharpen_mid_weight;
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        const double curv_long = batch_.band_l_l[p] - 2.0 * batch_.band_l_c[p] + batch_.band_l_r[p];
+        const double curv_mid = batch_.band_m_l[p] - 2.0 * batch_.band_m_c[p] + batch_.band_m_r[p];
+        const double crest_long = std::clamp(-curv_long / local_hs, 0.0, 2.0) * long_w;
+        const double crest_mid = std::clamp(-curv_mid / std::max(local_hs * 0.4, 0.02), 0.0, 2.0) * mid_w;
+        const double crestness = crest_long + crest_mid;
+        const double face_slope = std::abs(batch_.band_l_r[p] - batch_.band_l_l[p]) / (2.0 * eps);
+        const double compression = smoothstep01(0.03, 0.22, face_slope);
+        const double sharpen = smoothstep01(threshold, threshold + 0.25, crestness)
+            * compression * strength;
+        const double delta_y = sharpen * max_gain * local_hs;
+        const double h_scale = 1.0 + sharpen * max_gain * 0.35;
+        batch_.h[p] += delta_y;
+        batch_.dx[p] *= h_scale;
+        batch_.dz[p] *= h_scale;
+    }
+}
+
+void OceanQueryCore::evaluate_center_sharpened_(const size_t *indices, size_t active_count, bool vector_sincos) {
+    evaluate_avx2_batch_(indices, active_count, vector_sincos);
+    apply_crest_sharpen_batch_(indices, active_count, vector_sincos);
+    // Guarda el dx/dz FINAL del centro: el Jacobian finito sobrescribe batch_.dx/dz
+    // y el paso de Newton necesita el residual del centro.
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.sharpen_cdx[p] = batch_.dx[p];
+        batch_.sharpen_cdz[p] = batch_.dz[p];
+    }
+}
+
+void OceanQueryCore::evaluate_offset_final_(const size_t *indices, size_t active_count, double ox, double oz, bool vector_sincos) {
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.fd_save_qx[p] = batch_.qx[p];
+        batch_.fd_save_qz[p] = batch_.qz[p];
+        batch_.qx[p] += ox;
+        batch_.qz[p] += oz;
+    }
+    evaluate_avx2_batch_(indices, active_count, vector_sincos);
+    apply_crest_sharpen_batch_(indices, active_count, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.fd_dx[p] = batch_.dx[p];
+        batch_.fd_dz[p] = batch_.dz[p];
+        batch_.qx[p] = batch_.fd_save_qx[p];
+        batch_.qz[p] = batch_.fd_save_qz[p];
+    }
+}
+
+void OceanQueryCore::compute_finite_jacobian_batch_(const size_t *indices, size_t active_count, bool vector_sincos) {
+    const double d = 0.05;
+    const double inv_2d = 1.0 / (2.0 * d);
+    evaluate_offset_final_(indices, active_count, d, 0.0, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.jac_a[p] = 1.0 + batch_.fd_dx[p] * inv_2d;
+        batch_.jac_c[p] = batch_.fd_dz[p] * inv_2d;
+    }
+    evaluate_offset_final_(indices, active_count, -d, 0.0, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.jac_a[p] -= batch_.fd_dx[p] * inv_2d;
+        batch_.jac_c[p] -= batch_.fd_dz[p] * inv_2d;
+    }
+    evaluate_offset_final_(indices, active_count, 0.0, d, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.jac_b[p] = batch_.fd_dx[p] * inv_2d;
+        batch_.jac_d[p] = 1.0 + batch_.fd_dz[p] * inv_2d;
+    }
+    evaluate_offset_final_(indices, active_count, 0.0, -d, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        batch_.jac_b[p] -= batch_.fd_dx[p] * inv_2d;
+        batch_.jac_d[p] -= batch_.fd_dz[p] * inv_2d;
+    }
+}
+
+void OceanQueryCore::solve_avx2_batch_sharpened_(size_t n, double *out, bool vector_sincos) {
+    diag_last_spectral_point_evaluations = 0;
+    for (int &count : diag_last_newton_histogram) { count = 0; }
+    size_t active_count = n;
+    for (size_t p = 0; p < n; ++p) {
+        batch_.iterations[p] = 0;
+        batch_.active_indices[p] = p;
+    }
+    evaluate_center_sharpened_(batch_.active_indices.data(), active_count, vector_sincos);
+    for (size_t ai = 0; ai < active_count; ++ai) {
+        const size_t p = batch_.active_indices[ai];
+        const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+        const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+        batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+        batch_.done[p] = batch_.residual[p] <= POSITION_TOLERANCE_M ? 1 : 0;
+    }
+    size_t next_count = 0;
+    for (size_t p = 0; p < n; ++p) if (!batch_.done[p]) batch_.active_indices[next_count++] = p;
+    active_count = next_count;
+
+    for (int iteration = 0; iteration < MAX_ITERATIONS && active_count > 0; ++iteration) {
+        compute_finite_jacobian_batch_(batch_.active_indices.data(), active_count, vector_sincos);
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double det = batch_.jac_a[p] * batch_.jac_d[p] - batch_.jac_b[p] * batch_.jac_c[p];
+            if (std::abs(det) <= JACOBIAN_EPSILON) { continue; }
+            const double fx = batch_.qx[p] + batch_.sharpen_cdx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.sharpen_cdz[p] - batch_.wz[p];
+            const double inv = 1.0 / det;
+            batch_.qx[p] -= inv * (batch_.jac_d[p] * fx - batch_.jac_b[p] * fz);
+            batch_.qz[p] -= inv * (-batch_.jac_c[p] * fx + batch_.jac_a[p] * fz);
+            batch_.active_indices[next_count++] = p;
+        }
+        active_count = next_count;
+        if (active_count == 0) { break; }
+        evaluate_center_sharpened_(batch_.active_indices.data(), active_count, vector_sincos);
+        next_count = 0;
+        for (size_t ai = 0; ai < active_count; ++ai) {
+            const size_t p = batch_.active_indices[ai];
+            const double fx = batch_.qx[p] + batch_.dx[p] - batch_.wx[p];
+            const double fz = batch_.qz[p] + batch_.dz[p] - batch_.wz[p];
+            batch_.residual[p] = std::sqrt(fx * fx + fz * fz);
+            batch_.iterations[p] = iteration + 1;
+            if (batch_.residual[p] <= POSITION_TOLERANCE_M) { batch_.done[p] = 1; }
+            else { batch_.active_indices[next_count++] = p; }
+        }
+        active_count = next_count;
+    }
+
     for (size_t p = 0; p < n; ++p) {
         const bool converged = batch_.done[p] != 0;
         if (converged) { ++diag_last_newton_histogram[batch_.iterations[p]]; }

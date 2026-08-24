@@ -14,7 +14,7 @@ sky_material = SubResource("SkyMaterial")
 
 [sub_resource type="Environment" id="Environment"]
 background_mode = 2
-background_energy_multiplier = 6.21
+background_energy_multiplier = 4.83
 sky = SubResource("Sky")
 ambient_light_source = 3
 ambient_light_color = Color(0.62, 0.72, 0.9, 1)
@@ -34,7 +34,6 @@ environment = SubResource("Environment")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1708326626]
 transform = Transform3D(0.88294756, 0.36994863, -0.2890356, 0, 0.6156615, 0.7880107, 0.46947157, -0.6957722, 0.5435968, 0, 0, 0)
-light_energy = 1.25
 shadow_enabled = true
 
 [node name="OceanV3" parent="." unique_id=2027306094 instance=ExtResource("2_ocean")]

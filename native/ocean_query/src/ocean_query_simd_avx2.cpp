@@ -19,6 +19,12 @@ inline void store_points(std::vector<double> &dst, size_t p0, size_t p1, size_t 
     dst[p0] = lanes[0]; dst[p1] = lanes[1]; dst[p2] = lanes[2]; dst[p3] = lanes[3];
 }
 
+inline void store_points_raw(double *dst, size_t p0, size_t p1, size_t p2, size_t p3, __m256d value) {
+    alignas(32) double lanes[4];
+    _mm256_store_pd(lanes, value);
+    dst[p0] = lanes[0]; dst[p1] = lanes[1]; dst[p2] = lanes[2]; dst[p3] = lanes[3];
+}
+
 inline __m256d sin_poly(__m256d x) {
     const __m256d z = _mm256_mul_pd(x, x);
     __m256d p = _mm256_set1_pd(1.6059043836821613e-10);       // +1/6227020800
@@ -262,6 +268,45 @@ void evaluate_coastal_long_batch_avx2(const Cascade &cascade, BatchWorkspace &ba
             h += sig * pre; dx += sig * cascade.a1[idx] * pim; dz += sig * cascade.a2[idx] * pim; dhx += sig * -cascade.kx[idx] * pim; dhz += sig * -cascade.ky[idx] * pim; dxx += sig * cascade.c11[idx] * pre; dxz += sig * cascade.c12[idx] * pre; dzx += sig * cascade.c21[idx] * pre; dzz += sig * cascade.c22[idx] * pre; vh += sig * qre; vx += sig * cascade.a1[idx] * qim; vz += sig * cascade.a2[idx] * qim;
         }
         batch.coastal_deep_h[p] = h * cascade.inv_n2; batch.coastal_deep_dx[p] = dx * cascade.inv_n2; batch.coastal_deep_dz[p] = dz * cascade.inv_n2; batch.coastal_deep_dhx[p] = dhx * cascade.inv_n2; batch.coastal_deep_dhz[p] = dhz * cascade.inv_n2; batch.coastal_deep_dxx[p] = dxx * cascade.inv_n2; batch.coastal_deep_dxz[p] = dxz * cascade.inv_n2; batch.coastal_deep_dzx[p] = dzx * cascade.inv_n2; batch.coastal_deep_dzz[p] = dzz * cascade.inv_n2; batch.coastal_deep_vh[p] = vh * cascade.inv_n2; batch.coastal_deep_vx[p] = vx * cascade.inv_n2; batch.coastal_deep_vz[p] = vz * cascade.inv_n2;
+    }
+}
+
+void evaluate_band_height_avx2(const Cascade &cascade, const double *qx, const double *qz,
+                               const size_t *indices, size_t active_count,
+                               double *out_h, bool vector_sincos) {
+    const __m256d zero = _mm256_setzero_pd();
+    size_t ai = 0;
+    for (; ai + 4 <= active_count; ai += 4) {
+        const size_t p0 = indices[ai], p1 = indices[ai + 1], p2 = indices[ai + 2], p3 = indices[ai + 3];
+        const __m256i gather = _mm256_set_epi64x(static_cast<long long>(p3), static_cast<long long>(p2),
+                                                   static_cast<long long>(p1), static_cast<long long>(p0));
+        const __m256d vqx = _mm256_i64gather_pd(qx, gather, 8);
+        const __m256d vqz = _mm256_i64gather_pd(qz, gather, 8);
+        __m256d h = zero;
+        for (size_t idx = 0; idx < cascade.kx.size(); ++idx) {
+            const __m256d phi = _mm256_add_pd(_mm256_mul_pd(_mm256_set1_pd(cascade.kx[idx]), vqx),
+                                               _mm256_mul_pd(_mm256_set1_pd(cascade.ky[idx]), vqz));
+            __m256d sp, cp;
+            if (vector_sincos) { sincos_safe(phi, sp, cp); } else { sincos_lanes(phi, sp, cp); }
+            const __m256d h_re = _mm256_set1_pd(cascade.ev_h_re[idx]);
+            const __m256d h_im = _mm256_set1_pd(cascade.ev_h_im[idx]);
+            const __m256d pre = _mm256_sub_pd(_mm256_mul_pd(h_re, cp), _mm256_mul_pd(h_im, sp));
+            const __m256d sig = _mm256_set1_pd(cascade.parity[idx] * cascade.weight[idx]);
+            h = _mm256_add_pd(h, _mm256_mul_pd(sig, pre));
+        }
+        const __m256d inv = _mm256_set1_pd(cascade.inv_n2);
+        store_points_raw(out_h, p0, p1, p2, p3, _mm256_mul_pd(h, inv));
+    }
+    for (; ai < active_count; ++ai) {
+        const size_t p = indices[ai];
+        double h = 0.0;
+        for (size_t idx = 0; idx < cascade.kx.size(); ++idx) {
+            const double phi = cascade.kx[idx] * qx[p] + cascade.ky[idx] * qz[p];
+            const double cp = std::cos(phi), sp = std::sin(phi);
+            const double pre = cascade.ev_h_re[idx] * cp - cascade.ev_h_im[idx] * sp;
+            h += cascade.parity[idx] * cascade.weight[idx] * pre;
+        }
+        out_h[p] = h * cascade.inv_n2;
     }
 }
 

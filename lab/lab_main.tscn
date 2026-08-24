@@ -18,7 +18,7 @@ sky_material = SubResource("ProceduralSkyMaterial_lab")
 
 [sub_resource type="Environment" id="Environment_lab"]
 background_mode = 2
-background_energy_multiplier = 6.49
+background_energy_multiplier = 4.0
 sky = SubResource("Sky_lab")
 ambient_light_source = 3
 ambient_light_color = Color(0.55, 0.65, 0.8, 1)
@@ -32,7 +32,7 @@ environment = SubResource("Environment_lab")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
 transform = Transform3D(0.8480481, 0.3938068, -0.35458517, 0, 0.66913056, 0.74314487, 0.52991927, -0.63022256, 0.5674549, 0, 0, 0)
-light_energy = 5.264
+light_energy = 5.8
 shadow_enabled = true
 
 [node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]

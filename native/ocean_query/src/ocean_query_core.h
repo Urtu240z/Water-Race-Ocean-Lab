@@ -113,6 +113,16 @@ struct BatchWorkspace {
     // C(F(q)), evaluado por lote sólo para puntos coastal activos.
     std::vector<double> coastal_deep_h, coastal_deep_dx, coastal_deep_dz, coastal_deep_dhx, coastal_deep_dhz;
     std::vector<double> coastal_deep_dxx, coastal_deep_dxz, coastal_deep_dzx, coastal_deep_dzz, coastal_deep_vh, coastal_deep_vx, coastal_deep_vz;
+    // 5R.1E: scratch del batch sharpened. Los campos base (h/dx/dz/derivadas)
+    // siguen viviendo arriba; aquí se guarda el estado transitorio del solver.
+    std::vector<double> sharpen_cdx, sharpen_cdz;       // dx/dz FINAL del centro (Newton).
+    std::vector<double> sharpen_lqx, sharpen_lqz;       // offset -dir*eps (band height).
+    std::vector<double> sharpen_rqx, sharpen_rqz;       // offset +dir*eps (band height).
+    std::vector<double> band_l_c, band_l_l, band_l_r;   // altura banda LONG c/l/r.
+    std::vector<double> band_m_c, band_m_l, band_m_r;   // altura banda MID c/l/r.
+    std::vector<double> jac_a, jac_b, jac_c, jac_d;     // Jacobian finito 2x2.
+    std::vector<double> fd_dx, fd_dz;                   // dx/dz FINAL del offset actual.
+    std::vector<double> fd_save_qx, fd_save_qz;         // save/restore q en offset eval.
 
     void ensure_capacity(size_t required);
 };
@@ -252,6 +262,15 @@ private:
     void build_sample_from_fields_(size_t point_index, bool converged, double *out) const;
     void solve_true_batch_(size_t n, double *out, bool append_solved_q);
     void solve_avx2_batch_(size_t n, double *out, bool vector_sincos);
+
+    // 5R.1E: batch sharpened (crest sharpening ON) — misma matemática del hotfix
+    // scalar, vectorizada. solve_avx2_batch_sharpened_ es el análogo de
+    // solve_avx2_batch_ con Jacobian finito sobre el displacement FINAL.
+    void apply_crest_sharpen_batch_(const size_t *indices, size_t active_count, bool vector_sincos);
+    void evaluate_center_sharpened_(const size_t *indices, size_t active_count, bool vector_sincos);
+    void evaluate_offset_final_(const size_t *indices, size_t active_count, double ox, double oz, bool vector_sincos);
+    void compute_finite_jacobian_batch_(const size_t *indices, size_t active_count, bool vector_sincos);
+    void solve_avx2_batch_sharpened_(size_t n, double *out, bool vector_sincos);
 };
 
 } // namespace oq
