@@ -31,8 +31,8 @@ enum SpectrumModel {
 # 5R.1: mezcla direccional JONSWAP. 0 = Hasselmann (direccional), 1 = flat/isotrópico.
 @export_range(0.0, 1.0, 0.05) var jonswap_spread := 0.2
 
-# Whitecaps: physical per-band controls for the dedicated high-resolution R16F
-# persistent field. normal_map.a retains the prior 256² mask for diagnostics
+# Whitecaps: physical per-band controls for the dedicated high-resolution RG16F
+# persistent field. normal_map.a retains the prior 256² legacy mask for diagnostics
 # only. Rates are interpreted per second and multiplied by the real frame delta
 # by GPUStockhamFFT before dispatch.
 @export var foam_enabled := true
@@ -75,8 +75,9 @@ func fft_stage_count() -> int:
 
 
 func compute_pass_count() -> int:
-	# Evolve + Stockham axes + assemble + high-resolution foam update.
-	return 2 * fft_stage_count() + 3
+	# Evolve + Stockham axes + assemble + high-resolution foam + compact
+	# horizontal-displacement snapshot for residual advection.
+	return 2 * fft_stage_count() + 4
 
 
 func approximate_gpu_bytes() -> int:

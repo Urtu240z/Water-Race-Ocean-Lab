@@ -50,7 +50,7 @@ enum BandDebug {
 # real depende del campo PREBREAK (Coastal OFF / sin batimetría => sin breakers).
 @export var breaker_enabled := true
 # Technical foam-field resolution, deliberately independent from FFT resolution.
-# Changing it recreates only the R16F foam ping-pong images; H0 and the FFT stay intact.
+# Changing it recreates only the RG16F foam ping-pong images; H0 and the FFT stay intact.
 @export_enum("256", "512", "1024") var foam_resolution: int = DEFAULT_FOAM_RESOLUTION:
 	set(value):
 		foam_resolution = _validated_foam_resolution(value)
@@ -89,6 +89,10 @@ var _crest_sharpen := {
 	"long_weight": 1.0,
 	"mid_weight": 0.5,
 }
+var _foam_residual_decay_multiplier := 1.0
+var _foam_deposit_strength := 0.72
+var _foam_advection_enabled := true
+var _foam_advection_strength := 1.0
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -169,7 +173,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"))
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"))
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -191,6 +195,7 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 	var displacement := Texture2DRD.new()
 	var normal := Texture2DRD.new()
 	var foam := Texture2DRD.new()
+	var previous_displacement := Texture2DRD.new()
 	var solver := SolverScript.new()
 	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, foam_resolution))
 	return {
@@ -199,6 +204,7 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 		"displacement": displacement,
 		"normal": normal,
 		"foam": foam,
+		"previous_displacement": previous_displacement,
 	}
 
 
@@ -225,6 +231,7 @@ func _exit_tree() -> void:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
 		cascade.foam.texture_rd_rid = RID()
+		cascade.previous_displacement.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
 
@@ -242,6 +249,9 @@ func _process(delta: float) -> void:
 			# The solver converts the actual frame delta into exponential decay and
 			# growth increments. No fixed-FPS assumption is made here.
 			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta))
+			# The snapshot ring exposes the exact old displacement consumed by this
+			# update, while the copy writes a different ring entry for next frame.
+			cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	_dispatch_requested = false
 
 
@@ -910,6 +920,7 @@ func gpu_memory_bytes() -> int:
 		total += cascade["config"].approximate_gpu_bytes()
 		var solver_state: Dictionary = cascade["solver"].diagnostic_state()
 		total += int(solver_state.get("foam_gpu_bytes", 0))
+		total += int(solver_state.get("previous_displacement_gpu_bytes", 0))
 	return total
 
 
@@ -939,7 +950,22 @@ func _publish_ready_textures() -> void:
 			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
 			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
 		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
+		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	_textures_published = true
+
+
+func set_foam_transport_settings(residual_decay_multiplier: float, deposit_strength: float, advection_enabled: bool, advection_strength: float) -> void:
+	_foam_residual_decay_multiplier = maxf(residual_decay_multiplier, 0.0)
+	_foam_deposit_strength = clampf(deposit_strength, 0.0, 2.0)
+	_foam_advection_enabled = advection_enabled
+	_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
+	for cascade in _cascades:
+		RenderingServer.call_on_render_thread(cascade.solver.set_foam_transport_settings.bind(
+			_foam_residual_decay_multiplier,
+			_foam_deposit_strength,
+			_foam_advection_enabled,
+			_foam_advection_strength
+		))
 
 
 func _rebuild_foam_resolution() -> void:

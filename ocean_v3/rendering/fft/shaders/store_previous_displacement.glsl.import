@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cbg68wu2re1uy"
+path="res://.godot/imported/store_previous_displacement.glsl-afb8f2ec476450034607408377383512.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/fft/shaders/store_previous_displacement.glsl"
+dest_files=["res://.godot/imported/store_previous_displacement.glsl-afb8f2ec476450034607408377383512.res"]
+
+[params]
+

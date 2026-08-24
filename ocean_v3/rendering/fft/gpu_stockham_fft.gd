@@ -6,6 +6,7 @@ const EVOLVE_SHADER := "res://ocean_v3/rendering/fft/shaders/evolve_spectrum.gls
 const STOCKHAM_SHADER := "res://ocean_v3/rendering/fft/shaders/stockham_ifft.glsl"
 const ASSEMBLE_SHADER := "res://ocean_v3/rendering/fft/shaders/assemble_maps.glsl"
 const UPDATE_FOAM_SHADER := "res://ocean_v3/rendering/fft/shaders/update_foam.glsl"
+const STORE_DISPLACEMENT_SHADER := "res://ocean_v3/rendering/fft/shaders/store_previous_displacement.glsl"
 const DEFAULT_FOAM_RESOLUTION := 1024
 
 var ready := false
@@ -13,6 +14,7 @@ var last_error := ""
 var displacement_rid := RID()
 var normal_rid := RID()
 var foam_rid := RID()
+var previous_displacement_rid := RID()
 var h0_upload_byte_count := 0
 
 var _rd: RenderingDevice
@@ -22,16 +24,23 @@ var _ping_a: Array[RID] = [RID(), RID()]
 var _ping_b: Array[RID] = [RID(), RID()]
 var _ping_c: Array[RID] = [RID(), RID()]
 var _foam_ping: Array[RID] = [RID(), RID()]
+var _previous_displacement_ping: Array[RID] = [RID(), RID(), RID()]
 var _foam_read_index := 0
+var _previous_displacement_read_index := 0
 var _foam_resolution := DEFAULT_FOAM_RESOLUTION
-var _foam_sampler := RID()
+var _linear_repeat_sampler := RID()
+var _foam_residual_decay_multiplier := 1.0
+var _foam_deposit_strength := 0.72
+var _foam_advection_enabled := true
+var _foam_advection_strength := 1.0
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
 var _uniform_sets: Array[RID] = []
 var _evolve_set := RID()
 var _fft_sets: Array[RID] = [RID(), RID()]
 var _assemble_set := RID()
-var _foam_sets: Array[RID] = [RID(), RID()]
+var _foam_sets: Array[RID] = []
+var _store_displacement_sets: Array[RID] = []
 
 
 func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "Ocean1B", foam_resolution := DEFAULT_FOAM_RESOLUTION) -> void:
@@ -47,7 +56,8 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 	var fft_pipeline := _create_pipeline(STOCKHAM_SHADER, resource_prefix + ".StockhamIFFT")
 	var assemble_pipeline := _create_pipeline(ASSEMBLE_SHADER, resource_prefix + ".Assemble")
 	var foam_pipeline := _create_pipeline(UPDATE_FOAM_SHADER, resource_prefix + ".UpdateFoam")
-	if not evolve_pipeline.is_valid() or not fft_pipeline.is_valid() or not assemble_pipeline.is_valid() or not foam_pipeline.is_valid():
+	var store_displacement_pipeline := _create_pipeline(STORE_DISPLACEMENT_SHADER, resource_prefix + ".StorePreviousDisplacement")
+	if not evolve_pipeline.is_valid() or not fft_pipeline.is_valid() or not assemble_pipeline.is_valid() or not foam_pipeline.is_valid() or not store_displacement_pipeline.is_valid():
 		free_resources()
 		return
 
@@ -68,7 +78,7 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 	_fft_sets[1] = _create_image_set(_shaders[1], [_ping_a[1], _ping_b[1], _ping_c[1], _ping_a[0], _ping_b[0], _ping_c[0]])
 	_assemble_set = _create_image_set(_shaders[2], [_ping_a[0], _ping_b[0], _ping_c[0], displacement_rid, normal_rid])
 	_create_foam_resources(resource_prefix)
-	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_sets[0].is_valid() and _foam_sets[1].is_valid()
+	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_resources_ready()
 	if not ready:
 		last_error = "No se pudieron crear los uniform sets de %s." % resource_prefix
 
@@ -88,8 +98,10 @@ func diagnostic_state() -> Dictionary:
 		"displacement_rid": displacement_rid.get_id() if displacement_rid.is_valid() else -1,
 		"normal_rid": normal_rid.get_id() if normal_rid.is_valid() else -1,
 		"foam_rid": foam_rid.get_id() if foam_rid.is_valid() else -1,
+		"previous_displacement_rid": previous_displacement_rid.get_id() if previous_displacement_rid.is_valid() else -1,
 		"foam_resolution": _foam_resolution,
-		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 2 * 2,
+		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2,
+		"previous_displacement_gpu_bytes": _config.resolution * _config.resolution * 4 * 3,
 	}
 
 
@@ -100,16 +112,23 @@ func update_config(config: Resource) -> void:
 	_config = config
 
 
+func set_foam_transport_settings(residual_decay_multiplier: float, deposit_strength: float, advection_enabled: bool, advection_strength: float) -> void:
+	_foam_residual_decay_multiplier = maxf(residual_decay_multiplier, 0.0)
+	_foam_deposit_strength = clampf(deposit_strength, 0.0, 2.0)
+	_foam_advection_enabled = advection_enabled
+	_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
+
+
 func set_foam_resolution(foam_resolution: int) -> void:
 	var validated := _validated_foam_resolution(foam_resolution)
 	if validated == _foam_resolution:
 		return
 	_foam_resolution = validated
-	if _rd == null or _shaders.size() < 4:
+	if _rd == null or _shaders.size() < 5:
 		return
 	_free_foam_resources()
 	_create_foam_resources("OceanFoam")
-	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_sets[0].is_valid() and _foam_sets[1].is_valid()
+	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_resources_ready()
 
 
 func dispatch(render_time: float, delta_s: float = 0.0) -> void:
@@ -154,22 +173,42 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	_rd.compute_list_add_barrier(compute_list)
 
-	# The persistent foam field has its own high-resolution ping-pong pair. It
-	# samples the freshly assembled spectral J with hardware bilinear filtering;
-	# no dispatch reads and writes the same foam image.
+	# Fresh whitecaps are born from current J; only residual history is advected.
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
-	_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_foam_read_index], 0)
+	_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
 	var foam_push := PackedFloat32Array([
 		_config.foam_whitecap,
 		maxf(delta_s, 0.0) * _config.foam_amount * 7.5,
-		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15,
 		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
+		_foam_deposit_strength,
+		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
+		maxf(delta_s, 0.0),
+		1.0 if _foam_advection_enabled else 0.0,
+		_foam_advection_strength,
+		_config.domain_size_m,
+		0.0,
+		0.0,
+		0.0,
 	])
-	_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 16)
+	_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
 	_rd.compute_list_dispatch(compute_list, foam_groups, foam_groups, 1)
 	_foam_read_index = 1 - _foam_read_index
 	foam_rid = _foam_ping[_foam_read_index]
+	_rd.compute_list_add_barrier(compute_list)
+
+	# Capture current horizontal displacement after foam consumed the prior pair.
+	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[4])
+	var previous_snapshot_index := _previous_displacement_read_index
+	_rd.compute_list_bind_uniform_set(compute_list, _store_displacement_sets[previous_snapshot_index], 0)
+	_rd.compute_list_set_push_constant(compute_list, PackedByteArray(), 0)
+	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
+	# Publish the exact old snapshot consumed by this foam update. Current
+	# displacement is already published separately, so the material can show the
+	# same motion vector without retaining another texture.
+	previous_displacement_rid = _previous_displacement_ping[previous_snapshot_index]
+	_previous_displacement_read_index = (previous_snapshot_index + 1) % 3
+	_rd.compute_list_add_barrier(compute_list)
 	_rd.compute_list_end()
 
 
@@ -198,6 +237,7 @@ func free_resources() -> void:
 	displacement_rid = RID()
 	normal_rid = RID()
 	foam_rid = RID()
+	previous_displacement_rid = RID()
 	_ping_a = [RID(), RID()]
 	_ping_b = [RID(), RID()]
 	_ping_c = [RID(), RID()]
@@ -258,39 +298,67 @@ func _create_image_set(shader: RID, textures: Array[RID]) -> RID:
 
 func _create_foam_resources(resource_prefix: String) -> void:
 	var initial_data := PackedByteArray()
-	initial_data.resize(_foam_resolution * _foam_resolution * 2)
-	_foam_ping[0] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".FoamA", initial_data, false, _foam_resolution)
-	_foam_ping[1] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".FoamB", initial_data, false, _foam_resolution)
+	initial_data.resize(_foam_resolution * _foam_resolution * 4)
+	_foam_ping[0] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamA", initial_data, false, _foam_resolution)
+	_foam_ping[1] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".FoamB", initial_data, false, _foam_resolution)
+	var displacement_initial_data := PackedByteArray()
+	displacement_initial_data.resize(_config.resolution * _config.resolution * 4)
+	for index in 3:
+		_previous_displacement_ping[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".PreviousDisplacement%d" % index, displacement_initial_data)
 	var sampler_state := RDSamplerState.new()
 	sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	sampler_state.mip_filter = RenderingDevice.SAMPLER_FILTER_NEAREST
 	sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
 	sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
-	_foam_sampler = _rd.sampler_create(sampler_state)
-	_foam_sets[0] = _create_foam_set(_shaders[3], displacement_rid, _foam_ping[0], _foam_ping[1])
-	_foam_sets[1] = _create_foam_set(_shaders[3], displacement_rid, _foam_ping[1], _foam_ping[0])
+	_linear_repeat_sampler = _rd.sampler_create(sampler_state)
+	_foam_sets.clear()
+	for snapshot_index in 3:
+		for foam_index in 2:
+			_foam_sets.append(_create_foam_set(_shaders[3], displacement_rid, _previous_displacement_ping[snapshot_index], _foam_ping[foam_index], _foam_ping[1 - foam_index]))
+	_store_displacement_sets.clear()
+	for snapshot_index in 3:
+		_store_displacement_sets.append(_create_store_displacement_set(_shaders[4], displacement_rid, _previous_displacement_ping[(snapshot_index + 1) % 3]))
 	_foam_read_index = 0
+	_previous_displacement_read_index = 0
 	foam_rid = _foam_ping[0]
+	previous_displacement_rid = _previous_displacement_ping[0]
 
 
-func _create_foam_set(shader: RID, displacement: RID, previous: RID, next: RID) -> RID:
-	var sampler_uniform := RDUniform.new()
-	sampler_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	sampler_uniform.binding = 0
-	sampler_uniform.add_id(_foam_sampler)
-	sampler_uniform.add_id(displacement)
-	var previous_uniform := RDUniform.new()
-	previous_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	previous_uniform.binding = 1
-	previous_uniform.add_id(previous)
-	var next_uniform := RDUniform.new()
-	next_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	next_uniform.binding = 2
-	next_uniform.add_id(next)
-	var uniform_set := _rd.uniform_set_create([sampler_uniform, previous_uniform, next_uniform], shader, 0)
+func _create_foam_set(shader: RID, displacement: RID, previous_displacement: RID, previous_foam: RID, next_foam: RID) -> RID:
+	var current_displacement_uniform := _create_sampler_uniform(0, displacement)
+	var previous_displacement_uniform := _create_sampler_uniform(1, previous_displacement)
+	var previous_foam_uniform := _create_sampler_uniform(2, previous_foam)
+	var next_foam_uniform := RDUniform.new()
+	next_foam_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	next_foam_uniform.binding = 3
+	next_foam_uniform.add_id(next_foam)
+	var uniform_set := _rd.uniform_set_create([current_displacement_uniform, previous_displacement_uniform, previous_foam_uniform, next_foam_uniform], shader, 0)
 	_uniform_sets.append(uniform_set)
 	return uniform_set
+
+
+func _create_store_displacement_set(shader: RID, displacement: RID, destination: RID) -> RID:
+	var displacement_uniform := RDUniform.new()
+	displacement_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	displacement_uniform.binding = 0
+	displacement_uniform.add_id(displacement)
+	var destination_uniform := RDUniform.new()
+	destination_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	destination_uniform.binding = 1
+	destination_uniform.add_id(destination)
+	var uniform_set := _rd.uniform_set_create([displacement_uniform, destination_uniform], shader, 0)
+	_uniform_sets.append(uniform_set)
+	return uniform_set
+
+
+func _create_sampler_uniform(binding: int, texture: RID) -> RDUniform:
+	var uniform := RDUniform.new()
+	uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	uniform.binding = binding
+	uniform.add_id(_linear_repeat_sampler)
+	uniform.add_id(texture)
+	return uniform
 
 
 func _free_foam_resources() -> void:
@@ -300,15 +368,37 @@ func _free_foam_resources() -> void:
 		if uniform_set.is_valid():
 			_rd.free_rid(uniform_set)
 		_uniform_sets.erase(uniform_set)
+	for uniform_set in _store_displacement_sets:
+		if uniform_set.is_valid():
+			_rd.free_rid(uniform_set)
+		_uniform_sets.erase(uniform_set)
 	for texture in _foam_ping:
 		if texture.is_valid():
 			_rd.free_rid(texture)
-	if _foam_sampler.is_valid():
-		_rd.free_rid(_foam_sampler)
-	_foam_sets = [RID(), RID()]
+	for texture in _previous_displacement_ping:
+		if texture.is_valid():
+			_rd.free_rid(texture)
+	if _linear_repeat_sampler.is_valid():
+		_rd.free_rid(_linear_repeat_sampler)
+	_foam_sets.clear()
+	_store_displacement_sets.clear()
 	_foam_ping = [RID(), RID()]
-	_foam_sampler = RID()
+	_previous_displacement_ping = [RID(), RID(), RID()]
+	_linear_repeat_sampler = RID()
 	foam_rid = RID()
+	previous_displacement_rid = RID()
+
+
+func _foam_resources_ready() -> bool:
+	if _foam_sets.size() != 6 or _store_displacement_sets.size() != 3:
+		return false
+	for uniform_set in _foam_sets:
+		if not uniform_set.is_valid():
+			return false
+	for uniform_set in _store_displacement_sets:
+		if not uniform_set.is_valid():
+			return false
+	return true
 
 
 func _validated_foam_resolution(value: int) -> int:

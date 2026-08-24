@@ -218,6 +218,66 @@ extends Node3D
 		foam_intensity = value
 		_request_visual_sync()
 
+@export var foam_fresh_color: Color = Color(0.97, 0.99, 0.98, 1.0):
+	set(value):
+		foam_fresh_color = value
+		_request_visual_sync()
+
+@export var foam_residual_color: Color = Color(0.82, 0.91, 0.90, 1.0):
+	set(value):
+		foam_residual_color = value
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var foam_fresh_strength: float = 1.0:
+	set(value):
+		foam_fresh_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var foam_residual_strength: float = 1.0:
+	set(value):
+		foam_residual_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 3.0, 0.01) var foam_residual_decay_multiplier: float = 1.0:
+	set(value):
+		foam_residual_decay_multiplier = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var foam_deposit_strength: float = 0.72:
+	set(value):
+		foam_deposit_strength = value
+		_request_visual_sync()
+
+@export var foam_advection_enabled: bool = true:
+	set(value):
+		foam_advection_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var foam_advection_strength: float = 1.0:
+	set(value):
+		foam_advection_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 10.0, 0.01) var foam_normal_strength: float = 1.2:
+	set(value):
+		foam_normal_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var foam_fresh_normal_weight: float = 1.0:
+	set(value):
+		foam_fresh_normal_weight = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var foam_residual_normal_weight: float = 0.40:
+	set(value):
+		foam_residual_normal_weight = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var foam_micro_normal_strength: float = 0.20:
+	set(value):
+		foam_micro_normal_strength = value
+		_request_visual_sync()
+
 @export_range(0.0, 1.0, 0.01) var foam_threshold: float = 0.0:
 	set(value):
 		foam_threshold = value
@@ -283,9 +343,9 @@ extends Node3D
 		foam_edge_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES") var foam_debug_mode: int = 0:
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 8)
+		foam_debug_mode = clampi(value, 0, 13)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -383,6 +443,14 @@ func _sync_water_visual_parameters() -> void:
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
+	material.set_shader_parameter(&"foam_fresh_color", foam_fresh_color)
+	material.set_shader_parameter(&"foam_residual_color", foam_residual_color)
+	material.set_shader_parameter(&"foam_fresh_strength", foam_fresh_strength)
+	material.set_shader_parameter(&"foam_residual_strength", foam_residual_strength)
+	material.set_shader_parameter(&"foam_normal_strength", foam_normal_strength)
+	material.set_shader_parameter(&"foam_fresh_normal_weight", foam_fresh_normal_weight)
+	material.set_shader_parameter(&"foam_residual_normal_weight", foam_residual_normal_weight)
+	material.set_shader_parameter(&"foam_micro_normal_strength", foam_micro_normal_strength)
 	material.set_shader_parameter(&"foam_intensity", foam_intensity)
 	material.set_shader_parameter(&"foam_threshold", foam_threshold)
 	material.set_shader_parameter(&"foam_contrast", foam_contrast)
@@ -398,6 +466,14 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module != null:
+		fft_module.set_foam_transport_settings(
+			foam_residual_decay_multiplier,
+			foam_deposit_strength,
+			foam_advection_enabled,
+			foam_advection_strength
+		)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:
 		effective_foam_debug_mode = 2
