@@ -177,12 +177,14 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
 	_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
+	# update_foam receives rates per second and the real frame delta; the shader
+	# applies the exponential attack/release and residual decay internally.
 	var foam_push := PackedFloat32Array([
 		_config.foam_whitecap,
-		maxf(delta_s, 0.0) * _config.foam_amount * 7.5,
+		maxf(_config.foam_amount, 0.0) * 7.5,
 		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
 		_foam_deposit_strength,
-		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
+		maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
 		maxf(delta_s, 0.0),
 		1.0 if _foam_advection_enabled else 0.0,
 		_foam_advection_strength,

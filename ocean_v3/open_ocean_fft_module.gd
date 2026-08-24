@@ -246,8 +246,8 @@ func _process(delta: float) -> void:
 		if not is_visible_band:
 			continue
 		if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
-			# The solver converts the actual frame delta into exponential decay and
-			# growth increments. No fixed-FPS assumption is made here.
+			# The solver receives the actual frame delta and converts per-second foam
+			# rates into exponential attack/release and decay. No fixed-FPS assumption.
 			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta))
 			# The snapshot ring exposes the exact old displacement consumed by this
 			# update, while the copy writes a different ring entry for next frame.

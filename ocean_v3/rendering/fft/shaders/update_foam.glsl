@@ -11,10 +11,15 @@ layout(set = 0, binding = 2) uniform sampler2D foam_previous;
 layout(rg16f, set = 0, binding = 3) uniform restrict writeonly image2D foam_next;
 
 layout(push_constant, std430) uniform Params {
-	vec4 fresh; // whitecap threshold, growth(delta), cascade weight, deposit strength
-	vec4 transport; // residual decay(delta), delta seconds, enabled, strength
+	vec4 fresh; // whitecap threshold, attack rate/sec, cascade weight, deposit strength
+	vec4 transport; // residual decay rate/sec, delta seconds, enabled, strength
 	vec4 domain; // domain metres
 } params;
+
+// The release rate is derived from the existing residual decay rate so the
+// public push-constant layout stays compact and rates remain per-second.
+const float RESIDUAL_DECAY_BASE_MULTIPLIER = 1.15;
+const float FRESH_RELEASE_BASE_MULTIPLIER = 2.0;
 
 void main() {
 	ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
@@ -41,14 +46,28 @@ void main() {
 	if (isnan(previous_residual) || isinf(previous_residual)) {
 		previous_residual = 0.0;
 	}
+	// Fresh is tied to the current compression field, so it is intentionally
+	// sampled at the current pixel instead of following the residual backtrace.
+	float previous_fresh = textureLod(foam_previous, uv, 0.0).g;
+	if (isnan(previous_fresh) || isinf(previous_fresh)) {
+		previous_fresh = 0.0;
+	}
 
 	float source = max(0.0, params.fresh.x - jacobian);
 	float fresh_target = clamp(source * max(params.fresh.z, 0.0), 0.0, 1.0);
-	float fresh_birth = 1.0 - exp(-max(params.fresh.y, 0.0));
-	// G has no history: it is deliberately tied to this frame's compression.
-	float fresh = mix(0.0, fresh_target, fresh_birth);
-	float residual = previous_residual * exp(-max(params.transport.x, 0.0));
-	// Deposit via max rather than linear accumulation to avoid saturation plateaus.
+	float fresh_attack_rate = max(params.fresh.y, 0.0);
+	float fresh_release_rate = max(params.transport.x, 0.0)
+		* FRESH_RELEASE_BASE_MULTIPLIER / RESIDUAL_DECAY_BASE_MULTIPLIER;
+	float fresh_rate = fresh_target > previous_fresh
+		? fresh_attack_rate
+		: fresh_release_rate;
+	float fresh_alpha = 1.0 - exp(-fresh_rate * delta_s);
+	float fresh = mix(previous_fresh, fresh_target, fresh_alpha);
+
+	float residual_decay_rate = max(params.transport.x, 0.0);
+	float residual = previous_residual * exp(-residual_decay_rate * delta_s);
+	// Because fresh is now temporal state, max() deposits a frame-rate
+	// independent target and avoids linear accumulation/saturation plateaus.
 	residual = max(residual, fresh * max(params.fresh.w, 0.0));
 	imageStore(foam_next, coord, vec4(clamp(residual, 0.0, 1.0), clamp(fresh, 0.0, 1.0), 0.0, 1.0));
 }

@@ -466,14 +466,18 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
-	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
-	if fft_module != null:
-		fft_module.set_foam_transport_settings(
-			foam_residual_decay_multiplier,
-			foam_deposit_strength,
-			foam_advection_enabled,
-			foam_advection_strength
-		)
+	# OpenOceanFFTModule is a non-tool node, so Godot exposes it as a placeholder
+	# while this @tool scene is edited. Its runtime foam transport API must only be
+	# synchronized in an actual game run.
+	if not Engine.is_editor_hint():
+		var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+		if fft_module != null:
+			fft_module.set_foam_transport_settings(
+				foam_residual_decay_multiplier,
+				foam_deposit_strength,
+				foam_advection_enabled,
+				foam_advection_strength
+			)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:
 		effective_foam_debug_mode = 2

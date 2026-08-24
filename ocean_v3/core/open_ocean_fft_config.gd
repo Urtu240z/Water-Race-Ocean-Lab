@@ -33,8 +33,8 @@ enum SpectrumModel {
 
 # Whitecaps: physical per-band controls for the dedicated high-resolution RG16F
 # persistent field. normal_map.a retains the prior 256² legacy mask for diagnostics
-# only. Rates are interpreted per second and multiplied by the real frame delta
-# by GPUStockhamFFT before dispatch.
+# only. HIRES rates are passed per second together with the real frame delta;
+# update_foam.glsl performs the exponential integration on the GPU.
 @export var foam_enabled := true
 @export_range(0.0, 2.0, 0.01) var foam_whitecap := 0.5
 @export_range(0.0, 4.0, 0.01) var foam_amount := 0.8
