@@ -120,8 +120,8 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		_config.domain_size_m / float(_config.resolution),
 		0.0,
 		_config.foam_whitecap,
-		maxf(delta_s, 0.0) * _config.foam_amount,
-		maxf(delta_s, 0.0) * _config.foam_decay,
+		maxf(delta_s, 0.0) * _config.foam_amount * 7.5,
+		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15,
 		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
 	])
 	_rd.compute_list_set_push_constant(compute_list, assemble_push.to_byte_array(), 32)

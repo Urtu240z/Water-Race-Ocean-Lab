@@ -118,25 +118,25 @@ static func _state_table() -> Dictionary:
 		State.CALM: {
 			"wind_speed_mps": 6.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 8.0, "choppiness": 0.55, "target_hs_m": 0.20, "foam_enabled": true, "foam_whitecap": 0.62, "foam_amount": 0.18, "foam_decay": 1.80, "foam_cascade_weight": 1.0},
-				{"wind_direction": Vector2(1.0, 0.18), "directional_spread": 6.0, "choppiness": 0.45, "target_hs_m": 0.09, "foam_enabled": true, "foam_whitecap": 0.65, "foam_amount": 0.04, "foam_decay": 1.80, "foam_cascade_weight": 0.35},
-				{"wind_direction": Vector2(1.0, 0.25), "directional_spread": 4.0, "choppiness": 0.25, "target_hs_m": 0.03, "foam_enabled": false, "foam_whitecap": 0.70, "foam_amount": 0.0, "foam_decay": 1.80, "foam_cascade_weight": 0.0},
+				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 8.0, "choppiness": 0.55, "target_hs_m": 0.20, "foam_enabled": true, "foam_whitecap": 0.70, "foam_amount": 0.04, "foam_decay": 7.00, "foam_cascade_weight": 1.0},
+				{"wind_direction": Vector2(1.0, 0.18), "directional_spread": 6.0, "choppiness": 0.45, "target_hs_m": 0.09, "foam_enabled": true, "foam_whitecap": 0.74, "foam_amount": 0.008, "foam_decay": 7.00, "foam_cascade_weight": 0.35},
+				{"wind_direction": Vector2(1.0, 0.25), "directional_spread": 4.0, "choppiness": 0.25, "target_hs_m": 0.03, "foam_enabled": false, "foam_whitecap": 0.78, "foam_amount": 0.0, "foam_decay": 7.00, "foam_cascade_weight": 0.0},
 			],
 		},
 		State.RACE: {
 			"wind_speed_mps": 12.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.15), "directional_spread": 7.0, "choppiness": 1.00, "target_hs_m": 0.59, "foam_enabled": true, "foam_whitecap": 0.52, "foam_amount": 0.75, "foam_decay": 0.95, "foam_cascade_weight": 1.0},
-				{"wind_direction": Vector2(1.0, 0.30), "directional_spread": 5.0, "choppiness": 0.70, "target_hs_m": 0.25, "foam_enabled": true, "foam_whitecap": 0.56, "foam_amount": 0.18, "foam_decay": 0.95, "foam_cascade_weight": 0.35},
-				{"wind_direction": Vector2(1.0, 0.45), "directional_spread": 4.0, "choppiness": 0.35, "target_hs_m": 0.05, "foam_enabled": false, "foam_whitecap": 0.64, "foam_amount": 0.0, "foam_decay": 0.95, "foam_cascade_weight": 0.0},
+				{"wind_direction": Vector2(1.0, 0.15), "directional_spread": 7.0, "choppiness": 1.00, "target_hs_m": 0.59, "foam_enabled": true, "foam_whitecap": 0.52, "foam_amount": 0.80, "foam_decay": 5.50, "foam_cascade_weight": 1.0},
+				{"wind_direction": Vector2(1.0, 0.30), "directional_spread": 5.0, "choppiness": 0.70, "target_hs_m": 0.25, "foam_enabled": true, "foam_whitecap": 0.56, "foam_amount": 0.16, "foam_decay": 5.50, "foam_cascade_weight": 0.35},
+				{"wind_direction": Vector2(1.0, 0.45), "directional_spread": 4.0, "choppiness": 0.35, "target_hs_m": 0.05, "foam_enabled": false, "foam_whitecap": 0.64, "foam_amount": 0.0, "foam_decay": 5.50, "foam_cascade_weight": 0.0},
 			],
 		},
 		State.ROUGH: {
 			"wind_speed_mps": 18.0,
 			"bands": [
-				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 2.0, "target_hs_m": 2.50, "foam_enabled": true, "foam_whitecap": 0.42, "foam_amount": 1.50, "foam_decay": 0.65, "foam_cascade_weight": 1.0},
-				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 1.25, "target_hs_m": 0.60, "foam_enabled": true, "foam_whitecap": 0.48, "foam_amount": 0.45, "foam_decay": 0.65, "foam_cascade_weight": 0.35},
-				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 0.40, "target_hs_m": 0.12, "foam_enabled": false, "foam_whitecap": 0.58, "foam_amount": 0.0, "foam_decay": 0.65, "foam_cascade_weight": 0.0},
+				{"wind_direction": Vector2(1.0, 0.10), "directional_spread": 5.0, "choppiness": 2.0, "target_hs_m": 2.50, "foam_enabled": true, "foam_whitecap": 0.42, "foam_amount": 1.60, "foam_decay": 4.50, "foam_cascade_weight": 1.0},
+				{"wind_direction": Vector2(1.0, 0.38), "directional_spread": 3.5, "choppiness": 1.25, "target_hs_m": 0.60, "foam_enabled": true, "foam_whitecap": 0.48, "foam_amount": 0.42, "foam_decay": 4.50, "foam_cascade_weight": 0.35},
+				{"wind_direction": Vector2(1.0, 0.62), "directional_spread": 3.0, "choppiness": 0.40, "target_hs_m": 0.12, "foam_enabled": false, "foam_whitecap": 0.58, "foam_amount": 0.0, "foam_decay": 4.50, "foam_cascade_weight": 0.0},
 			],
 		},
 	}

@@ -38,7 +38,7 @@ enum SpectrumModel {
 @export var foam_enabled := true
 @export_range(0.0, 2.0, 0.01) var foam_whitecap := 0.5
 @export_range(0.0, 4.0, 0.01) var foam_amount := 0.8
-@export_range(0.0, 4.0, 0.01) var foam_decay := 1.0
+@export_range(0.0, 12.0, 0.01) var foam_decay := 5.0
 @export_range(0.0, 1.0, 0.01) var foam_cascade_weight := 1.0
 
 # Métricas de inicialización: no se actualizan por frame ni requieren readback GPU.

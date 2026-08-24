@@ -89,16 +89,6 @@ horizon_water_alpha = 1.0
 fresnel_power = 9.4
 near_roughness = 0.2
 water_specular = 0.4
-foam_enabled = null
-foam_color = null
-foam_intensity = null
-foam_threshold = null
-foam_contrast = null
-foam_roughness = null
-foam_alpha_boost = null
-foam_distance_fade_start = null
-foam_distance_fade_end = null
-foam_mask_debug = null
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true

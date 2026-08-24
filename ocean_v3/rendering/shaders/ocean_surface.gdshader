@@ -140,13 +140,17 @@ uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 uniform bool foam_enabled = true;
 uniform vec4 foam_color : source_color = vec4(0.82, 0.91, 0.90, 1.0);
 uniform float foam_intensity : hint_range(0.0, 4.0, 0.01) = 1.0;
-uniform float foam_threshold : hint_range(0.0, 1.0, 0.01) = 0.18;
+uniform float foam_threshold : hint_range(0.0, 1.0, 0.01) = 0.0;
 uniform float foam_contrast : hint_range(0.1, 4.0, 0.01) = 1.35;
 uniform float foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.88;
 uniform float foam_alpha_boost : hint_range(0.0, 1.0, 0.01) = 0.18;
 uniform float foam_distance_fade_start : hint_range(0.0, 4000.0, 1.0) = 180.0;
 uniform float foam_distance_fade_end : hint_range(1.0, 5000.0, 1.0) = 900.0;
-uniform bool foam_mask_debug = false;
+// 0 OFF, 1 RAW_FOAM, 2 SHAPED_FOAM, 3 COMPRESSION/JACOBIAN.
+uniform int foam_debug_mode = 0;
+// Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
+// active SeaStateConfig; this is not part of the production foam signal.
+uniform vec3 foam_debug_whitecap_by_band = vec3(0.5, 0.5, 0.5);
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
@@ -501,9 +505,6 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 // SHORT spatial weights as the FFT normal path. Surface Detail is deliberately
 // absent: it is decorative normal detail, not a whitecap source.
 float pixel_ocean_foam(vec2 world_xz) {
-	if (!foam_enabled) {
-		return 0.0;
-	}
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -532,11 +533,65 @@ float pixel_ocean_foam(vec2 world_xz) {
 	float mid_foam = textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).a;
 	float short_foam = textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
 
+	// The cascade weight is already applied when each GPU alpha is grown. Do
+	// not normalize by the number/weight of cascades: foam contributions add.
+	const float MID_FOAM_WEIGHT = 1.0;
+	const float SHORT_FOAM_WEIGHT = 1.0;
 	float combined = coastal_foam * coastal_weight + remainder_foam * remainder_weight;
-	combined += mid_foam * mid_weight * mid_short_weight;
-	combined += short_foam * short_weight * mid_short_weight;
-	float total_weight = coastal_weight + remainder_weight + mid_weight * mid_short_weight + short_weight * mid_short_weight;
-	return clamp(combined / max(total_weight, 0.001), 0.0, 1.0);
+	combined += mid_foam * mid_weight * mid_short_weight * MID_FOAM_WEIGHT;
+	combined += short_foam * short_weight * mid_short_weight * SHORT_FOAM_WEIGHT;
+	return clamp(combined, 0.0, 1.0);
+}
+
+
+float jacobian_from_displacement(sampler2D displacement_map, vec2 world_xz, float domain_size_m) {
+	float texel_m = domain_size_m / float(textureSize(displacement_map, 0).x);
+	vec2 dx = vec2(texel_m, 0.0);
+	vec2 dz = vec2(0.0, texel_m);
+	float inverse_two_dx = 0.5 / max(texel_m, 0.0001);
+	vec3 left = textureLod(displacement_map, spectrum_uv(world_xz - dx, domain_size_m), 0.0).rgb;
+	vec3 right = textureLod(displacement_map, spectrum_uv(world_xz + dx, domain_size_m), 0.0).rgb;
+	vec3 down = textureLod(displacement_map, spectrum_uv(world_xz - dz, domain_size_m), 0.0).rgb;
+	vec3 up = textureLod(displacement_map, spectrum_uv(world_xz + dz, domain_size_m), 0.0).rgb;
+	float dXdx = (right.x - left.x) * inverse_two_dx;
+	float dZdx = (right.z - left.z) * inverse_two_dx;
+	float dXdz = (up.x - down.x) * inverse_two_dx;
+	float dZdz = (up.z - down.z) * inverse_two_dx;
+	return (1.0 + dXdx) * (1.0 + dZdz) - dZdx * dXdz;
+}
+
+
+// Diagnostic only: returns (weighted current source, low-J score). Foam
+// production still comes exclusively from the persistent alpha channel.
+vec2 pixel_ocean_compression_debug(vec2 world_xz) {
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
+	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
+	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
+	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	float short_debug_weight = short_weight * mid_short_weight * 0.0;
+
+	float long_coastal_j = jacobian_from_displacement(displacement_long_coastal, world_xz, domain_long_coastal_m);
+	float long_remainder_j = jacobian_from_displacement(displacement_long_remainder, world_xz, domain_long_remainder_m);
+	float mid_j = jacobian_from_displacement(displacement_mid, world_xz, domain_mid_m);
+	float short_j = jacobian_from_displacement(displacement_short, world_xz, domain_short_m);
+
+	float source = max(0.0, foam_debug_whitecap_by_band.x - long_coastal_j) * coastal_weight;
+	source += max(0.0, foam_debug_whitecap_by_band.x - long_remainder_j) * remainder_weight;
+	source += max(0.0, foam_debug_whitecap_by_band.y - mid_j) * mid_weight * mid_short_weight;
+	source += max(0.0, foam_debug_whitecap_by_band.z - short_j) * short_debug_weight;
+
+	// J≈1 maps to mid-gray; J below 1 becomes brighter, J above 1 darker.
+	// min() avoids hiding a localized compressed cascade in this diagnostic.
+	float diagnostic_j = 1.0;
+	if (coastal_weight > 0.001) diagnostic_j = min(diagnostic_j, long_coastal_j);
+	if (remainder_weight > 0.001) diagnostic_j = min(diagnostic_j, long_remainder_j);
+	if (mid_weight * mid_short_weight > 0.001) diagnostic_j = min(diagnostic_j, mid_j);
+	if (short_debug_weight > 0.001) diagnostic_j = min(diagnostic_j, short_j);
+	float low_j_score = clamp(0.5 + (1.0 - diagnostic_j) * 2.0, 0.0, 1.0);
+	return vec2(clamp(source, 0.0, 1.0), low_j_score);
 }
 
 
@@ -602,19 +657,27 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 
 void fragment() {
 	vec3 color = base_color;
+	float raw_foam = pixel_ocean_foam(ocean_world_xz);
 	float foam_mask = 0.0;
+	vec2 compression_debug = vec2(0.0);
 	if (foam_enabled) {
-		float raw_foam = pixel_ocean_foam(ocean_world_xz);
-		float shaped_foam = pow(clamp(raw_foam, 0.0, 1.0), max(foam_contrast, 0.01));
-		float threshold_end = min(1.0, foam_threshold + 0.22);
+		float visual_threshold = clamp(foam_threshold, 0.0, 0.999);
+		float thresholded_foam = max(raw_foam - visual_threshold, 0.0)
+			/ max(1.0 - visual_threshold, 0.001);
+		float shaped_foam = clamp(thresholded_foam * max(foam_contrast, 0.1), 0.0, 1.0);
+		// Single monotonic shaping step. At threshold 0 this is simply
+		// smoothstep(0, 1, raw_foam * foam_contrast).
+		float shaped_mask = smoothstep(0.0, 1.0, shaped_foam);
 		float distance_fade = 1.0 - smoothstep(
 			foam_distance_fade_start,
 			max(foam_distance_fade_end, foam_distance_fade_start + 0.001),
 			distance(ocean_world_xz, camera_world_xz)
 		);
-		foam_mask = smoothstep(foam_threshold, max(threshold_end, foam_threshold + 0.001), shaped_foam)
-			* clamp(foam_intensity, 0.0, 4.0) * distance_fade;
+		foam_mask = shaped_mask * clamp(foam_intensity, 0.0, 4.0) * distance_fade;
 		foam_mask = clamp(foam_mask, 0.0, 1.0);
+	}
+	if (foam_debug_mode == 3) {
+		compression_debug = pixel_ocean_compression_debug(ocean_world_xz);
 	}
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
@@ -677,13 +740,17 @@ void fragment() {
 
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
-	if (foam_mask_debug) {
-		// El camino unlit de abajo muestra la máscara como blanco/negro en
-		// emisión, evitando alterar la óptica de producción.
+	if (foam_debug_mode == 1) {
+		color = vec3(raw_foam);
+	} else if (foam_debug_mode == 2) {
 		color = vec3(foam_mask);
+	} else if (foam_debug_mode == 3) {
+		// Gray = J≈1, white = low J, red = current foam source > 0.
+		color = vec3(compression_debug.y);
+		color = mix(color, vec3(1.0, 0.08, 0.02), smoothstep(0.0, 0.15, compression_debug.x));
 	}
 
-	bool unlit = foam_mask_debug || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;

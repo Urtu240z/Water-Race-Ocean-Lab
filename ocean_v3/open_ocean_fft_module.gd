@@ -162,6 +162,7 @@ func _ready() -> void:
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"))
+	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
 	# inactivo y no renderiza nada.
@@ -254,6 +255,7 @@ func set_sea_state(state: int) -> void:
 		var config := configs[0] if index < 2 else configs[index - 1]
 		cascade["config"] = config
 		RenderingServer.call_on_render_thread(cascade["solver"].update_config.bind(config))
+	_apply_foam_debug_config()
 	dispatches_per_update = 0
 	for cascade in _cascades:
 		dispatches_per_update += cascade["config"].compute_pass_count()
@@ -262,6 +264,18 @@ func set_sea_state(state: int) -> void:
 
 func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
+
+
+func _apply_foam_debug_config() -> void:
+	# The production alpha is already stored per cascade. These thresholds are
+	# only supplied to the COMPRESSION/JACOBIAN diagnostic so it can mark the
+	# current source condition without a CPU readback.
+	if configs.size() < 3:
+		return
+	surface.get_surface_material().set_shader_parameter(
+		&"foam_debug_whitecap_by_band",
+		Vector3(configs[0].foam_whitecap, configs[1].foam_whitecap, configs[2].foam_whitecap)
+	)
 
 
 ## --- A/B de espectro: PHILLIPS <-> JONSWAP_HASSELMANN. ---

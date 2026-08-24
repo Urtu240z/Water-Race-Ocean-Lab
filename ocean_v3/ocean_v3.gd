@@ -218,7 +218,7 @@ extends Node3D
 		foam_intensity = value
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var foam_threshold: float = 0.18:
+@export_range(0.0, 1.0, 0.01) var foam_threshold: float = 0.0:
 	set(value):
 		foam_threshold = value
 		_request_visual_sync()
@@ -248,10 +248,15 @@ extends Node3D
 		foam_distance_fade_end = value
 		_request_visual_sync()
 
-@export var foam_mask_debug: bool = false:
+@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION") var foam_debug_mode: int = 0:
 	set(value):
-		foam_mask_debug = value
+		foam_debug_mode = clampi(value, 0, 3)
+		foam_mask_debug = false
 		_request_visual_sync()
+
+# Serialized compatibility for scenes created with the previous boolean
+# switch. It is hidden from the inspector; true maps to SHAPED_FOAM.
+@export_storage var foam_mask_debug: bool = false
 
 
 var _visual_sync_pending := true
@@ -345,6 +350,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_alpha_boost", foam_alpha_boost)
 	material.set_shader_parameter(&"foam_distance_fade_start", foam_distance_fade_start)
 	material.set_shader_parameter(&"foam_distance_fade_end", foam_distance_fade_end)
-	material.set_shader_parameter(&"foam_mask_debug", foam_mask_debug)
+	var effective_foam_debug_mode := foam_debug_mode
+	if foam_mask_debug and effective_foam_debug_mode == 0:
+		effective_foam_debug_mode = 2
+	material.set_shader_parameter(&"foam_debug_mode", effective_foam_debug_mode)
 
 	_visual_sync_pending = false
