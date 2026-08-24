@@ -276,6 +276,10 @@ func _apply_foam_debug_config() -> void:
 		&"foam_debug_whitecap_by_band",
 		Vector3(configs[0].foam_whitecap, configs[1].foam_whitecap, configs[2].foam_whitecap)
 	)
+	surface.get_surface_material().set_shader_parameter(
+		&"foam_debug_cascade_weight_by_band",
+		Vector3(configs[0].foam_cascade_weight, configs[1].foam_cascade_weight, configs[2].foam_cascade_weight)
+	)
 
 
 ## --- A/B de espectro: PHILLIPS <-> JONSWAP_HASSELMANN. ---

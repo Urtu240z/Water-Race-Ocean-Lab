@@ -79,5 +79,6 @@ func compute_pass_count() -> int:
 
 
 func approximate_gpu_bytes() -> int:
-	# H0 + 4 ping-pong RGBA32F + displacement RGBA32F + normal RGBA16F.
-	return resolution * resolution * (16 * 6 + 8)
+	# H0 + 6 ping-pong RGBA32F (height/displacement + spectral derivatives)
+	# + displacement RGBA32F + normal RGBA16F.
+	return resolution * resolution * (16 * 8 + 8)

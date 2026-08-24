@@ -248,9 +248,29 @@ extends Node3D
 		foam_distance_fade_end = value
 		_request_visual_sync()
 
-@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION") var foam_debug_mode: int = 0:
+@export_range(0.0, 1.0, 0.01) var foam_breakup_strength: float = 0.45:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 3)
+		foam_breakup_strength = value
+		_request_visual_sync()
+
+@export_range(1.0, 200.0, 0.5) var foam_breakup_world_size: float = 14.0:
+	set(value):
+		foam_breakup_world_size = value
+		_request_visual_sync()
+
+@export_range(-2.0, 2.0, 0.01) var foam_breakup_speed: float = 0.04:
+	set(value):
+		foam_breakup_speed = value
+		_request_visual_sync()
+
+@export_range(0.01, 0.49, 0.01) var foam_edge_softness: float = 0.16:
+	set(value):
+		foam_edge_softness = value
+		_request_visual_sync()
+
+@export_enum("OFF", "RAW_FOAM", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE") var foam_debug_mode: int = 0:
+	set(value):
+		foam_debug_mode = clampi(value, 0, 5)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -303,6 +323,11 @@ func _sync_water_visual_parameters() -> void:
 		material.set_shader_parameter(&"surface_normal_texture_a", surface_normal_texture_a)
 		material.set_shader_parameter(&"surface_normal_texture_b", surface_normal_texture_b)
 		material.set_shader_parameter(&"surface_warp_texture", surface_warp_texture)
+	# Foam breakup reuses the warp texture, but remains independent from whether
+	# decorative Surface Detail normals are currently enabled.
+	var foam_breakup_texture_ready := surface_warp_texture != null
+	if foam_breakup_texture_ready:
+		material.set_shader_parameter(&"surface_warp_texture", surface_warp_texture)
 
 	material.set_shader_parameter(&"surface_normal_world_size_a", surface_normal_world_size_a)
 	material.set_shader_parameter(&"surface_normal_world_size_b", surface_normal_world_size_b)
@@ -350,6 +375,11 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_alpha_boost", foam_alpha_boost)
 	material.set_shader_parameter(&"foam_distance_fade_start", foam_distance_fade_start)
 	material.set_shader_parameter(&"foam_distance_fade_end", foam_distance_fade_end)
+	material.set_shader_parameter(&"foam_breakup_strength", foam_breakup_strength)
+	material.set_shader_parameter(&"foam_breakup_world_size", foam_breakup_world_size)
+	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
+	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
+	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:
 		effective_foam_debug_mode = 2

@@ -5,8 +5,10 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D input_a;
 layout(rgba32f, set = 0, binding = 1) uniform restrict readonly image2D input_b;
-layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D output_a;
-layout(rgba32f, set = 0, binding = 3) uniform restrict writeonly image2D output_b;
+layout(rgba32f, set = 0, binding = 2) uniform restrict readonly image2D input_c;
+layout(rgba32f, set = 0, binding = 3) uniform restrict writeonly image2D output_a;
+layout(rgba32f, set = 0, binding = 4) uniform restrict writeonly image2D output_b;
+layout(rgba32f, set = 0, binding = 5) uniform restrict writeonly image2D output_c;
 
 layout(push_constant, std430) uniform Params {
 	ivec4 values; // subtransform size, axis, resolution, inverse
@@ -43,4 +45,5 @@ void main() {
 	vec2 twiddle = vec2(cos(angle), sin(angle));
 	imageStore(output_a, coord, butterfly(imageLoad(input_a, even_coord), imageLoad(input_a, odd_coord), twiddle));
 	imageStore(output_b, coord, butterfly(imageLoad(input_b, even_coord), imageLoad(input_b, odd_coord), twiddle));
+	imageStore(output_c, coord, butterfly(imageLoad(input_c, even_coord), imageLoad(input_c, odd_coord), twiddle));
 }

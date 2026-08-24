@@ -17,6 +17,7 @@ var _config: Resource
 var _h0 := RID()
 var _ping_a: Array[RID] = [RID(), RID()]
 var _ping_b: Array[RID] = [RID(), RID()]
+var _ping_c: Array[RID] = [RID(), RID()]
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
 var _uniform_sets: Array[RID] = []
@@ -45,6 +46,7 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 	for index in 2:
 		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingA%d" % index)
 		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingB%d" % index)
+		_ping_c[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PingC%d" % index)
 	displacement_rid = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".Displacement")
 	# Alpha is persistent foam state. Initialize it once so the first assemble
 	# dispatch cannot consume undefined contents; subsequent frames read/write
@@ -53,10 +55,10 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 	normal_initial_data.resize(_config.resolution * _config.resolution * 8)
 	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, resource_prefix + ".Normal", normal_initial_data)
 
-	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0]])
-	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]])
-	_fft_sets[1] = _create_image_set(_shaders[1], [_ping_a[1], _ping_b[1], _ping_a[0], _ping_b[0]])
-	_assemble_set = _create_image_set(_shaders[2], [_ping_a[0], _ping_b[0], displacement_rid, normal_rid])
+	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0], _ping_c[0]])
+	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_c[0], _ping_a[1], _ping_b[1], _ping_c[1]])
+	_fft_sets[1] = _create_image_set(_shaders[1], [_ping_a[1], _ping_b[1], _ping_c[1], _ping_a[0], _ping_b[0], _ping_c[0]])
+	_assemble_set = _create_image_set(_shaders[2], [_ping_a[0], _ping_b[0], _ping_c[0], displacement_rid, normal_rid])
 	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid()
 	if not ready:
 		last_error = "No se pudieron crear los uniform sets de %s." % resource_prefix
@@ -118,7 +120,7 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		_config.domain_size_m,
 		1.0 / float(_config.resolution * _config.resolution),
 		_config.domain_size_m / float(_config.resolution),
-		0.0,
+		7.5,
 		_config.foam_whitecap,
 		maxf(delta_s, 0.0) * _config.foam_amount * 7.5,
 		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15,
@@ -138,7 +140,7 @@ func free_resources() -> void:
 		if uniform_set.is_valid():
 			_rd.free_rid(uniform_set)
 	_uniform_sets.clear()
-	for texture in [_h0, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], displacement_rid, normal_rid]:
+	for texture in [_h0, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], _ping_c[0], _ping_c[1], displacement_rid, normal_rid]:
 		if texture.is_valid():
 			_rd.free_rid(texture)
 	for pipeline in _pipelines:
@@ -154,6 +156,7 @@ func free_resources() -> void:
 	normal_rid = RID()
 	_ping_a = [RID(), RID()]
 	_ping_b = [RID(), RID()]
+	_ping_c = [RID(), RID()]
 
 
 func _create_pipeline(path: String, resource_name: String) -> RID:
