@@ -114,7 +114,8 @@ var _surface_foam_evolution_speed := 0.35
 var _surface_foam_fft_resolution := 512
 var _surface_foam_field_resolution := 1024
 var _surface_foam_update_hz := 30.0
-var _surface_foam_domain_m := 88.0
+var _surface_foam_source_domain_m := 8.0
+var _surface_foam_field_domain_m := 88.0
 var _surface_foam_depth_m := 20.0
 var _surface_foam_wind_speed_mps := 10.0
 var _surface_foam_wind_direction_deg := 110.0
@@ -123,12 +124,9 @@ var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
-var _surface_foam_feature_domain_m := 8.0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
-var _surface_foam_displacement := Texture2DRD.new()
-var _surface_foam_previous_displacement := Texture2DRD.new()
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -215,7 +213,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_displacement, _surface_foam_previous_displacement, _surface_foam_domain_m)
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_field_domain_m)
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -281,8 +279,6 @@ func _exit_tree() -> void:
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
-	_surface_foam_displacement.texture_rd_rid = RID()
-	_surface_foam_previous_displacement.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
@@ -1001,7 +997,8 @@ func _build_h0(config: Resource, simulation_seed: int) -> PackedByteArray:
 func _make_surface_foam_config() -> SurfaceFoamReferenceConfig:
 	var config := SurfaceFoamConfigScript.new()
 	config.resolution = _surface_foam_fft_resolution
-	config.domain_size_m = _surface_foam_domain_m
+	config.domain_size_m = _surface_foam_source_domain_m
+	config.field_domain_m = _surface_foam_field_domain_m
 	config.depth_m = _surface_foam_depth_m
 	var direction := deg_to_rad(_surface_foam_wind_direction_deg)
 	config.wind_direction = Vector2(cos(direction), sin(direction))
@@ -1009,7 +1006,6 @@ func _make_surface_foam_config() -> SurfaceFoamReferenceConfig:
 	config.fetch_length_m = _surface_foam_fetch_m
 	config.swell = _surface_foam_swell
 	config.detail = _surface_foam_detail
-	config.feature_domain_m = _surface_foam_feature_domain_m
 	# 0 is the narrow/full Hasselmann directional distribution; 1 is flat.
 	config.directional_spread = _surface_foam_directional_spread
 	return config
@@ -1049,13 +1045,11 @@ func _initialize_surface_foam_solver() -> void:
 
 func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_texture.texture_rd_rid = RID()
-	_surface_foam_displacement.texture_rd_rid = RID()
-	_surface_foam_previous_displacement.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
 	_initialize_surface_foam_solver()
-	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_displacement, _surface_foam_previous_displacement, _surface_foam_domain_m)
+	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_field_domain_m)
 	_dispatch_requested = true
 
 
@@ -1085,9 +1079,6 @@ func _publish_ready_textures() -> void:
 		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
-		_surface_foam_displacement.texture_rd_rid = _surface_foam_solver.jacobian_rid
-		_surface_foam_previous_displacement.texture_rd_rid = _surface_foam_solver.previous_jacobian_rid
-		surface.set_surface_foam_temporal(_surface_foam_solver.temporal_alpha())
 	_textures_published = true
 
 
@@ -1168,30 +1159,31 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 
 
-func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, domain_m: float, depth_m: float,
+func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, source_domain_m: float, field_domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
-		directional_spread: float, detail: float, feature_domain_m: float) -> void:
+		directional_spread: float, detail: float) -> void:
 	var effective_wind_speed := maxf(wind_speed_mps, 0.1)
 	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
 	var next_field_resolution := 256 if field_resolution <= 256 else 512 if field_resolution <= 512 else 1024
-	var next_domain := maxf(domain_m, 8.0)
-	var next_feature_domain := clampf(feature_domain_m, 4.0, 32.0)
+	var next_source_domain := clampf(source_domain_m, 4.0, 32.0)
+	var next_field_domain := maxf(field_domain_m, 8.0)
 	var changed := next_resolution != _surface_foam_fft_resolution \
 		or next_field_resolution != _surface_foam_field_resolution \
-		or not is_equal_approx(next_domain, _surface_foam_domain_m) \
+		or not is_equal_approx(next_source_domain, _surface_foam_source_domain_m) \
+		or not is_equal_approx(next_field_domain, _surface_foam_field_domain_m) \
 		or not is_equal_approx(depth_m, _surface_foam_depth_m) \
 		or not is_equal_approx(effective_wind_speed, _surface_foam_wind_speed_mps) \
 		or not is_equal_approx(wind_direction_deg, _surface_foam_wind_direction_deg) \
 		or not is_equal_approx(fetch_m, _surface_foam_fetch_m) \
 		or not is_equal_approx(swell, _surface_foam_swell) \
 		or not is_equal_approx(directional_spread, _surface_foam_directional_spread) \
-		or not is_equal_approx(detail, _surface_foam_detail) \
-		or not is_equal_approx(next_feature_domain, _surface_foam_feature_domain_m)
+		or not is_equal_approx(detail, _surface_foam_detail)
 	if not changed:
 		return
 	_surface_foam_fft_resolution = next_resolution
 	_surface_foam_field_resolution = next_field_resolution
-	_surface_foam_domain_m = next_domain
+	_surface_foam_source_domain_m = next_source_domain
+	_surface_foam_field_domain_m = next_field_domain
 	_surface_foam_depth_m = maxf(depth_m, 0.1)
 	_surface_foam_wind_speed_mps = effective_wind_speed
 	_surface_foam_wind_direction_deg = wind_direction_deg
@@ -1199,7 +1191,6 @@ func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, 
 	_surface_foam_swell = clampf(swell, 0.0, 1.0)
 	_surface_foam_directional_spread = clampf(directional_spread, 0.0, 1.0)
 	_surface_foam_detail = clampf(detail, 0.0, 1.0)
-	_surface_foam_feature_domain_m = next_feature_domain
 	_rebuild_surface_foam_solver()
 
 

@@ -1,32 +1,34 @@
 # Surface Foam: scale, distance and microdetail
 
 The production Surface Foam route is the dedicated `surface_foam_spectrum_solver.gd`.
-It keeps its persistent R16F history, temporal J interpolation, 30 Hz scheduler,
+It keeps its persistent RG16F history/source field, 30 Hz scheduler,
 birth attack, lifetime, selectivity, evolution speed, ocean coupling and edge
 controls from the previous phase.
 
 ## Spectral scale
 
-`surface_foam_domain_m` is the real FFT period and remains 88 m in production.
-`surface_foam_feature_domain_m` is a virtual spectral scale (4-32 m, default
-8 m). It changes feature density without changing the real output tile or its
-periodicity. The remap is:
+Surface Foam now separates the spectral source from the persistent presentation
+field. Production uses `surface_foam_source_domain_m = 8 m` and
+`surface_foam_field_domain_m = 88 m`. The 512² H0/Jacobian is generated with
+the normal reference spectrum at the 8 m source period:
 
 ```text
-compression = max(real_domain / feature_domain, 1)
-k_out = FFT grid vector, dk_out = 2*pi / real_domain
-k_eval = k_out / compression
-dk_eval = dk_out / compression
-w_norm = domega_dk(k_eval) / |k_eval| * dk_eval^2
-amplitude = sqrt(2*TMA(k_eval)*D(k_eval, direction)*w_norm)
+k = FFT grid vector, dk = 2*pi / source_domain
+omega = omega(k)
+amplitude = sqrt(2*TMA(k)*D(k, direction)*(domega_dk/k)*dk^2)
 ```
 
-There is no artistic high-pass, target Hs, band-pass or second FFT. Temporal
-dispersion uses `k_eval`, while Jacobian derivatives use `k_out`, preserving the
-real 88 m periodicity. The JONSWAP/TMA spectrum, physical displacement spectra
-and crest foam are not changed by this control. Sea-state wind presets are 6,
-10 and 20 m/s for CALM, RACE and ROUGH; Amount, Selectivity and Lifetime remain
-independent controls.
+The field update maps each 88 m texel to source space using a seamless analytic
+low-frequency warp. It reads the same 8 m Jacobian twice, with a second rotated
+and 1.19-scaled warp variant, and mixes both with a seamless 88 m blend before
+Birth Selectivity, Attack and Lifetime. This is deperiodization, not a second
+FFT: the source remains 8 m while the persistent field repeats only at 88 m.
+
+The persistent field is RG16F: R is history and G is the deperiodized source
+support. Production fragment shading reads that field once; it no longer reads
+the 8 m Jacobian directly. There is no target Hs, band-pass, feature remap or
+additional simulation. Sea-state wind presets remain 6, 10 and 20 m/s for
+CALM, RACE and ROUGH; Amount, Selectivity and Lifetime remain independent.
 
 ## Shading LOD
 

@@ -5,7 +5,10 @@ extends Resource
 
 @export var id: StringName = &"SURFACE_FOAM"
 @export var resolution := 512
-@export var domain_size_m := 88.0
+## Spectral source period. Production Surface Foam deliberately uses 8 m here.
+@export var domain_size_m := 8.0
+## Persistent presentation/history period. It is not used to build H0.
+@export var field_domain_m := 88.0
 @export var gravity_mps2 := 9.81
 @export var depth_m := 20.0
 @export var wind_direction := Vector2.RIGHT
@@ -15,9 +18,6 @@ extends Resource
 # 0 = Hasselmann completo/direccional; 1 = 1/(2π) isotrópico.
 @export_range(0.0, 1.0, 0.01) var directional_spread := 0.0
 @export_range(0.0, 1.0, 0.01) var detail := 1.0
-## Virtual spectral domain for Surface Foam features. This remaps the
-## reference-compatible spectrum without changing the real FFT tile period.
-@export_range(4.0, 32.0, 0.25) var feature_domain_m := 8.0
 
 # API mínima que reutiliza GPUStockhamFFT. No hay target_hs_m, band-pass ni
 # multiplicador de choppiness en la ruta reference-compatible.
@@ -32,11 +32,11 @@ func is_valid() -> bool:
 	return resolution >= 2 \
 		and (resolution & (resolution - 1)) == 0 \
 		and domain_size_m > 0.0 \
+		and field_domain_m > 0.0 \
 		and gravity_mps2 > 0.0 \
 		and depth_m > 0.0 \
 		and wind_speed_mps > 0.0 \
-		and fetch_length_m > 0.0 \
-		and feature_domain_m >= 4.0
+		and fetch_length_m > 0.0
 
 
 func fft_stage_count() -> int:
@@ -44,11 +44,11 @@ func fft_stage_count() -> int:
 
 
 func compute_pass_count() -> int:
-	# Evolve + IFFT axes + assemble + R16F Surface Foam + previous snapshot.
+	# Evolve + IFFT axes + assemble + RG16F deperiodized Surface Foam field.
 	return 2 * fft_stage_count() + 3
 
 
 func approximate_gpu_bytes() -> int:
 	# H0 + six RGBA32F Stockham work maps + RGBA32F displacement + RGBA16F
-	# derivative target. The persistent R16F accumulator is counted by solver.
+	# derivative target. The persistent RG16F field is counted by solver.
 	return resolution * resolution * (16 * 8 + 8)

@@ -476,9 +476,16 @@ extends Node3D
 		surface_foam_field_resolution = _normalize_resolution_enum(value)
 		_request_visual_sync()
 
-@export_range(8.0, 256.0, 0.5) var surface_foam_domain_m: float = 88.0:
+## Real FFT period controlling Surface Foam feature morphology.
+@export_range(4.0, 32.0, 0.5) var surface_foam_source_domain_m: float = 8.0:
 	set(value):
-		surface_foam_domain_m = value
+		surface_foam_source_domain_m = clampf(value, 4.0, 32.0)
+		_request_visual_sync()
+
+## Persistent/history period. Source detail is deperiodized into this field.
+@export_range(8.0, 256.0, 0.5) var surface_foam_field_domain_m: float = 88.0:
+	set(value):
+		surface_foam_field_domain_m = maxf(value, 8.0)
 		_request_visual_sync()
 
 @export_range(0.1, 200.0, 0.1) var surface_foam_depth_m: float = 20.0:
@@ -515,12 +522,6 @@ extends Node3D
 @export_range(0.0, 1.0, 0.01) var surface_foam_detail: float = 1.0:
 	set(value):
 		surface_foam_detail = value
-		_request_visual_sync()
-
-## Controls spectral feature size without changing the 88 m repetition period.
-@export_range(4.0, 32.0, 0.25) var surface_foam_feature_domain_m: float = 8.0:
-	set(value):
-		surface_foam_feature_domain_m = clampf(value, 4.0, 32.0)
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam / Surface Foam Micro Detail")
@@ -792,15 +793,15 @@ func _sync_water_visual_parameters() -> void:
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
 				surface_foam_field_resolution,
-				surface_foam_domain_m,
+				surface_foam_source_domain_m,
+				surface_foam_field_domain_m,
 				surface_foam_depth_m,
 				surface_foam_wind_speed_mps,
 				surface_foam_wind_direction_deg,
 				surface_foam_fetch_m,
 				surface_foam_swell,
 				surface_foam_directional_spread,
-				surface_foam_detail,
-				surface_foam_feature_domain_m
+				surface_foam_detail
 			)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:

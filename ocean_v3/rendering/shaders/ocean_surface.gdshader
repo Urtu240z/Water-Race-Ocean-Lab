@@ -15,8 +15,6 @@ uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
-uniform sampler2D surface_foam_displacement : repeat_enable, filter_linear;
-uniform sampler2D previous_surface_foam_displacement : repeat_enable, filter_linear;
 // Packed RGB tile: R=organic breakup, G=bubble distance-like field,
 // B=microheight for the derived foam normal.
 uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
@@ -183,9 +181,7 @@ uniform bool foam_breakup_texture_ready = false;
 // Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
 // GPU; these controls only shape its material presentation.
 uniform bool surface_foam_enabled = true;
-uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
-uniform float surface_foam_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
-uniform float surface_foam_temporal_alpha : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float surface_foam_field_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
 uniform float surface_foam_ocean_coupling : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float surface_foam_distance_fade_start_m : hint_range(0.0, 2000.0, 1.0) = 200.0;
 uniform float surface_foam_distance_fade_end_m : hint_range(1.0, 2000.0, 1.0) = 600.0;
@@ -777,29 +773,20 @@ float surface_foam_weight(vec2 world_xz) {
 }
 
 
-// Surface foam is a separate R16F accumulator fed exclusively by its dedicated
-// technical spectrum; it never contributes displacement to the clipmap.
+// Surface foam is a separate RG16F accumulator fed exclusively by its
+// deperiodized technical spectrum; it never contributes displacement.
 // It shares only sampling/filtering policy with crest foam, not state or rates.
-float pixel_ocean_surface_foam_raw(vec2 world_xz) {
+vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
 	if (!surface_foam_enabled) {
-		return 0.0;
+		return vec2(0.0);
 	}
-	float surface_raw = sample_foam_field_filtered(
+	vec2 surface_field = sample_foam_field_filtered(
 		surface_foam_short,
-		spectrum_uv(world_xz, surface_foam_domain_m),
+		spectrum_uv(world_xz, surface_foam_field_domain_m),
 		world_xz,
-		surface_foam_domain_m
-	).x;
-	return clamp(surface_raw * surface_foam_weight(world_xz), 0.0, 1.0);
-}
-
-
-float pixel_ocean_surface_foam_jacobian(vec2 world_xz) {
-	vec2 uv = spectrum_uv(world_xz, surface_foam_domain_m);
-	float current_jacobian = textureLod(surface_foam_displacement, uv, 0.0).r;
-	float previous_jacobian = textureLod(previous_surface_foam_displacement, uv, 0.0).r;
-	float jacobian = mix(previous_jacobian, current_jacobian, smoothstep(0.0, 1.0, surface_foam_temporal_alpha));
-	return isnan(jacobian) || isinf(jacobian) ? 1.0 : jacobian;
+		surface_foam_field_domain_m
+	);
+	return clamp(surface_field * surface_foam_weight(world_xz), 0.0, 1.0);
 }
 
 
@@ -876,10 +863,6 @@ float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float b
 
 // Diagnostic only: matches the dedicated compute path's interpolated J
 // threshold before accumulation. It deliberately does not involve LONG/MID/SHORT.
-float pixel_ocean_surface_foam_source(vec2 world_xz, float jacobian) {
-	return clamp(max(0.0, surface_foam_whitecap - jacobian) * surface_foam_weight(world_xz), 0.0, 1.0);
-}
-
 // Debug-only motion in metres per frame: current horizontal displacement minus
 // the exact previous snapshot that update_foam used for its backtrace.
 vec2 foam_motion_at(sampler2D displacement_map, sampler2D previous_map, vec2 world_xz, float domain_size_m) {
@@ -1122,15 +1105,9 @@ void fragment() {
 	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
-	float surface_foam_raw = pixel_ocean_surface_foam_raw(surface_foam_world_xz);
-	int surface_foam_distance_lod = surface_foam_lod(surface_foam_world_xz);
-	// Far keeps the persistent history at one sample and scalar shaping only.
-	// J remains available in Near/Mid and in its explicit diagnostic mode.
-	float surface_foam_jacobian = 1.0;
-	if (surface_foam_distance_lod < 2 || foam_debug_mode == 21) {
-		surface_foam_jacobian = pixel_ocean_surface_foam_jacobian(surface_foam_world_xz);
-	}
-	float surface_foam_source = pixel_ocean_surface_foam_source(surface_foam_world_xz, surface_foam_jacobian);
+	vec2 surface_foam_field = pixel_ocean_surface_foam_field(surface_foam_world_xz);
+	float surface_foam_raw = surface_foam_field.x;
+	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
 	float surface_foam_shaped = 0.0;
 	float surface_foam_micro_noise = 0.5;
@@ -1323,7 +1300,8 @@ void fragment() {
 	} else if (foam_debug_mode == 20) {
 		color = vec3(foam_mask);
 	} else if (foam_debug_mode == 21) {
-		color = vec3(clamp(surface_foam_jacobian, 0.0, 1.0));
+		// Deperiodized source/support stored in the field's G channel.
+		color = vec3(surface_foam_source);
 	} else if (foam_debug_mode == 22) {
 		color = vec3(surface_foam_bubble_field);
 	} else if (foam_debug_mode == 23) {

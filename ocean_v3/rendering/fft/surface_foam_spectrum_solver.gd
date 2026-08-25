@@ -77,7 +77,7 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".DerivativeA%d" % index, config.resolution)
 		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".DerivativeB%d" % index, config.resolution)
 		_jacobian[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".Jacobian%d" % index, config.resolution)
-		_foam[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".Field%d" % index, _field_resolution)
+		_foam[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Field%d" % index, _field_resolution)
 	_sampler = _create_sampler()
 	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0]])
 	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]])
@@ -164,11 +164,7 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 	if _job_pass == 0:
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[0])
 		_rd.compute_list_bind_uniform_set(list, _evolve_set, 0)
-		var compression := maxf(_config.domain_size_m / maxf(_config.feature_domain_m, 0.000001), 1.0)
-		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
-			_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m,
-			compression, 0.0, 0.0, 0.0
-		]).to_byte_array(), 32)
+		_rd.compute_list_set_push_constant(list, PackedFloat32Array([_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m]).to_byte_array(), 16)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
 	elif _job_pass <= fft_count:
 		var fft_index := _job_pass - 1
@@ -191,8 +187,9 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
 		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
 			_whitecap, source_gain, _birth_selectivity, 1.0,
-			_job_delta, _birth_attack_s, _lifetime_s, 0.12
-		]).to_byte_array(), 32)
+			_job_delta, _birth_attack_s, _lifetime_s, 0.12,
+			_config.field_domain_m, _config.domain_size_m, 2.25, 0.0
+		]).to_byte_array(), 48)
 		_rd.compute_list_dispatch(list, foam_groups, foam_groups, 1)
 	_job_pass += 1
 	if _job_pass >= total_job_passes():
