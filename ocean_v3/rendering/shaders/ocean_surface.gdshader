@@ -171,6 +171,14 @@ uniform float foam_breakup_world_size : hint_range(1.0, 200.0, 0.5) = 14.0;
 uniform float foam_breakup_speed : hint_range(-2.0, 2.0, 0.01) = 0.0;
 uniform float foam_edge_softness : hint_range(0.01, 0.49, 0.01) = 0.16;
 uniform bool foam_breakup_texture_ready = false;
+// Crest foam stays physically owned by its own accumulator. This only shapes
+// its visible mask with the existing direct-J Surface Foam topology.
+uniform bool crest_filigree_enabled = true;
+uniform float crest_fresh_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.22;
+uniform float crest_residual_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.65;
+uniform float crest_filigree_contrast : hint_range(0.1, 4.0, 0.01) = 1.0;
+uniform float crest_filigree_threshold : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float crest_filigree_normal_influence : hint_range(0.0, 2.0, 0.01) = 0.35;
 // Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
 // GPU; these controls only shape its material presentation.
 uniform bool surface_foam_enabled = true;
@@ -204,7 +212,9 @@ uniform float surface_foam_edge_fade_width : hint_range(0.01, 0.5, 0.01) = 0.14;
 uniform float foam_detail_contribution : hint_range(0.0, 1.0, 0.01) = 0.35;
 // 0 OFF, 1 CREST_FINAL, 2 SURFACE_HISTORY, 3 SURFACE_MACRO,
 // 4 SURFACE_FINAL, 5 SURFACE_DIRECT_RAW, 6 SURFACE_DEPERIODIZED_RAW,
-// 7 SURFACE_PLUS_CREST, 8 FOAM_NORMAL, 9 SURFACE_MID_FOLD.
+// 7 SURFACE_PLUS_CREST, 8 FOAM_NORMAL, 9 SURFACE_MID_FOLD,
+// 10 CREST_FILIGREE_SOURCE, 11 CREST_FILIGREE_MASK,
+// 12 CREST_FRESH_WEBBED, 13 CREST_RESIDUAL_WEBBED.
 uniform int foam_debug_mode = 0;
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
@@ -749,6 +759,19 @@ float surface_foam_macro_from_topology(float raw_topology, float history_envelop
 }
 
 
+// The Surface Foam macro remains an unsaturated, direct-J filament source.
+// The history envelope above stabilizes its intensity but never replaces the
+// topology, so Crest Foam inherits branches rather than the 88 m field shape.
+float crest_filigree_source_from_surface_macro(float surface_macro) {
+	float thresholded = smoothstep(
+		crest_filigree_threshold,
+		max(1.0, crest_filigree_threshold + 0.001),
+		clamp(surface_macro, 0.0, 1.0)
+	);
+	return pow(thresholded, 1.0 / max(crest_filigree_contrast, 0.1));
+}
+
+
 vec2 surface_foam_visual_xz() {
 	// The vertex path already includes the physical horizontal FFT displacement
 	// and any active coastal warp. This is a coordinate remap only: no new fetch.
@@ -910,6 +933,7 @@ void fragment() {
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	vec2 surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	float surface_foam_raw_topology = 0.0;
 	float surface_foam_macro = 0.0;
 	float surface_foam_shaped = 0.0;
 	float surface_foam_final_no_micro = 0.0;
@@ -922,8 +946,27 @@ void fragment() {
 	float crest_foam_mask = 0.0;
 	float surface_foam_mask = 0.0;
 	float surface_foam_mid_fold_history_value = 0.0;
+	float crest_filigree_source = 0.0;
+	float crest_filigree_mask = 0.0;
+	float crest_fresh_webbed = 0.0;
+	float crest_residual_webbed = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
+	// Reuse the production direct-J topology calculation for both families.
+	// This preserves the existing Surface Foam cost and keeps Crest Filigree
+	// driven by the same deperiodized world-space branches.
+	if (foam_enabled && surface_foam_enabled) {
+		float surface_distance = distance(ocean_base_xz, camera_world_xz);
+		surface_foam_raw_topology = surface_foam_visible_topology(
+			ocean_base_xz,
+			surface_distance,
+			surface_foam_field_unweighted.y
+		);
+		surface_foam_macro = surface_foam_macro_from_topology(
+			surface_foam_raw_topology,
+			surface_foam_field_unweighted.x
+		);
+	}
 	if (foam_enabled) {
 		float visual_threshold = clamp(foam_threshold, 0.0, 0.999);
 		float thresholded_foam = smoothstep(visual_threshold, 1.0, raw_foam);
@@ -946,16 +989,32 @@ void fragment() {
 		float raw_channel_sum = max(raw_residual + raw_fresh, 0.00001);
 		foam_fresh_mask = crest_foam_mask * raw_fresh / raw_channel_sum;
 		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
+		crest_fresh_webbed = foam_fresh_mask;
+		crest_residual_webbed = foam_residual_mask;
+		if (crest_filigree_enabled && surface_foam_enabled) {
+			crest_filigree_source = crest_filigree_source_from_surface_macro(surface_foam_macro);
+			// The physical Crest mask is the hard support: branches cannot create
+			// foam anywhere a crest accumulator did not already produce it.
+			crest_filigree_mask = crest_foam_mask * crest_filigree_source;
+			// Per-channel erosion, not a raw crest + pattern sum. Fresh keeps a
+			// compact body while residual follows the branches and opens more holes.
+			crest_fresh_webbed = foam_fresh_mask * mix(
+				1.0,
+				crest_filigree_source,
+				clamp(crest_fresh_filigree_strength, 0.0, 1.0)
+			);
+			crest_residual_webbed = foam_residual_mask * mix(
+				1.0,
+				crest_filigree_source,
+				clamp(crest_residual_filigree_strength, 0.0, 1.0)
+			);
+			foam_fresh_mask = crest_fresh_webbed;
+			foam_residual_mask = crest_residual_webbed;
+			crest_foam_mask = clamp(crest_fresh_webbed + crest_residual_webbed, 0.0, 1.0);
+		}
 
 		if (surface_foam_enabled) {
 			float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
-			float surface_distance = distance(ocean_base_xz, camera_world_xz);
-			float raw_topology = surface_foam_visible_topology(
-				ocean_base_xz,
-				surface_distance,
-				surface_foam_field_unweighted.y
-			);
-			surface_foam_macro = surface_foam_macro_from_topology(raw_topology, surface_foam_field_unweighted.x);
 			// Direct macro is the silhouette. Strength and distance are post-shape
 			// gains only; threshold/contrast cannot turn it into dots.
 			surface_foam_final_no_micro = clamp(
@@ -1078,6 +1137,14 @@ void fragment() {
 		color = foam_normal_debug * 0.5 + 0.5;
 	} else if (foam_debug_mode == 9) {
 		color = vec3(surface_foam_mid_fold_history_value);
+	} else if (foam_debug_mode == 10) {
+		color = vec3(crest_filigree_source);
+	} else if (foam_debug_mode == 11) {
+		color = vec3(crest_filigree_mask);
+	} else if (foam_debug_mode == 12) {
+		color = vec3(crest_fresh_webbed);
+	} else if (foam_debug_mode == 13) {
+		color = vec3(crest_residual_webbed);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -1110,7 +1177,8 @@ void fragment() {
 		float camera_distance = distance(ocean_world_xz, camera_world_xz);
 		float foam_normal_mask = foam_fresh_mask * foam_fresh_normal_weight
 			+ foam_residual_mask * foam_residual_normal_weight
-			+ surface_foam_mask * surface_foam_normal_strength;
+			+ surface_foam_mask * surface_foam_normal_strength
+			+ crest_filigree_mask * crest_filigree_normal_influence;
 		if (foam_normal_mask > 0.0001 && foam_normal_strength > 0.0) {
 			vec3 foam_shape_normal_world = normalize(vec3(
 				-foam_shape_gradient.x * foam_normal_strength,

@@ -338,6 +338,39 @@ extends Node3D
 		foam_edge_softness = value
 		_request_visual_sync()
 
+
+@export_category("Whitecaps Foam / Crest Filigree")
+@export var crest_filigree_enabled := true:
+	set(value):
+		crest_filigree_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var crest_fresh_filigree_strength := 0.22:
+	set(value):
+		crest_fresh_filigree_strength = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var crest_residual_filigree_strength := 0.65:
+	set(value):
+		crest_residual_filigree_strength = value
+		_request_visual_sync()
+
+@export_range(0.1, 4.0, 0.01) var crest_filigree_contrast := 1.0:
+	set(value):
+		crest_filigree_contrast = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var crest_filigree_threshold := 0.0:
+	set(value):
+		crest_filigree_threshold = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var crest_filigree_normal_influence := 0.35:
+	set(value):
+		crest_filigree_normal_influence = value
+		_request_visual_sync()
+
+
 @export_category("Whitecaps Foam / Surface Foam")
 @export var surface_foam_enabled: bool = true:
 	set(value):
@@ -558,9 +591,9 @@ extends Node3D
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam Debug")
-@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD") var foam_debug_mode: int = 0:
+@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD", "CREST_FILIGREE_SOURCE", "CREST_FILIGREE_MASK", "CREST_FRESH_WEBBED", "CREST_RESIDUAL_WEBBED") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 9)
+		foam_debug_mode = clampi(value, 0, 13)
 		_request_visual_sync()
 
 
@@ -693,6 +726,12 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
+	material.set_shader_parameter(&"crest_filigree_enabled", crest_filigree_enabled)
+	material.set_shader_parameter(&"crest_fresh_filigree_strength", crest_fresh_filigree_strength)
+	material.set_shader_parameter(&"crest_residual_filigree_strength", crest_residual_filigree_strength)
+	material.set_shader_parameter(&"crest_filigree_contrast", crest_filigree_contrast)
+	material.set_shader_parameter(&"crest_filigree_threshold", crest_filigree_threshold)
+	material.set_shader_parameter(&"crest_filigree_normal_influence", crest_filigree_normal_influence)
 	var foam_micro_texture_ready := surface_foam_micro_detail != null
 	material.set_shader_parameter(&"surface_foam_micro_texture_ready", foam_micro_texture_ready)
 	if foam_micro_texture_ready:
