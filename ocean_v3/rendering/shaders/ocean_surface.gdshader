@@ -17,6 +17,7 @@ uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_displacement : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
 uniform sampler2D previous_displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_mid : repeat_enable, filter_linear;
@@ -168,7 +169,7 @@ uniform float foam_distance_fade_start : hint_range(0.0, 4000.0, 1.0) = 180.0;
 uniform float foam_distance_fade_end : hint_range(1.0, 5000.0, 1.0) = 900.0;
 // Reconstruct the coarse persistent alpha smoothly near the camera. This is a
 // presentation filter only: normal RGB and the stored physical foam stay intact.
-uniform bool foam_filter_bicubic_enabled = true;
+uniform bool foam_filter_bicubic_enabled = false;
 uniform float foam_filter_fade_start : hint_range(0.0, 1000.0, 1.0) = 72.0;
 uniform float foam_filter_fade_end : hint_range(1.0, 2000.0, 1.0) = 224.0;
 uniform float foam_breakup_strength : hint_range(0.0, 1.0, 0.01) = 0.45;
@@ -196,8 +197,9 @@ uniform float surface_foam_specular : hint_range(0.0, 1.0, 0.01) = 0.20;
 // Presentation-only detail: it modulates the already persistent physical mask
 // and is anchored in ocean_base_xz, never in screen or scrolling UVs.
 uniform bool surface_foam_micro_detail_enabled = true;
+uniform bool surface_foam_micro_texture_ready = false;
 uniform float surface_foam_micro_strength : hint_range(0.0, 1.0, 0.01) = 0.45;
-uniform vec2 surface_foam_micro_scale_m = vec2(0.35, 0.07);
+uniform vec2 surface_foam_micro_scale_m = vec2(8.0, 2.7);
 uniform vec2 surface_foam_micro_distance_m = vec2(12.0, 45.0);
 uniform float surface_foam_micro_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.25;
 // Spectral erosion is presentation-only: MID/SHORT shape LONG without changing
@@ -886,34 +888,41 @@ float pixel_ocean_surface_foam_jacobian(vec2 world_xz) {
 
 float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float noise_value) {
 	noise_value = 0.5;
-	if (!surface_foam_micro_detail_enabled || physical_mask <= 0.00001) {
+	if (!surface_foam_micro_detail_enabled || !surface_foam_micro_texture_ready || physical_mask <= 0.00001) {
 		return smoothstep(base_threshold, 1.0, physical_mask);
 	}
 	float camera_distance = distance(world_xz, camera_world_xz);
-	float end_distance = max(surface_foam_micro_distance_m.y, surface_foam_micro_distance_m.x + 0.01);
+	float near_distance = max(surface_foam_micro_distance_m.x, 0.01);
+	float end_distance = max(surface_foam_micro_distance_m.y, near_distance + 0.01);
 	if (camera_distance >= end_distance) {
 		return smoothstep(base_threshold, 1.0, physical_mask);
 	}
-	float near_weight = 1.0 - smoothstep(surface_foam_micro_distance_m.x, end_distance, camera_distance);
-	vec2 footprint_uv = max(abs(dFdx(world_xz)), abs(dFdy(world_xz)));
-	float footprint = max(footprint_uv.x, footprint_uv.y);
-	float coarse_scale = max(surface_foam_micro_scale_m.x, 0.02);
-	float fine_scale = max(surface_foam_micro_scale_m.y, 0.01);
-	float coarse_visible = 1.0 - smoothstep(coarse_scale * 0.35, coarse_scale * 1.25, footprint);
-	float fine_distance = 1.0 - smoothstep(surface_foam_micro_distance_m.x, max(surface_foam_micro_distance_m.x + 0.01, 35.0), camera_distance);
-	float fine_visible = (1.0 - smoothstep(fine_scale * 0.35, fine_scale * 1.25, footprint)) * fine_distance;
-	float coarse = texture(surface_warp_texture, world_xz / coarse_scale).r;
-	float combined = coarse;
-	if (fine_visible > 0.001) {
+	float near_weight = 1.0 - smoothstep(0.0, near_distance, camera_distance);
+	float medium_weight = 1.0 - smoothstep(near_distance, end_distance, camera_distance);
+	vec2 world_dx = dFdx(world_xz);
+	vec2 world_dy = dFdy(world_xz);
+	vec2 medium_uv = world_xz / max(surface_foam_micro_scale_m.x, 0.5);
+	vec2 medium_dx = world_dx / max(surface_foam_micro_scale_m.x, 0.5);
+	vec2 medium_dy = world_dy / max(surface_foam_micro_scale_m.x, 0.5);
+	float medium = textureGrad(surface_foam_micro_texture, medium_uv, medium_dx, medium_dy).r;
+	float combined = medium;
+	if (near_weight > 0.001) {
 		mat2 rotation = mat2(vec2(0.70710678, -0.70710678), vec2(0.70710678, 0.70710678));
-		float fine = texture(surface_warp_texture, rotation * world_xz / fine_scale + vec2(0.371, 0.619)).r;
-		combined = coarse * 0.65 + fine * 0.35;
+		vec2 fine_uv = rotation * world_xz / max(surface_foam_micro_scale_m.y, 0.5) + vec2(0.371, 0.619);
+		vec2 fine_dx = rotation * world_dx / max(surface_foam_micro_scale_m.y, 0.5);
+		vec2 fine_dy = rotation * world_dy / max(surface_foam_micro_scale_m.y, 0.5);
+		float fine = textureGrad(surface_foam_micro_texture, fine_uv, fine_dx, fine_dy).r;
+		combined = mix(medium, fine, near_weight * 0.38);
 	}
 	noise_value = combined;
+	float edge_factor = 4.0 * physical_mask * (1.0 - physical_mask);
 	float micro_domain = smoothstep(0.002, 0.08, physical_mask);
-	float threshold_offset = (combined - 0.5) * surface_foam_micro_strength * near_weight * micro_domain * max(coarse_visible, fine_visible);
+	float visibility = max(medium_weight * 0.55, near_weight);
+	float threshold_offset = (combined - 0.5) * surface_foam_micro_strength * visibility * micro_domain * (0.35 + 0.65 * edge_factor);
 	float softness = max(fwidth(physical_mask) * 1.5, 0.018);
-	return smoothstep(base_threshold + threshold_offset - softness, base_threshold + threshold_offset + softness, physical_mask);
+	float shaped = smoothstep(base_threshold + threshold_offset - softness, base_threshold + threshold_offset + softness, physical_mask);
+	float interior_hole = smoothstep(0.62, 0.92, physical_mask) * (1.0 - edge_factor) * near_weight * 0.06;
+	return shaped * (1.0 - interior_hole * (1.0 - combined));
 }
 
 

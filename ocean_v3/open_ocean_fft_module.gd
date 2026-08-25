@@ -54,7 +54,13 @@ enum BandDebug {
 @export var breaker_enabled := true
 # Technical foam-field resolution, deliberately independent from FFT resolution.
 # Changing it recreates only the RG16F foam ping-pong images; H0 and the FFT stay intact.
-@export_enum("256", "512", "1024") var foam_resolution: int = DEFAULT_FOAM_RESOLUTION:
+@export var foam_resolution_auto := true:
+	set(value):
+		foam_resolution_auto = value
+		if is_inside_tree() and not _cascades.is_empty():
+			_rebuild_foam_resolution()
+
+@export_enum("AUTO:0", "256:256", "512:512", "1024:1024") var foam_resolution: int = 0:
 	set(value):
 		foam_resolution = _validated_foam_resolution(value)
 		if is_inside_tree() and not _cascades.is_empty():
@@ -223,13 +229,14 @@ func _ready() -> void:
 
 
 func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resource_prefix: String) -> Dictionary:
+	var cascade_index := _cascades.size()
 	var displacement := Texture2DRD.new()
 	var normal := Texture2DRD.new()
 	var foam := Texture2DRD.new()
 	var surface_foam := Texture2DRD.new()
 	var previous_displacement := Texture2DRD.new()
 	var solver := SolverScript.new()
-	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, foam_resolution))
+	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, _crest_foam_resolution_for_cascade(cascade_index)))
 	return {
 		"config": config,
 		"solver": solver,
@@ -1086,6 +1093,31 @@ func set_crest_foam_update_hz(update_hz: float) -> void:
 		))
 
 
+func set_crest_foam_compute_enabled(enabled: bool) -> void:
+	for cascade in _cascades:
+		RenderingServer.call_on_render_thread(cascade.solver.set_crest_foam_compute_enabled.bind(enabled))
+
+
+func foam_render_diagnostics() -> Dictionary:
+	var cascades_state: Array[Dictionary] = []
+	for cascade in _cascades:
+		var state: Dictionary = cascade.solver.diagnostic_state()
+		cascades_state.append({
+			"id": cascade.config.id,
+			"resolution": state.get("foam_resolution", 0),
+			"updates_total": state.get("crest_updates_total", 0),
+			"updates_per_second": state.get("crest_updates_per_second", 0.0),
+			"snapshots": state.get("crest_snapshot_count", 0),
+		})
+	var surface_state: Dictionary = _surface_foam_solver.diagnostic_state() if _surface_foam_solver != null else {}
+	return {
+		"crest": cascades_state,
+		"surface": surface_state,
+		"surface_fft_resolution": _surface_foam_fft_resolution,
+		"surface_field_resolution": _surface_foam_field_resolution,
+	}
+
+
 func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float, update_hz: float) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
@@ -1136,11 +1168,20 @@ func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, 
 func _rebuild_foam_resolution() -> void:
 	# GPU-only resource rebuild: no H0 upload, spectrum rebuild or CPU readback.
 	_textures_published = false
-	for cascade in _cascades:
-		RenderingServer.call_on_render_thread(cascade.solver.set_foam_resolution.bind(foam_resolution))
+	for index in _cascades.size():
+		RenderingServer.call_on_render_thread(_cascades[index].solver.set_foam_resolution.bind(_crest_foam_resolution_for_cascade(index)))
+
+
+func _crest_foam_resolution_for_cascade(index: int) -> int:
+	if not foam_resolution_auto:
+		return _validated_foam_resolution(foam_resolution)
+	# Production policy: LONG_COASTAL/LONG_REMAINDER 1024, MID 512, SHORT 256.
+	return 1024 if index < 2 else 512 if index == 2 else 256
 
 
 func _validated_foam_resolution(value: int) -> int:
+	if value <= 0:
+		return 0
 	if value <= 256:
 		return 256
 	if value <= 512:

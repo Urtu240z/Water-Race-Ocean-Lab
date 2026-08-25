@@ -55,6 +55,7 @@ func _process(_delta: float) -> void:
 			OceanModuleRegistry.active_module_count(),
 		],
 		fft_line,
+		_foam_line(fft_module),
 		"Clipmap: ON | Levels: %d | Near spacing: %.2f m | Extent: %.0f m | Triangles: %d" % [
 			fft_module.clipmap_level_count() if fft_module else 0,
 			fft_module.clipmap_near_spacing_m() if fft_module else 0.0,
@@ -78,6 +79,23 @@ func _hs_line(fft_module) -> String:
 	for band in bands:
 		parts.append("%s %.3f/%.3f" % [band["id"], band["target_hs_m"], band["measured_hs_m"]])
 	return "Hs " + " | ".join(parts)
+
+
+func _foam_line(fft_module) -> String:
+	if fft_module == null or not fft_module.has_method(&"foam_render_diagnostics"):
+		return "Foam diagnostics: unavailable"
+	var diagnostics: Dictionary = fft_module.foam_render_diagnostics()
+	var crest_parts: PackedStringArray = []
+	for cascade in diagnostics.get("crest", []):
+		crest_parts.append("%s %d² %.1f/s" % [cascade.get("id", "?"), cascade.get("resolution", 0), cascade.get("updates_per_second", 0.0)])
+	var surface: Dictionary = diagnostics.get("surface", {})
+	return "Foam: Crest[%s] | Surface jobs %.1f/s passes %.1f/s | FFT/field %d/%d" % [
+		" ".join(crest_parts),
+		surface.get("jobs_per_second", 0.0),
+		surface.get("passes_per_second", 0.0),
+		diagnostics.get("surface_fft_resolution", 0),
+		diagnostics.get("surface_field_resolution", 0),
+	]
 
 
 func _probe_tool_enabled() -> bool:

@@ -43,6 +43,13 @@ var _update_hz := 60.0
 var _enabled := true
 var _whitecap := 0.0
 var _amount := 8.573
+var _completed_jobs_total := 0
+var _passes_dispatched_total := 0
+var _jobs_window := 0
+var _passes_window := 0
+var _diagnostic_window_s := 0.0
+var _jobs_per_second := 0.0
+var _passes_per_second := 0.0
 
 
 func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, resource_prefix := "Ocean2B.SurfaceFoam", field_resolution := 1024) -> void:
@@ -101,6 +108,7 @@ func total_job_passes() -> int:
 func advance(frame_delta: float) -> void:
 	if not ready or not _enabled:
 		return
+	_diagnostic_window_s += maxf(frame_delta, 0.0)
 	var period := 1.0 / _update_hz
 	_update_accumulator += maxf(frame_delta, 0.0)
 	_pass_credit = minf(_pass_credit + total_job_passes() * _update_hz * maxf(frame_delta, 0.0), float(total_job_passes() * 2))
@@ -122,8 +130,16 @@ func advance(frame_delta: float) -> void:
 		if not _job_active:
 			break
 		_dispatch_job_pass(list, groups, foam_groups)
+		_passes_dispatched_total += 1
+		_passes_window += 1
 		_rd.compute_list_add_barrier(list)
 	_rd.compute_list_end()
+	if _diagnostic_window_s >= 1.0:
+		_jobs_per_second = float(_jobs_window) / _diagnostic_window_s
+		_passes_per_second = float(_passes_window) / _diagnostic_window_s
+		_jobs_window = 0
+		_passes_window = 0
+		_diagnostic_window_s = 0.0
 
 
 func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
@@ -160,10 +176,12 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		jacobian_rid = _jacobian[_jacobian_read_index]
 		surface_foam_rid = _foam[_foam_read_index]
 		_job_active = false
+		_completed_jobs_total += 1
+		_jobs_window += 1
 
 
 func diagnostic_state() -> Dictionary:
-	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "h0_upload_bytes": h0_upload_byte_count, "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2}
+	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "h0_upload_bytes": h0_upload_byte_count, "completed_jobs_total": _completed_jobs_total, "passes_dispatched_total": _passes_dispatched_total, "jobs_per_second": _jobs_per_second, "passes_per_second": _passes_per_second, "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2}
 
 
 func free_resources() -> void:

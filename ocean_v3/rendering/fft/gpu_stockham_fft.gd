@@ -28,7 +28,7 @@ var _ping_b: Array[RID] = [RID(), RID()]
 var _ping_c: Array[RID] = [RID(), RID()]
 var _foam_ping: Array[RID] = [RID(), RID()]
 var _surface_foam_ping: Array[RID] = [RID(), RID()]
-var _previous_displacement_ping: Array[RID] = [RID(), RID(), RID()]
+var _previous_displacement_ping: Array[RID] = [RID(), RID()]
 var _foam_read_index := 0
 var _surface_foam_read_index := 0
 var _previous_displacement_read_index := 0
@@ -38,6 +38,7 @@ var _foam_residual_decay_multiplier := 1.0
 var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
+var _crest_foam_compute_enabled := true
 var _crest_foam_update_hz := 60.0
 var _crest_foam_accumulator := 0.0
 var _surface_foam_enabled := true
@@ -53,11 +54,17 @@ var _assemble_set := RID()
 var _foam_sets: Array[RID] = []
 var _surface_foam_sets: Array[RID] = []
 var _store_displacement_sets: Array[RID] = []
+var _resource_prefix := "Ocean1B"
+var _crest_updates_total := 0
+var _crest_updates_window := 0
+var _diagnostic_window_s := 0.0
+var _crest_updates_per_second := 0.0
 
 
 func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "Ocean1B", foam_resolution := DEFAULT_FOAM_RESOLUTION) -> void:
 	free_resources()
 	_config = config
+	_resource_prefix = resource_prefix
 	_foam_resolution = _validated_foam_resolution(foam_resolution)
 	_rd = RenderingServer.get_rendering_device()
 	if _rd == null:
@@ -115,9 +122,13 @@ func diagnostic_state() -> Dictionary:
 		"surface_foam_rid": surface_foam_rid.get_id() if surface_foam_rid.is_valid() else -1,
 		"previous_displacement_rid": previous_displacement_rid.get_id() if previous_displacement_rid.is_valid() else -1,
 		"foam_resolution": _foam_resolution,
+		"crest_foam_compute_enabled": _crest_foam_compute_enabled,
+		"crest_updates_total": _crest_updates_total,
+		"crest_updates_per_second": _crest_updates_per_second,
+		"crest_snapshot_count": 2 if _foam_advection_enabled else 0,
 		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2 if _has_crest_foam() else 0,
 		"surface_foam_gpu_bytes": _foam_resolution * _foam_resolution * 2 * 2 if _is_surface_foam_source() else 0,
-		"previous_displacement_gpu_bytes": _config.resolution * _config.resolution * 4 * 3,
+		"previous_displacement_gpu_bytes": _config.resolution * _config.resolution * 4 * 2 if _foam_advection_enabled else 0,
 	}
 
 
@@ -129,10 +140,19 @@ func update_config(config: Resource) -> void:
 
 
 func set_foam_transport_settings(residual_decay_multiplier: float, deposit_strength: float, advection_enabled: bool, advection_strength: float) -> void:
+	var snapshots_changed := _foam_advection_enabled != advection_enabled
 	_foam_residual_decay_multiplier = maxf(residual_decay_multiplier, 0.0)
 	_foam_deposit_strength = clampf(deposit_strength, 0.0, 2.0)
 	_foam_advection_enabled = advection_enabled
 	_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
+	if snapshots_changed and ready:
+		_free_foam_resources()
+		_create_foam_resources(_resource_prefix)
+		ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_resources_ready()
+
+
+func set_crest_foam_compute_enabled(enabled: bool) -> void:
+	_crest_foam_compute_enabled = enabled
 
 
 func set_crest_foam_schedule(update_hz: float, phase_offset: float) -> void:
@@ -156,7 +176,7 @@ func set_foam_resolution(foam_resolution: int) -> void:
 	if _rd == null or _shaders.size() < 6:
 		return
 	_free_foam_resources()
-	_create_foam_resources("OceanFoam")
+	_create_foam_resources(_resource_prefix)
 	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_resources_ready()
 
 
@@ -215,7 +235,7 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
 	var crest_update_due := false
 	var crest_delta := 0.0
-	if _has_crest_foam() and _config.foam_enabled:
+	if _has_crest_foam() and _config.foam_enabled and _crest_foam_compute_enabled:
 		_crest_foam_accumulator += maxf(delta_s, 0.0)
 		var crest_period := 1.0 / _crest_foam_update_hz
 		if _crest_foam_accumulator >= crest_period:
@@ -244,6 +264,8 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		])
 		_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
 		_rd.compute_list_dispatch(compute_list, foam_groups, foam_groups, 1)
+		_crest_updates_total += 1
+		_crest_updates_window += 1
 		_foam_read_index = 1 - _foam_read_index
 		foam_rid = _foam_ping[_foam_read_index]
 		_rd.compute_list_add_barrier(compute_list)
@@ -268,17 +290,23 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		_rd.compute_list_add_barrier(compute_list)
 
 	# Capture current horizontal displacement after foam consumed the prior pair.
-	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[4])
-	var previous_snapshot_index := _previous_displacement_read_index
-	_rd.compute_list_bind_uniform_set(compute_list, _store_displacement_sets[previous_snapshot_index], 0)
-	_rd.compute_list_set_push_constant(compute_list, PackedByteArray(), 0)
-	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
+	if crest_update_due and _foam_advection_enabled:
+		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[4])
+		var previous_snapshot_index := _previous_displacement_read_index
+		_rd.compute_list_bind_uniform_set(compute_list, _store_displacement_sets[previous_snapshot_index], 0)
+		_rd.compute_list_set_push_constant(compute_list, PackedByteArray(), 0)
+		_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	# Publish the exact old snapshot consumed by this foam update. Current
 	# displacement is already published separately, so the material can show the
 	# same motion vector without retaining another texture.
-	previous_displacement_rid = _previous_displacement_ping[previous_snapshot_index]
-	_previous_displacement_read_index = (previous_snapshot_index + 1) % 3
-	_rd.compute_list_add_barrier(compute_list)
+		previous_displacement_rid = _previous_displacement_ping[previous_snapshot_index]
+		_previous_displacement_read_index = (previous_snapshot_index + 1) % 2
+		_rd.compute_list_add_barrier(compute_list)
+	_diagnostic_window_s += maxf(delta_s, 0.0)
+	if _diagnostic_window_s >= 1.0:
+		_crest_updates_per_second = float(_crest_updates_window) / _diagnostic_window_s
+		_crest_updates_window = 0
+		_diagnostic_window_s = 0.0
 	_rd.compute_list_end()
 
 
@@ -380,8 +408,14 @@ func _create_foam_resources(resource_prefix: String) -> void:
 		_surface_foam_ping[1] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".SurfaceFoamB", surface_initial_data, false, _foam_resolution)
 	var displacement_initial_data := PackedByteArray()
 	displacement_initial_data.resize(_config.resolution * _config.resolution * 4)
-	for index in 3:
-		_previous_displacement_ping[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".PreviousDisplacement%d" % index, displacement_initial_data)
+	var snapshot_count := 2 if _foam_advection_enabled else 1
+	if _foam_advection_enabled:
+		for index in snapshot_count:
+			_previous_displacement_ping[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".PreviousDisplacement%d" % index, displacement_initial_data)
+	else:
+		# The binding remains valid without allocating snapshot images; advection
+		# is disabled in the push constants and both samples use current J.
+		_previous_displacement_ping[0] = displacement_rid
 	var sampler_state := RDSamplerState.new()
 	sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
@@ -391,15 +425,16 @@ func _create_foam_resources(resource_prefix: String) -> void:
 	_linear_repeat_sampler = _rd.sampler_create(sampler_state)
 	_foam_sets.clear()
 	_surface_foam_sets.clear()
-	for snapshot_index in 3:
+	for snapshot_index in snapshot_count:
 		for foam_index in 2:
 			if _has_crest_foam():
 				_foam_sets.append(_create_foam_set(_shaders[3], displacement_rid, _previous_displacement_ping[snapshot_index], _foam_ping[foam_index], _foam_ping[1 - foam_index]))
 			if _is_surface_foam_source():
 				_surface_foam_sets.append(_create_surface_foam_set(_shaders[5], displacement_rid, _previous_displacement_ping[snapshot_index], _surface_foam_ping[foam_index], _surface_foam_ping[1 - foam_index]))
 	_store_displacement_sets.clear()
-	for snapshot_index in 3:
-		_store_displacement_sets.append(_create_store_displacement_set(_shaders[4], displacement_rid, _previous_displacement_ping[(snapshot_index + 1) % 3]))
+	if _foam_advection_enabled:
+		for snapshot_index in snapshot_count:
+			_store_displacement_sets.append(_create_store_displacement_set(_shaders[4], displacement_rid, _previous_displacement_ping[(snapshot_index + 1) % snapshot_count]))
 	_foam_read_index = 0
 	_surface_foam_read_index = 0
 	_previous_displacement_read_index = 0
@@ -479,7 +514,7 @@ func _free_foam_resources() -> void:
 		if texture.is_valid():
 			_rd.free_rid(texture)
 	for texture in _previous_displacement_ping:
-		if texture.is_valid():
+		if texture.is_valid() and texture != displacement_rid:
 			_rd.free_rid(texture)
 	if _linear_repeat_sampler.is_valid():
 		_rd.free_rid(_linear_repeat_sampler)
@@ -488,7 +523,7 @@ func _free_foam_resources() -> void:
 	_store_displacement_sets.clear()
 	_foam_ping = [RID(), RID()]
 	_surface_foam_ping = [RID(), RID()]
-	_previous_displacement_ping = [RID(), RID(), RID()]
+	_previous_displacement_ping = [RID(), RID()]
 	_linear_repeat_sampler = RID()
 	foam_rid = RID()
 	surface_foam_rid = RID()
@@ -496,10 +531,10 @@ func _free_foam_resources() -> void:
 
 
 func _foam_resources_ready() -> bool:
-	if _store_displacement_sets.size() != 3:
+	if _store_displacement_sets.size() != (2 if _foam_advection_enabled else 0):
 		return false
 	if _has_crest_foam():
-		if _foam_sets.size() != 6:
+		if _foam_sets.size() != (4 if _foam_advection_enabled else 2):
 			return false
 		for uniform_set in _foam_sets:
 			if not uniform_set.is_valid():

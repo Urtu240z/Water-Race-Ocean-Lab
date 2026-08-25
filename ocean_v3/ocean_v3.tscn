@@ -5,6 +5,7 @@
 [ext_resource type="Texture2D" uid="uid://cdlm681krlrvi" path="res://ocean_v3/rendering/surface_detail/surface_normal_a.tres" id="3_5nfe4"]
 [ext_resource type="Texture2D" uid="uid://biv8w5n57xhjr" path="res://ocean_v3/rendering/surface_detail/surface_normal_b.tres" id="4_hqww3"]
 [ext_resource type="Texture2D" uid="uid://bblan7rbfrudb" path="res://ocean_v3/rendering/surface_detail/surface_warp_noise.tres" id="5_v8q1b"]
+[ext_resource type="Texture2D" path="res://ocean_v3/rendering/surface_detail/surface_foam_micro_noise.tres" id="7_foam_micro"]
 [ext_resource type="Script" path="res://ocean_v3/ocean_v3.gd" id="6_root"]
 
 [node name="OceanV3" type="Node3D" unique_id=919503098]
@@ -12,6 +13,7 @@ script = ExtResource("6_root")
 surface_normal_texture_a = ExtResource("3_5nfe4")
 surface_normal_texture_b = ExtResource("4_hqww3")
 surface_warp_texture = ExtResource("5_v8q1b")
+surface_foam_micro_texture = ExtResource("7_foam_micro")
 
 [node name="OpenOceanFFT" type="Node3D" parent="." unique_id=396589776]
 script = ExtResource("1_fft")

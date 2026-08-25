@@ -25,6 +25,11 @@ extends Node3D
 		surface_warp_texture = value
 		_request_visual_sync()
 
+@export var surface_foam_micro_texture: Texture2D:
+	set(value):
+		surface_foam_micro_texture = value
+		_request_visual_sync()
+
 @export_range(0.25, 100.0, 0.05) var surface_normal_world_size_a: float = 7.5:
 	set(value):
 		surface_normal_world_size_a = value
@@ -263,6 +268,11 @@ extends Node3D
 		crest_foam_update_hz = 30 if value <= 30 else 45 if value <= 45 else 60
 		_request_visual_sync()
 
+@export var crest_foam_compute_enabled := true:
+	set(value):
+		crest_foam_compute_enabled = value
+		_request_visual_sync()
+
 @export_range(0.0, 10.0, 0.01) var foam_normal_strength: float = 1.2:
 	set(value):
 		foam_normal_strength = value
@@ -313,7 +323,7 @@ extends Node3D
 		foam_distance_fade_end = value
 		_request_visual_sync()
 
-@export var foam_filter_bicubic_enabled: bool = true:
+@export var foam_filter_bicubic_enabled: bool = false:
 	set(value):
 		foam_filter_bicubic_enabled = value
 		_request_visual_sync()
@@ -432,12 +442,12 @@ extends Node3D
 @export_category("Whitecaps Foam / Surface Foam Spectrum")
 @export_enum("256:256", "512:512", "1024:1024") var surface_foam_fft_resolution: int = 512:
 	set(value):
-		surface_foam_fft_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
+		surface_foam_fft_resolution = _normalize_resolution_enum(value)
 		_request_visual_sync()
 
 @export_enum("256:256", "512:512", "1024:1024") var surface_foam_field_resolution: int = 1024:
 	set(value):
-		surface_foam_field_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
+		surface_foam_field_resolution = _normalize_resolution_enum(value)
 		_request_visual_sync()
 
 @export_range(8.0, 256.0, 0.5) var surface_foam_domain_m: float = 88.0:
@@ -503,7 +513,8 @@ extends Node3D
 		surface_foam_micro_strength = value
 		_request_visual_sync()
 
-@export var surface_foam_micro_scale := Vector2(0.35, 0.07):
+## World tile sizes for the dedicated foam breakup texture: medium and near.
+@export var surface_foam_micro_scale := Vector2(8.0, 2.7):
 	set(value):
 		surface_foam_micro_scale = Vector2(maxf(value.x, 0.02), maxf(value.y, 0.01))
 		_request_visual_sync()
@@ -579,6 +590,19 @@ func _request_visual_sync() -> void:
 	_visual_sync_pending = true
 	if is_inside_tree():
 		call_deferred(&"_flush_visual_sync")
+
+
+func _normalize_resolution_enum(value: int) -> int:
+	# Godot versions differ here: some emit the explicit enum value, others emit
+	# its zero-based index. Handle both so 512/1024 cannot collapse to 256.
+	match value:
+		0: return 256
+		1: return 512
+		2: return 1024
+		256: return 256
+		512: return 512
+		1024: return 1024
+	return 256 if value < 256 else 512 if value < 512 else 1024
 
 
 func _flush_visual_sync() -> void:
@@ -672,6 +696,10 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_breakup_speed", foam_breakup_speed)
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
+	var foam_micro_texture_ready := surface_foam_micro_texture != null
+	material.set_shader_parameter(&"surface_foam_micro_texture_ready", foam_micro_texture_ready)
+	if foam_micro_texture_ready:
+		material.set_shader_parameter(&"surface_foam_micro_texture", surface_foam_micro_texture)
 	material.set_shader_parameter(&"surface_foam_enabled", surface_foam_enabled)
 	material.set_shader_parameter(&"surface_foam_whitecap", surface_foam_whitecap)
 	material.set_shader_parameter(&"surface_foam_strength", surface_foam_strength)
@@ -685,7 +713,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_fresh_specular", foam_fresh_specular)
 	material.set_shader_parameter(&"foam_residual_specular", foam_residual_specular)
 	material.set_shader_parameter(&"surface_foam_specular", surface_foam_specular)
-	material.set_shader_parameter(&"surface_foam_micro_detail_enabled", surface_foam_micro_detail_enabled and foam_breakup_texture_ready)
+	material.set_shader_parameter(&"surface_foam_micro_detail_enabled", surface_foam_micro_detail_enabled and foam_micro_texture_ready)
 	material.set_shader_parameter(&"surface_foam_micro_strength", surface_foam_micro_strength)
 	material.set_shader_parameter(&"surface_foam_micro_scale_m", surface_foam_micro_scale)
 	material.set_shader_parameter(&"surface_foam_micro_distance_m", surface_foam_micro_distance)
@@ -709,6 +737,7 @@ func _sync_water_visual_parameters() -> void:
 				foam_advection_strength
 			)
 			fft_module.set_crest_foam_update_hz(crest_foam_update_hz)
+			fft_module.set_crest_foam_compute_enabled(crest_foam_compute_enabled)
 			fft_module.set_surface_foam_settings(
 				surface_foam_enabled,
 				surface_foam_whitecap,
