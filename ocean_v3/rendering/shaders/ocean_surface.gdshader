@@ -228,7 +228,9 @@ uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 33 SOURCE_8_DIRECT (all Birth-shaped targets),
 // 34 RAW_J_SOURCE, 35 RAW_SOURCE_A, 36 RAW_SOURCE_B,
 // 37 RAW_SELECTED_SOURCE, 38 RAW_SOURCE_8_DIRECT (all bypass Birth),
-// 39 DIRECT_J_FRAGMENT_RAW (native 8 m / 512 Jacobian texture).
+// 39 DIRECT_J_FRAGMENT_RAW (native 8 m / 512 Jacobian texture),
+// 40 DIRECT_J_WARP_A_RAW, 41 DIRECT_J_WARP_B_RAW,
+// 42 DIRECT_J_DEPERIODIZED_RAW.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -811,17 +813,79 @@ vec2 pixel_ocean_surface_foam_raw_debug_field(vec2 world_xz) {
 
 
 // Temporary diagnostic only: read the completed 512² J spectrum directly in
-// fragment, with no field resampling, deperiodization or presentation weight.
-float pixel_ocean_surface_foam_direct_j_fragment_raw(vec2 world_xz) {
+// fragment, with no field resampling or presentation weight.
+float surface_foam_direct_j_raw_at(vec2 sample_position) {
 	float jacobian = textureLod(
 		surface_foam_jacobian,
-		spectrum_uv(world_xz, surface_foam_source_domain_m),
+		spectrum_uv(sample_position, surface_foam_source_domain_m),
 		0.0
 	).r;
 	if (isnan(jacobian) || isinf(jacobian)) {
 		jacobian = 1.0;
 	}
 	return max(0.0, surface_foam_whitecap - jacobian);
+}
+
+
+float pixel_ocean_surface_foam_direct_j_fragment_raw(vec2 world_xz) {
+	return surface_foam_direct_j_raw_at(world_xz);
+}
+
+
+const float SURFACE_FOAM_DIRECT_TAU = 6.283185307179586;
+
+
+// Large, non-commensurate world-space warp. It is fixed in world space and
+// has no 8 m or field-domain period; 2 m is the requested initial amplitude.
+vec2 surface_foam_direct_warp_a(vec2 world_xz) {
+	vec2 wave = vec2(
+		sin(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 53.0)
+			+ 0.55 * sin((world_xz.x + world_xz.y) * SURFACE_FOAM_DIRECT_TAU / 97.0),
+		cos(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 71.0)
+			+ 0.50 * cos((world_xz.x - world_xz.y) * SURFACE_FOAM_DIRECT_TAU / 89.0)
+	);
+	return wave * (2.0 / 1.55);
+}
+
+
+// B first transforms the complete world position, then applies an independent
+// warp and phase offset. It is intentionally not "warp B added to p".
+vec2 surface_foam_direct_sample_position_b(vec2 world_xz) {
+	mat2 rotation_37_deg = mat2(
+		vec2(0.7986355, -0.6018150),
+		vec2(0.6018150, 0.7986355)
+	);
+	vec2 p_b = rotation_37_deg * (world_xz * 1.19);
+	vec2 warp_b_wave = vec2(
+		sin(p_b.y * SURFACE_FOAM_DIRECT_TAU / 59.0 + 1.13)
+			+ 0.47 * sin((p_b.x + p_b.y) * SURFACE_FOAM_DIRECT_TAU / 109.0 + 2.17),
+		cos(p_b.x * SURFACE_FOAM_DIRECT_TAU / 79.0 + 0.61)
+			+ 0.52 * cos((p_b.x - p_b.y) * SURFACE_FOAM_DIRECT_TAU / 113.0 + 1.73)
+	);
+	vec2 warp_b = warp_b_wave * (2.0 / 1.52);
+	return p_b + warp_b + vec2(2.37, -1.41);
+}
+
+
+float pixel_ocean_surface_foam_direct_j_warp_a_raw(vec2 world_xz) {
+	return surface_foam_direct_j_raw_at(world_xz + surface_foam_direct_warp_a(world_xz));
+}
+
+
+float pixel_ocean_surface_foam_direct_j_warp_b_raw(vec2 world_xz) {
+	return surface_foam_direct_j_raw_at(surface_foam_direct_sample_position_b(world_xz));
+}
+
+
+float pixel_ocean_surface_foam_direct_j_deperiodized_raw(vec2 world_xz) {
+	float raw_a = pixel_ocean_surface_foam_direct_j_warp_a_raw(world_xz);
+	float raw_b = pixel_ocean_surface_foam_direct_j_warp_b_raw(world_xz);
+	float selector_raw = 0.5 + 0.5
+		* sin(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 61.0 + 0.43)
+		* cos(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 83.0 + 1.37);
+	float selector = smoothstep(0.42, 0.58, selector_raw);
+	// Select post-threshold raw signals. Never blend J before raw formation.
+	return mix(raw_a, raw_b, selector);
 }
 
 
@@ -1144,7 +1208,6 @@ void fragment() {
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	vec2 surface_foam_field = pixel_ocean_surface_foam_field(surface_foam_world_xz);
 	vec2 surface_foam_debug_raw_field = pixel_ocean_surface_foam_raw_debug_field(surface_foam_world_xz);
-	float surface_foam_direct_j_raw_value = pixel_ocean_surface_foam_direct_j_fragment_raw(ocean_base_xz);
 	float surface_foam_raw = surface_foam_field.x;
 	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
@@ -1389,7 +1452,13 @@ void fragment() {
 		// Exact raw max(0, whitecap - J), with only the requested A/B mapping.
 		color = vec3(surface_foam_debug_raw_field.y);
 	} else if (foam_debug_mode == 39) {
-		color = vec3(surface_foam_direct_j_raw_value);
+		color = vec3(pixel_ocean_surface_foam_direct_j_fragment_raw(ocean_base_xz));
+	} else if (foam_debug_mode == 40) {
+		color = vec3(pixel_ocean_surface_foam_direct_j_warp_a_raw(ocean_base_xz));
+	} else if (foam_debug_mode == 41) {
+		color = vec3(pixel_ocean_surface_foam_direct_j_warp_b_raw(ocean_base_xz));
+	} else if (foam_debug_mode == 42) {
+		color = vec3(pixel_ocean_surface_foam_direct_j_deperiodized_raw(ocean_base_xz));
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
