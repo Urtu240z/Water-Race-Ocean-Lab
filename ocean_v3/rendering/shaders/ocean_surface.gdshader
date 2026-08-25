@@ -182,6 +182,10 @@ uniform float crest_filigree_normal_influence : hint_range(0.0, 2.0, 0.01) = 0.3
 // Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
 // GPU; these controls only shape its material presentation.
 uniform bool surface_foam_enabled = true;
+// Presentation-only stochastic sampling of the existing periodic direct-J and
+// history textures. It never changes the technical spectrum or its evolution.
+uniform bool surface_foam_stochastic_deperiodization_enabled = true;
+uniform float surface_foam_stochastic_cell_size_m : hint_range(16.0, 96.0, 0.5) = 32.0;
 uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
 uniform float surface_foam_field_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
 uniform float surface_foam_source_domain_m : hint_range(4.0, 32.0, 0.5) = 8.0;
@@ -636,16 +640,6 @@ float surface_foam_weight(vec2 world_xz) {
 }
 
 
-// The field is temporal support, not the near visible silhouette. Keep an
-// unweighted read so R can modulate direct-J topology, then apply the existing
-// distance/composition policy only at final presentation.
-vec2 pixel_ocean_surface_foam_field_unweighted(vec2 world_xz) {
-	// This is technical temporal support shared with Crest Filigree. Visibility
-	// is decided only at the final Surface Foam presentation stage below.
-	return textureLod(surface_foam_short, spectrum_uv(world_xz, surface_foam_field_domain_m), 0.0).rg;
-}
-
-
 // Native 512² source topology: no field resampling or presentation weight.
 float surface_foam_direct_j_raw_at(vec2 sample_position) {
 	float jacobian = textureLod(
@@ -660,94 +654,107 @@ float surface_foam_direct_j_raw_at(vec2 sample_position) {
 }
 
 
-const float SURFACE_FOAM_DIRECT_TAU = 6.283185307179586;
-
-
-// Large, non-commensurate world-space warp. It is fixed in world space and
-// has no 8 m or field-domain period; 2 m is the requested initial amplitude.
-vec2 surface_foam_direct_warp_a(vec2 world_xz) {
-	vec2 wave = vec2(
-		sin(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 53.0)
-			+ 0.55 * sin((world_xz.x + world_xz.y) * SURFACE_FOAM_DIRECT_TAU / 97.0),
-		cos(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 71.0)
-			+ 0.50 * cos((world_xz.x - world_xz.y) * SURFACE_FOAM_DIRECT_TAU / 89.0)
-	);
-	return wave * (2.0 / 1.55);
+// Deterministic triangular world-space lattice. Each fragment blends the three
+// vertex-owned transforms of its triangle, so cells meet continuously without
+// a hard floor(world / cell) boundary. The hash has no time or camera input.
+float surface_foam_stochastic_hash12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
 
-// B first transforms the complete world position, then applies an independent
-// warp and phase offset. It is intentionally not "warp B added to p".
-vec2 surface_foam_direct_sample_position_b(vec2 world_xz) {
-	mat2 rotation_37_deg = mat2(
-		vec2(0.7986355, -0.6018150),
-		vec2(0.6018150, 0.7986355)
-	);
-	vec2 p_b = rotation_37_deg * (world_xz * 1.19);
-	vec2 warp_b_wave = vec2(
-		sin(p_b.y * SURFACE_FOAM_DIRECT_TAU / 59.0 + 1.13)
-			+ 0.47 * sin((p_b.x + p_b.y) * SURFACE_FOAM_DIRECT_TAU / 109.0 + 2.17),
-		cos(p_b.x * SURFACE_FOAM_DIRECT_TAU / 79.0 + 0.61)
-			+ 0.52 * cos((p_b.x - p_b.y) * SURFACE_FOAM_DIRECT_TAU / 113.0 + 1.73)
-	);
-	vec2 warp_b = warp_b_wave * (2.0 / 1.52);
-	return p_b + warp_b + vec2(2.37, -1.41);
+vec2 surface_foam_rotate_quarter(vec2 p, float rotation_index) {
+	if (rotation_index < 0.5) return p;
+	if (rotation_index < 1.5) return vec2(-p.y, p.x);
+	if (rotation_index < 2.5) return -p;
+	return vec2(p.y, -p.x);
 }
 
 
-float surface_foam_direct_raw_a(vec2 world_xz) {
-	return surface_foam_direct_j_raw_at(world_xz + surface_foam_direct_warp_a(world_xz));
+vec2 surface_foam_stochastic_sample_position(vec2 world_xz, vec2 lattice_vertex, float domain_m) {
+	float rotation_index = floor(surface_foam_stochastic_hash12(lattice_vertex + vec2(17.0, 31.0)) * 4.0);
+	vec2 transformed = surface_foam_rotate_quarter(world_xz, rotation_index);
+	if (surface_foam_stochastic_hash12(lattice_vertex + vec2(47.0, 11.0)) > 0.5) {
+		transformed.x = -transformed.x;
+	}
+	vec2 phase = vec2(
+		surface_foam_stochastic_hash12(lattice_vertex + vec2(7.0, 53.0)),
+		surface_foam_stochastic_hash12(lattice_vertex + vec2(71.0, 19.0))
+	) * domain_m;
+	return transformed + phase;
 }
 
 
-float surface_foam_direct_raw_b(vec2 world_xz) {
-	return surface_foam_direct_j_raw_at(surface_foam_direct_sample_position_b(world_xz));
+void surface_foam_stochastic_triangle(vec2 world_xz, out vec2 v0, out vec2 v1, out vec2 v2, out vec3 weights) {
+	float cell_m = max(surface_foam_stochastic_cell_size_m, 0.001);
+	// e0=(cell,0), e1=(cell/2,sqrt(3)*cell/2): world -> triangular lattice.
+	vec2 lattice = vec2(
+		world_xz.x / cell_m - world_xz.y / (1.7320508075688772 * cell_m),
+		world_xz.y / (0.8660254037844386 * cell_m)
+	);
+	vec2 cell = floor(lattice);
+	vec2 f = fract(lattice);
+	if (f.x + f.y <= 1.0) {
+		v0 = cell;
+		v1 = cell + vec2(1.0, 0.0);
+		v2 = cell + vec2(0.0, 1.0);
+		weights = vec3(1.0 - f.x - f.y, f.x, f.y);
+	} else {
+		v0 = cell + vec2(1.0, 1.0);
+		v1 = cell + vec2(0.0, 1.0);
+		v2 = cell + vec2(1.0, 0.0);
+		weights = vec3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+	}
+	// Smooth, normalized barycentric ownership keeps the value and its fade
+	// continuous at every triangle edge without adding a noise texture.
+	weights = weights * weights * (3.0 - 2.0 * weights);
+	weights /= max(weights.x + weights.y + weights.z, 0.00001);
+}
+
+
+float surface_foam_stochastic_direct_raw(vec2 world_xz) {
+	vec2 v0; vec2 v1; vec2 v2; vec3 weights;
+	surface_foam_stochastic_triangle(world_xz, v0, v1, v2, weights);
+	// Threshold happens inside every sample before stochastic composition.
+	float raw0 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_source_domain_m));
+	float raw1 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_source_domain_m));
+	float raw2 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_source_domain_m));
+	return raw0 * weights.x + raw1 * weights.y + raw2 * weights.z;
+}
+
+
+vec2 surface_foam_stochastic_field_unweighted(vec2 world_xz) {
+	vec2 v0; vec2 v1; vec2 v2; vec3 weights;
+	surface_foam_stochastic_triangle(world_xz, v0, v1, v2, weights);
+	vec2 field0 = textureLod(surface_foam_short, spectrum_uv(surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_field_domain_m), surface_foam_field_domain_m), 0.0).rg;
+	vec2 field1 = textureLod(surface_foam_short, spectrum_uv(surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_field_domain_m), surface_foam_field_domain_m), 0.0).rg;
+	vec2 field2 = textureLod(surface_foam_short, spectrum_uv(surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_field_domain_m), surface_foam_field_domain_m), 0.0).rg;
+	return field0 * weights.x + field1 * weights.y + field2 * weights.z;
+}
+
+
+// The field is temporal support, not the near visible silhouette. It uses the
+// same stable lattice when stochastic deperiodization is enabled, then applies
+// existing distance/composition policy only at final presentation.
+vec2 pixel_ocean_surface_foam_field_unweighted(vec2 world_xz) {
+	return surface_foam_stochastic_deperiodization_enabled
+		? surface_foam_stochastic_field_unweighted(world_xz)
+		: textureLod(surface_foam_short, spectrum_uv(world_xz, surface_foam_field_domain_m), 0.0).rg;
 }
 
 
 float surface_foam_deperiodized_raw(vec2 world_xz) {
-	float raw_a = surface_foam_direct_raw_a(world_xz);
-	float raw_b = surface_foam_direct_raw_b(world_xz);
-	float selector_raw = 0.5 + 0.5
-		* sin(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 61.0 + 0.43)
-		* cos(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 83.0 + 1.37);
-	float selector = smoothstep(0.42, 0.58, selector_raw);
-	// Select post-threshold raw signals. Never blend J before raw formation.
-	return mix(raw_a, raw_b, selector);
+	return surface_foam_stochastic_deperiodization_enabled
+		? surface_foam_stochastic_direct_raw(world_xz)
+		: surface_foam_direct_j_raw_at(world_xz);
 }
 
 
-float surface_foam_direct_selector(vec2 world_xz) {
-	float selector_raw = 0.5 + 0.5
-		* sin(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 61.0 + 0.43)
-		* cos(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 83.0 + 1.37);
-	return smoothstep(0.42, 0.58, selector_raw);
-}
-
-
-// Near is the two-sample direct topology from debug 42. Mid fades to just A;
-// far fades to existing field coarse support. R is absent here by design: it
-// belongs only to the temporal envelope below.
-float surface_foam_visible_topology(vec2 world_xz, float camera_distance, float field_coarse) {
-	if (camera_distance >= SURFACE_FOAM_MID_END_M + 10.0) {
-		return field_coarse;
-	}
-	float raw_a = surface_foam_direct_raw_a(world_xz);
-	float topology = raw_a;
-	if (camera_distance < SURFACE_FOAM_NEAR_END_M + 10.0) {
-		float raw_b = surface_foam_direct_raw_b(world_xz);
-		float selected_raw = mix(raw_a, raw_b, surface_foam_direct_selector(world_xz));
-		topology = mix(
-			selected_raw,
-			raw_a,
-			smoothstep(SURFACE_FOAM_NEAR_END_M - 8.0, SURFACE_FOAM_NEAR_END_M + 10.0, camera_distance)
-		);
-	}
-	return mix(
-		topology,
-		field_coarse,
-		smoothstep(SURFACE_FOAM_MID_END_M - 10.0, SURFACE_FOAM_MID_END_M + 10.0, camera_distance)
-	);
+// A single three-sample stochastic direct topology is used at every visible
+// distance. The history field remains an envelope, never a far periodic shape.
+float surface_foam_visible_topology(vec2 world_xz) {
+	return surface_foam_deperiodized_raw(world_xz);
 }
 
 
@@ -955,12 +962,7 @@ void fragment() {
 	// This preserves the existing Surface Foam cost and keeps Crest Filigree
 	// driven by the same deperiodized world-space branches.
 	if (foam_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
-		float surface_distance = distance(ocean_base_xz, camera_world_xz);
-		surface_foam_raw_topology = surface_foam_visible_topology(
-			ocean_base_xz,
-			surface_distance,
-			surface_foam_field_unweighted.y
-		);
+		surface_foam_raw_topology = surface_foam_visible_topology(ocean_base_xz);
 		surface_foam_macro = surface_foam_macro_from_topology(
 			surface_foam_raw_topology,
 			surface_foam_field_unweighted.x

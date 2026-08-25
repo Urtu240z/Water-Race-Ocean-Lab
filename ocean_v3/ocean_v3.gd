@@ -490,6 +490,16 @@ var _applying_wave_preset := false
 		surface_foam_enabled = value
 		_request_visual_sync()
 
+@export var surface_foam_stochastic_deperiodization_enabled: bool = true:
+	set(value):
+		surface_foam_stochastic_deperiodization_enabled = value
+		_request_visual_sync()
+
+@export_range(16.0, 96.0, 0.5) var surface_foam_stochastic_cell_size_m: float = 32.0:
+	set(value):
+		surface_foam_stochastic_cell_size_m = clampf(value, 16.0, 96.0)
+		_request_visual_sync()
+
 @export_range(0.0, 1.5, 0.01) var surface_foam_whitecap: float = 0.0:
 	set(value):
 		surface_foam_whitecap = value
@@ -1037,6 +1047,8 @@ func _sync_water_visual_parameters() -> void:
 	if foam_micro_texture_ready:
 		material.set_shader_parameter(&"surface_foam_micro_texture", surface_foam_micro_detail)
 	material.set_shader_parameter(&"surface_foam_enabled", surface_foam_enabled)
+	material.set_shader_parameter(&"surface_foam_stochastic_deperiodization_enabled", surface_foam_stochastic_deperiodization_enabled)
+	material.set_shader_parameter(&"surface_foam_stochastic_cell_size_m", surface_foam_stochastic_cell_size_m)
 	material.set_shader_parameter(&"surface_foam_whitecap", surface_foam_whitecap)
 	material.set_shader_parameter(&"surface_foam_ocean_coupling", surface_foam_ocean_coupling)
 	material.set_shader_parameter(&"surface_foam_distance_fade_start_m", surface_foam_distance_fade_start_m)
