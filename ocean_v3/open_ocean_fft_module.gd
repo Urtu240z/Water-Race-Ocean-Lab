@@ -106,6 +106,7 @@ var _foam_advection_strength := 1.0
 var _crest_foam_update_hz := 60.0
 var _surface_foam_enabled := true
 var _surface_foam_topology_required := true
+var _surface_foam_mid_history_required := true
 var _surface_foam_whitecap := 0.0
 var _surface_foam_amount := 8.573
 var _surface_foam_birth_attack_s := 0.16
@@ -1058,7 +1059,7 @@ func _initialize_surface_foam_mid_history() -> void:
 		_cascades[2].config.resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-		_surface_foam_topology_required,
+		_surface_foam_mid_history_required,
 		_surface_foam_update_hz,
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
@@ -1159,6 +1160,8 @@ func foam_render_diagnostics() -> Dictionary:
 	return {
 		"crest": cascades_state,
 		"surface": surface_state,
+		"surface_topology_required": _surface_foam_topology_required,
+		"surface_mid_history_required": _surface_foam_mid_history_required,
 		"surface_fft_resolution": _surface_foam_fft_resolution,
 		"surface_field_resolution": _surface_foam_field_resolution,
 	}
@@ -1170,6 +1173,9 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		topology_required: bool = true) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_topology_required = topology_required
+	# Crest Filigree consumes direct-J topology plus the Surface Foam temporal
+	# envelope, but never the MID fold visibility limiter.
+	_surface_foam_mid_history_required = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_update_hz = clampf(update_hz, 30.0, 60.0)
@@ -1192,7 +1198,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-			_surface_foam_topology_required,
+			_surface_foam_mid_history_required,
 			_surface_foam_update_hz,
 			_surface_foam_birth_attack_s,
 			_surface_foam_lifetime_s,
