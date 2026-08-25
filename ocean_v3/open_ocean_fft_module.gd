@@ -110,8 +110,6 @@ var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
-var _surface_foam_min_wavelength_m := 2.0
-var _surface_foam_max_wavelength_m := 32.0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()

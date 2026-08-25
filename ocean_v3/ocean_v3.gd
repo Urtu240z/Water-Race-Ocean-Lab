@@ -420,7 +420,7 @@ extends Node3D
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam / Surface Foam Spectrum")
-@export_enum("256", "512", "1024") var surface_foam_fft_resolution: int = 512:
+@export_enum("256:256", "512:512", "1024:1024") var surface_foam_fft_resolution: int = 512:
 	set(value):
 		surface_foam_fft_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
 		_request_visual_sync()
