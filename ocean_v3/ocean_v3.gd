@@ -25,11 +25,6 @@ extends Node3D
 		surface_warp_texture = value
 		_request_visual_sync()
 
-@export var surface_foam_micro_detail: Texture2D:
-	set(value):
-		surface_foam_micro_detail = value
-		_request_visual_sync()
-
 @export_range(0.25, 100.0, 0.05) var surface_normal_world_size_a: float = 7.5:
 	set(value):
 		surface_normal_world_size_a = value
@@ -493,7 +488,7 @@ extends Node3D
 
 @export_range(0.1, 60.0, 0.1) var surface_foam_wind_speed_mps: float = 10.0:
 	set(value):
-		surface_foam_wind_speed_mps = value
+		surface_foam_wind_speed_mps = clampf(value, 0.1, 60.0)
 		_request_visual_sync()
 
 @export_range(-180.0, 180.0, 0.5) var surface_foam_wind_direction_deg: float = 110.0:
@@ -528,6 +523,11 @@ extends Node3D
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam / Surface Foam Micro Detail")
+@export var surface_foam_micro_detail: Texture2D:
+	set(value):
+		surface_foam_micro_detail = value
+		_request_visual_sync()
+
 @export var surface_foam_micro_detail_enabled := true:
 	set(value):
 		surface_foam_micro_detail_enabled = value
@@ -620,6 +620,12 @@ func _request_visual_sync() -> void:
 	_visual_sync_pending = true
 	if is_inside_tree():
 		call_deferred(&"_flush_visual_sync")
+
+
+func _set_surface_foam_wind_speed_from_sea_state(value: float) -> void:
+	# SeaState owns the preset transition, but the public export remains the
+	# current editable value so a later Inspector change is not discarded.
+	surface_foam_wind_speed_mps = clampf(value, 0.1, 60.0)
 
 
 func _normalize_resolution_enum(value: int) -> int:

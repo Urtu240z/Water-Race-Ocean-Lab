@@ -1020,6 +1020,9 @@ func _apply_surface_foam_wind_preset(state: int) -> void:
 	_surface_foam_wind_speed_mps = presets[clampi(state, 0, presets.size() - 1)]
 	if _surface_foam_config != null:
 		_surface_foam_config.wind_speed_mps = _surface_foam_wind_speed_mps
+	var ocean_root := get_parent()
+	if ocean_root != null and ocean_root.has_method(&"_set_surface_foam_wind_speed_from_sea_state"):
+		ocean_root.call(&"_set_surface_foam_wind_speed_from_sea_state", _surface_foam_wind_speed_mps)
 
 
 func _initialize_surface_foam_solver() -> void:
@@ -1168,7 +1171,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
 		directional_spread: float, detail: float, max_feature_wavelength_m: float) -> void:
-	var effective_wind_speed := _surface_foam_wind_speed_mps if _sea_state_initialized else maxf(wind_speed_mps, 0.1)
+	var effective_wind_speed := maxf(wind_speed_mps, 0.1)
 	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
 	var next_field_resolution := 256 if field_resolution <= 256 else 512 if field_resolution <= 512 else 1024
 	var next_domain := maxf(domain_m, 8.0)

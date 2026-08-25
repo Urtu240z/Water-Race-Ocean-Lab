@@ -17,7 +17,8 @@ uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_displacement : repeat_enable, filter_linear;
 uniform sampler2D previous_surface_foam_displacement : repeat_enable, filter_linear;
-// RG8 tile: R=organic breakup, G=bubble distance-like field.
+// Packed RGB tile: R=organic breakup, G=bubble distance-like field,
+// B=microheight for the derived foam normal.
 uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
 uniform sampler2D previous_displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_remainder : repeat_enable, filter_linear;
@@ -827,12 +828,12 @@ int surface_foam_lod(vec2 world_xz) {
 }
 
 
-float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float breakup_value, out float bubble_value, out vec2 bubble_gradient) {
+float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float breakup_value, out float bubble_value, out vec2 microheight_gradient) {
 	// Far is history-only: no micro fetch, no bubble work and no derivative
-	// reconstruction. Mid gets one RG sample; Near gets at most two.
+	// reconstruction. Mid gets one RGB sample; Near gets at most two.
 	breakup_value = 0.5;
 	bubble_value = 0.5;
-	bubble_gradient = vec2(0.0);
+	microheight_gradient = vec2(0.0);
 	int lod = surface_foam_lod(world_xz);
 	float history_shaped = smoothstep(base_threshold, 1.0, physical_mask);
 	if (lod >= 2 || !surface_foam_micro_detail_enabled || !surface_foam_micro_texture_ready || physical_mask <= 0.00001) {
@@ -843,21 +844,21 @@ float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float b
 	vec2 medium_uv = world_xz / max(surface_foam_micro_scale_m.x, 0.5);
 	vec2 medium_dx = world_dx / max(surface_foam_micro_scale_m.x, 0.5);
 	vec2 medium_dy = world_dy / max(surface_foam_micro_scale_m.x, 0.5);
-	vec2 medium = textureGrad(surface_foam_micro_texture, medium_uv, medium_dx, medium_dy).rg;
-	vec2 combined = medium;
+	vec3 medium = textureGrad(surface_foam_micro_texture, medium_uv, medium_dx, medium_dy).rgb;
+	vec3 combined = medium;
 	if (lod == 0) {
 		mat2 rotation = mat2(vec2(0.70710678, -0.70710678), vec2(0.70710678, 0.70710678));
 		vec2 fine_uv = rotation * world_xz / max(surface_foam_micro_scale_m.y, 0.5) + vec2(0.371, 0.619);
 		vec2 fine_dx = rotation * world_dx / max(surface_foam_micro_scale_m.y, 0.5);
 		vec2 fine_dy = rotation * world_dy / max(surface_foam_micro_scale_m.y, 0.5);
-		vec2 fine = textureGrad(surface_foam_micro_texture, fine_uv, fine_dx, fine_dy).rg;
+		vec3 fine = textureGrad(surface_foam_micro_texture, fine_uv, fine_dx, fine_dy).rgb;
 		combined = mix(medium, fine, 0.38);
 	}
 	breakup_value = combined.r;
 	bubble_value = combined.g;
-	// G is already the distance-like field. Derivatives provide the subtle
-	// bubble normal without an additional texture fetch.
-	bubble_gradient = vec2(dFdx(combined.g), dFdy(combined.g));
+	// B is the packed microheight. Its derivatives provide the subtle foam
+	// normal without an additional texture fetch.
+	microheight_gradient = vec2(dFdx(combined.b), dFdy(combined.b));
 	float near_weight = lod == 0 ? 1.0 : 0.45;
 	float edge_factor = 4.0 * physical_mask * (1.0 - physical_mask);
 	float threshold_offset = (combined.r - 0.5) * surface_foam_micro_strength * near_weight * (0.35 + 0.65 * edge_factor);
@@ -1142,7 +1143,7 @@ void fragment() {
 	float crest_foam_mask = 0.0;
 	float surface_foam_mask = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
-	vec2 surface_foam_micro_gradient = vec2(0.0);
+	vec2 surface_foam_microheight_gradient = vec2(0.0);
 	vec2 foam_motion = vec2(0.0);
 	vec2 compression_debug = vec2(0.0);
 	vec2 spectral_debug = vec2(1.0, 0.0);
@@ -1177,7 +1178,7 @@ void fragment() {
 			surface_threshold,
 			surface_foam_micro_noise,
 			surface_foam_bubble_field,
-			surface_foam_micro_gradient
+			surface_foam_microheight_gradient
 		);
 		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
 		// Edge fade is evaluated against the raw history before binary shaping.
@@ -1199,7 +1200,6 @@ void fragment() {
 		);
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
-		// Bubble G derivatives are the only bubble normal input; no extra sample.
 	}
 	if (foam_debug_mode == 3) {
 		compression_debug = pixel_ocean_compression_debug(ocean_base_xz);
@@ -1386,9 +1386,9 @@ void fragment() {
 		}
 		if (surface_foam_mask > 0.0001 && surface_foam_micro_normal_strength > 0.0) {
 			vec3 micro_normal_world = normalize(vec3(
-				-surface_foam_micro_gradient.x * surface_foam_micro_normal_strength,
+				-surface_foam_microheight_gradient.x * surface_foam_micro_normal_strength,
 				1.0,
-				-surface_foam_micro_gradient.y * surface_foam_micro_normal_strength
+				-surface_foam_microheight_gradient.y * surface_foam_micro_normal_strength
 			));
 			vec3 micro_offset_view = mat3(VIEW_MATRIX) * vec3(
 				micro_normal_world.x / max(micro_normal_world.y, 0.08),
