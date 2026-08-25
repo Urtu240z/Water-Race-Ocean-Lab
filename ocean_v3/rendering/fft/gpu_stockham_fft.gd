@@ -38,6 +38,8 @@ var _foam_residual_decay_multiplier := 1.0
 var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
+var _crest_foam_update_hz := 60.0
+var _crest_foam_accumulator := 0.0
 var _surface_foam_enabled := true
 var _surface_foam_whitecap := 0.05
 var _surface_foam_amount := 8.0
@@ -133,6 +135,12 @@ func set_foam_transport_settings(residual_decay_multiplier: float, deposit_stren
 	_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
 
 
+func set_crest_foam_schedule(update_hz: float, phase_offset: float) -> void:
+	_crest_foam_update_hz = clampf(update_hz, 30.0, 60.0)
+	# Deterministic phase distributes the four HIRES updates over one period.
+	_crest_foam_accumulator = (1.0 / _crest_foam_update_hz) * clampf(phase_offset, 0.0, 0.999)
+
+
 func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
@@ -205,11 +213,20 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	_rd.compute_list_add_barrier(compute_list)
 
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
-	if _has_crest_foam():
+	var crest_update_due := false
+	var crest_delta := 0.0
+	if _has_crest_foam() and _config.foam_enabled:
+		_crest_foam_accumulator += maxf(delta_s, 0.0)
+		var crest_period := 1.0 / _crest_foam_update_hz
+		if _crest_foam_accumulator >= crest_period:
+			crest_update_due = true
+			crest_delta = _crest_foam_accumulator
+			_crest_foam_accumulator = fmod(_crest_foam_accumulator, crest_period)
+	if _has_crest_foam() and crest_update_due:
 		# Fresh whitecaps are born from current J; only residual history is advected.
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
 		_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
-		# update_foam receives rates per second and the real frame delta; the shader
+		# update_foam receives rates per second and accumulated simulation delta; the shader
 		# applies the exponential attack/release and residual decay internally.
 		var foam_push := PackedFloat32Array([
 			_config.foam_whitecap,
@@ -217,7 +234,7 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 			_config.foam_cascade_weight if _config.foam_enabled else 0.0,
 			_foam_deposit_strength,
 			maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
-			maxf(delta_s, 0.0),
+			crest_delta,
 			1.0 if _foam_advection_enabled else 0.0,
 			_foam_advection_strength,
 			_config.domain_size_m,

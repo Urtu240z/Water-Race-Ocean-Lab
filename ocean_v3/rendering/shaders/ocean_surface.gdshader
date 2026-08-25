@@ -193,6 +193,13 @@ uniform float surface_foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float foam_fresh_specular : hint_range(0.0, 1.0, 0.01) = 0.12;
 uniform float foam_residual_specular : hint_range(0.0, 1.0, 0.01) = 0.18;
 uniform float surface_foam_specular : hint_range(0.0, 1.0, 0.01) = 0.20;
+// Presentation-only detail: it modulates the already persistent physical mask
+// and is anchored in ocean_base_xz, never in screen or scrolling UVs.
+uniform bool surface_foam_micro_detail_enabled = true;
+uniform float surface_foam_micro_strength : hint_range(0.0, 1.0, 0.01) = 0.45;
+uniform vec2 surface_foam_micro_scale_m = vec2(0.35, 0.07);
+uniform vec2 surface_foam_micro_distance_m = vec2(12.0, 45.0);
+uniform float surface_foam_micro_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.25;
 // Spectral erosion is presentation-only: MID/SHORT shape LONG without changing
 // the persistent RG16F simulation or its temporal transport.
 uniform bool foam_spectral_erosion_enabled = false;
@@ -872,8 +879,41 @@ float pixel_ocean_surface_foam_raw(vec2 world_xz) {
 
 
 float pixel_ocean_surface_foam_jacobian(vec2 world_xz) {
-	float jacobian = textureLod(surface_foam_displacement, spectrum_uv(world_xz, surface_foam_domain_m), 0.0).a;
+	float jacobian = textureLod(surface_foam_displacement, spectrum_uv(world_xz, surface_foam_domain_m), 0.0).r;
 	return isnan(jacobian) || isinf(jacobian) ? 1.0 : jacobian;
+}
+
+
+float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float noise_value) {
+	noise_value = 0.5;
+	if (!surface_foam_micro_detail_enabled || physical_mask <= 0.00001) {
+		return smoothstep(base_threshold, 1.0, physical_mask);
+	}
+	float camera_distance = distance(world_xz, camera_world_xz);
+	float end_distance = max(surface_foam_micro_distance_m.y, surface_foam_micro_distance_m.x + 0.01);
+	if (camera_distance >= end_distance) {
+		return smoothstep(base_threshold, 1.0, physical_mask);
+	}
+	float near_weight = 1.0 - smoothstep(surface_foam_micro_distance_m.x, end_distance, camera_distance);
+	vec2 footprint_uv = max(abs(dFdx(world_xz)), abs(dFdy(world_xz)));
+	float footprint = max(footprint_uv.x, footprint_uv.y);
+	float coarse_scale = max(surface_foam_micro_scale_m.x, 0.02);
+	float fine_scale = max(surface_foam_micro_scale_m.y, 0.01);
+	float coarse_visible = 1.0 - smoothstep(coarse_scale * 0.35, coarse_scale * 1.25, footprint);
+	float fine_distance = 1.0 - smoothstep(surface_foam_micro_distance_m.x, max(surface_foam_micro_distance_m.x + 0.01, 35.0), camera_distance);
+	float fine_visible = (1.0 - smoothstep(fine_scale * 0.35, fine_scale * 1.25, footprint)) * fine_distance;
+	float coarse = texture(surface_warp_texture, world_xz / coarse_scale).r;
+	float combined = coarse;
+	if (fine_visible > 0.001) {
+		mat2 rotation = mat2(vec2(0.70710678, -0.70710678), vec2(0.70710678, 0.70710678));
+		float fine = texture(surface_warp_texture, rotation * world_xz / fine_scale + vec2(0.371, 0.619)).r;
+		combined = coarse * 0.65 + fine * 0.35;
+	}
+	noise_value = combined;
+	float micro_domain = smoothstep(0.002, 0.08, physical_mask);
+	float threshold_offset = (combined - 0.5) * surface_foam_micro_strength * near_weight * micro_domain * max(coarse_visible, fine_visible);
+	float softness = max(fwidth(physical_mask) * 1.5, 0.018);
+	return smoothstep(base_threshold + threshold_offset - softness, base_threshold + threshold_offset + softness, physical_mask);
 }
 
 
@@ -1141,12 +1181,14 @@ void fragment() {
 	float surface_foam_jacobian = pixel_ocean_surface_foam_jacobian(ocean_base_xz);
 	float surface_foam_source_short_legacy = pixel_ocean_surface_foam_source_short_legacy(ocean_base_xz);
 	float surface_foam_shaped = 0.0;
+	float surface_foam_micro_noise = 0.5;
 	float foam_mask = 0.0;
 	float foam_fresh_mask = 0.0;
 	float foam_residual_mask = 0.0;
 	float crest_foam_mask = 0.0;
 	float surface_foam_mask = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
+	vec2 surface_foam_micro_gradient = vec2(0.0);
 	vec2 foam_motion = vec2(0.0);
 	vec2 compression_debug = vec2(0.0);
 	vec2 spectral_debug = vec2(1.0, 0.0);
@@ -1174,11 +1216,12 @@ void fragment() {
 		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
 
 		float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
-		float surface_thresholded = smoothstep(surface_threshold, 1.0, surface_foam_raw);
+		float surface_thresholded = surface_foam_micro_thresholded(ocean_base_xz, surface_foam_raw, surface_threshold, surface_foam_micro_noise);
 		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
 		surface_foam_mask = clamp(surface_foam_shaped * surface_foam_strength, 0.0, 1.0);
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
+		surface_foam_micro_gradient = foam_gradient_world(vec2(surface_foam_micro_noise, 0.0), ocean_world_xz);
 	}
 	if (foam_debug_mode == 3) {
 		compression_debug = pixel_ocean_compression_debug(ocean_base_xz);
@@ -1309,6 +1352,8 @@ void fragment() {
 		color = vec3(clamp(surface_foam_jacobian, 0.0, 1.0));
 	} else if (foam_debug_mode == 24) {
 		color = vec3(surface_foam_source_short_legacy);
+	} else if (foam_debug_mode == 25) {
+		color = vec3(surface_foam_shaped);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -1354,6 +1399,19 @@ void fragment() {
 				foam_shape_normal_world.z / max(foam_shape_normal_world.y, 0.08)
 			);
 			visual_normal = normalize(visual_normal + foam_shape_offset_view * foam_normal_mask);
+		}
+		if (surface_foam_mask > 0.0001 && surface_foam_micro_normal_strength > 0.0) {
+			vec3 micro_normal_world = normalize(vec3(
+				-surface_foam_micro_gradient.x * surface_foam_micro_normal_strength,
+				1.0,
+				-surface_foam_micro_gradient.y * surface_foam_micro_normal_strength
+			));
+			vec3 micro_offset_view = mat3(VIEW_MATRIX) * vec3(
+				micro_normal_world.x / max(micro_normal_world.y, 0.08),
+				0.0,
+				micro_normal_world.z / max(micro_normal_world.y, 0.08)
+			);
+			visual_normal = normalize(visual_normal + micro_offset_view * surface_foam_mask);
 		}
 
 		// Dos normal maps + warp: detalle fino sin añadir geometría ni marcar

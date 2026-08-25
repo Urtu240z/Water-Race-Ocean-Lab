@@ -258,6 +258,11 @@ extends Node3D
 		foam_advection_strength = value
 		_request_visual_sync()
 
+@export_enum("30 Hz:30", "45 Hz:45", "60 Hz:60") var crest_foam_update_hz: int = 60:
+	set(value):
+		crest_foam_update_hz = 30 if value <= 30 else 45 if value <= 45 else 60
+		_request_visual_sync()
+
 @export_range(0.0, 10.0, 0.01) var foam_normal_strength: float = 1.2:
 	set(value):
 		foam_normal_strength = value
@@ -364,6 +369,11 @@ extends Node3D
 		surface_foam_advection_strength = value
 		_request_visual_sync()
 
+@export_enum("30 Hz:30", "45 Hz:45", "60 Hz:60") var surface_foam_update_hz: int = 60:
+	set(value):
+		surface_foam_update_hz = 30 if value <= 30 else 45 if value <= 45 else 60
+		_request_visual_sync()
+
 @export_range(0.0, 4.0, 0.01) var surface_foam_strength: float = 1.0:
 	set(value):
 		surface_foam_strength = value
@@ -425,6 +435,11 @@ extends Node3D
 		surface_foam_fft_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
 		_request_visual_sync()
 
+@export_enum("256:256", "512:512", "1024:1024") var surface_foam_field_resolution: int = 1024:
+	set(value):
+		surface_foam_field_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
+		_request_visual_sync()
+
 @export_range(8.0, 256.0, 0.5) var surface_foam_domain_m: float = 88.0:
 	set(value):
 		surface_foam_domain_m = value
@@ -477,6 +492,32 @@ extends Node3D
 		surface_foam_max_wavelength_m = value
 		_request_visual_sync()
 
+@export_category("Whitecaps Foam / Surface Foam Micro Detail")
+@export var surface_foam_micro_detail_enabled := true:
+	set(value):
+		surface_foam_micro_detail_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var surface_foam_micro_strength := 0.45:
+	set(value):
+		surface_foam_micro_strength = value
+		_request_visual_sync()
+
+@export var surface_foam_micro_scale := Vector2(0.35, 0.07):
+	set(value):
+		surface_foam_micro_scale = Vector2(maxf(value.x, 0.02), maxf(value.y, 0.01))
+		_request_visual_sync()
+
+@export var surface_foam_micro_distance := Vector2(12.0, 45.0):
+	set(value):
+		surface_foam_micro_distance = Vector2(maxf(value.x, 0.0), maxf(value.y, value.x + 0.1))
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var surface_foam_micro_normal_strength := 0.25:
+	set(value):
+		surface_foam_micro_normal_strength = value
+		_request_visual_sync()
+
 @export_category("Whitecaps Foam Shaping")
 @export var foam_spectral_erosion_enabled: bool = false:
 	set(value):
@@ -508,9 +549,9 @@ extends Node3D
 		foam_erosion_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_SOURCE_SHORT_LEGACY") var foam_debug_mode: int = 18:
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_SOURCE_SHORT_LEGACY", "SURFACE_FOAM_MICRO") var foam_debug_mode: int = 18:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 24)
+		foam_debug_mode = clampi(value, 0, 25)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -644,6 +685,11 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_fresh_specular", foam_fresh_specular)
 	material.set_shader_parameter(&"foam_residual_specular", foam_residual_specular)
 	material.set_shader_parameter(&"surface_foam_specular", surface_foam_specular)
+	material.set_shader_parameter(&"surface_foam_micro_detail_enabled", surface_foam_micro_detail_enabled and foam_breakup_texture_ready)
+	material.set_shader_parameter(&"surface_foam_micro_strength", surface_foam_micro_strength)
+	material.set_shader_parameter(&"surface_foam_micro_scale_m", surface_foam_micro_scale)
+	material.set_shader_parameter(&"surface_foam_micro_distance_m", surface_foam_micro_distance)
+	material.set_shader_parameter(&"surface_foam_micro_normal_strength", surface_foam_micro_normal_strength)
 	material.set_shader_parameter(&"foam_spectral_erosion_enabled", foam_spectral_erosion_enabled)
 	material.set_shader_parameter(&"foam_mid_erosion_strength", foam_mid_erosion_strength)
 	material.set_shader_parameter(&"foam_short_erosion_strength", foam_short_erosion_strength)
@@ -662,14 +708,17 @@ func _sync_water_visual_parameters() -> void:
 				foam_advection_enabled,
 				foam_advection_strength
 			)
+			fft_module.set_crest_foam_update_hz(crest_foam_update_hz)
 			fft_module.set_surface_foam_settings(
 				surface_foam_enabled,
 				surface_foam_whitecap,
 				surface_foam_amount,
-				surface_foam_advection_strength
+				surface_foam_advection_strength,
+				surface_foam_update_hz
 			)
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
+				surface_foam_field_resolution,
 				surface_foam_domain_m,
 				surface_foam_depth_m,
 				surface_foam_wind_speed_mps,

@@ -7,6 +7,7 @@ const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SurfaceFoamConfigScript := preload("res://ocean_v3/core/surface_foam_reference_config.gd")
 const SurfaceFoamSpectrumScript := preload("res://ocean_v3/core/surface_foam_reference_spectrum.gd")
+const SurfaceFoamSolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_spectrum_solver.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
@@ -95,12 +96,15 @@ var _foam_residual_decay_multiplier := 1.0
 var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
+var _crest_foam_update_hz := 60.0
 var _surface_foam_enabled := true
 var _surface_foam_whitecap := 0.0
 var _surface_foam_amount := 8.573
 var _surface_foam_advection_strength := 0.0
 # Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
 var _surface_foam_fft_resolution := 512
+var _surface_foam_field_resolution := 1024
+var _surface_foam_update_hz := 60.0
 var _surface_foam_domain_m := 88.0
 var _surface_foam_depth_m := 20.0
 var _surface_foam_wind_speed_mps := 25.0
@@ -177,6 +181,11 @@ func _ready() -> void:
 	dispatches_per_update = 0
 	for cascade in _cascades:
 		dispatches_per_update += cascade["config"].compute_pass_count()
+	for index in _cascades.size():
+		RenderingServer.call_on_render_thread(_cascades[index].solver.set_crest_foam_schedule.bind(
+			_crest_foam_update_hz,
+			float(index) * 0.25
+		))
 	# La referencia CPU recibe EXACTAMENTE los mismos bytes de H0 que la GPU.
 	# Backend de producciÃ³n: REDUCED (GDScript), siempre disponible.
 	_query_reduced = QueryReducedScript.new()
@@ -284,7 +293,9 @@ func _process(delta: float) -> void:
 			# update, while the copy writes a different ring entry for next frame.
 			cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
-		RenderingServer.call_on_render_thread(_surface_foam_solver.dispatch.bind(SimulationClock.get_render_time(), delta))
+		# Independent fixed-rate scheduler: the material keeps its last completed
+		# field while this J-only FFT advances in small pass batches.
+		RenderingServer.call_on_render_thread(_surface_foam_solver.advance.bind(delta))
 	_dispatch_requested = false
 
 
@@ -957,9 +968,7 @@ func gpu_memory_bytes() -> int:
 		total += int(solver_state.get("previous_displacement_gpu_bytes", 0))
 	if _surface_foam_solver != null and _surface_foam_config != null:
 		var surface_foam_state: Dictionary = _surface_foam_solver.diagnostic_state()
-		total += _surface_foam_config.approximate_gpu_bytes()
-		total += int(surface_foam_state.get("surface_foam_gpu_bytes", 0))
-		total += int(surface_foam_state.get("previous_displacement_gpu_bytes", 0))
+		total += int(surface_foam_state.get("gpu_bytes", 0))
 	return total
 
 
@@ -995,16 +1004,16 @@ func _initialize_surface_foam_solver() -> void:
 	if not _surface_foam_config.is_valid():
 		push_error("Configuración FFT de Surface Foam inválida.")
 		return
-	_surface_foam_solver = SolverScript.new()
+	_surface_foam_solver = SurfaceFoamSolverScript.new()
 	var h0_data := SurfaceFoamSpectrumScript.build_h0_rgba32f(_surface_foam_config as SurfaceFoamReferenceConfig, SimulationClock.simulation_seed)
 	# This H0 is TMA/JONSWAP reference-compatible and deliberately has no Hs
 	# normalization, band-pass, or physical-ocean amplitude coupling.
 	RenderingServer.call_on_render_thread(_surface_foam_solver.initialize.bind(
-		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", DEFAULT_FOAM_RESOLUTION
+		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", _surface_foam_field_resolution
 	))
-	RenderingServer.call_on_render_thread(_surface_foam_solver.set_surface_foam_settings.bind(
+	RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 		_surface_foam_enabled, _surface_foam_whitecap, _surface_foam_amount,
-		_surface_foam_advection_strength
+		_surface_foam_update_hz
 	))
 
 
@@ -1045,7 +1054,7 @@ func _publish_ready_textures() -> void:
 		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
-		_surface_foam_displacement.texture_rd_rid = _surface_foam_solver.displacement_rid
+		_surface_foam_displacement.texture_rd_rid = _surface_foam_solver.jacobian_rid
 	_textures_published = true
 
 
@@ -1054,36 +1063,53 @@ func set_foam_transport_settings(residual_decay_multiplier: float, deposit_stren
 	_foam_deposit_strength = clampf(deposit_strength, 0.0, 2.0)
 	_foam_advection_enabled = advection_enabled
 	_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
-	for cascade in _cascades:
+	for index in _cascades.size():
+		var cascade: Dictionary = _cascades[index]
 		RenderingServer.call_on_render_thread(cascade.solver.set_foam_transport_settings.bind(
 			_foam_residual_decay_multiplier,
 			_foam_deposit_strength,
 			_foam_advection_enabled,
 			_foam_advection_strength
 		))
+		RenderingServer.call_on_render_thread(cascade.solver.set_crest_foam_schedule.bind(
+			_crest_foam_update_hz,
+			float(index) * 0.25
+		))
 
 
-func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float) -> void:
+func set_crest_foam_update_hz(update_hz: float) -> void:
+	_crest_foam_update_hz = clampf(update_hz, 30.0, 60.0)
+	for index in _cascades.size():
+		RenderingServer.call_on_render_thread(_cascades[index].solver.set_crest_foam_schedule.bind(
+			_crest_foam_update_hz,
+			float(index) * 0.25
+		))
+
+
+func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float, update_hz: float) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
+	_surface_foam_update_hz = clampf(update_hz, 30.0, 60.0)
 	if _surface_foam_solver != null:
-		RenderingServer.call_on_render_thread(_surface_foam_solver.set_surface_foam_settings.bind(
+		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 			_surface_foam_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
-			_surface_foam_advection_strength
+			_surface_foam_update_hz
 		))
 
 
-func set_surface_foam_spectrum_settings(resolution: int, domain_m: float, depth_m: float,
+func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
 		directional_spread: float, detail: float, _legacy_min_wavelength_m: float,
 		_legacy_max_wavelength_m: float) -> void:
 	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
+	var next_field_resolution := 256 if field_resolution <= 256 else 512 if field_resolution <= 512 else 1024
 	var next_domain := maxf(domain_m, 8.0)
 	var changed := next_resolution != _surface_foam_fft_resolution \
+		or next_field_resolution != _surface_foam_field_resolution \
 		or not is_equal_approx(next_domain, _surface_foam_domain_m) \
 		or not is_equal_approx(depth_m, _surface_foam_depth_m) \
 		or not is_equal_approx(wind_speed_mps, _surface_foam_wind_speed_mps) \
@@ -1095,6 +1121,7 @@ func set_surface_foam_spectrum_settings(resolution: int, domain_m: float, depth_
 	if not changed:
 		return
 	_surface_foam_fft_resolution = next_resolution
+	_surface_foam_field_resolution = next_field_resolution
 	_surface_foam_domain_m = next_domain
 	_surface_foam_depth_m = maxf(depth_m, 0.1)
 	_surface_foam_wind_speed_mps = maxf(wind_speed_mps, 0.1)
