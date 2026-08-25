@@ -111,7 +111,7 @@ func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: floa
 
 
 func set_debug_variant(debug_mode: int) -> void:
-	_debug_variant = 1 if debug_mode == 29 else 2 if debug_mode == 30 else 3 if debug_mode == 32 else 4 if debug_mode == 33 else 0
+	_debug_variant = 1 if debug_mode == 29 else 2 if debug_mode == 30 else 3 if debug_mode == 32 else 4 if debug_mode == 33 else 5 if debug_mode == 34 else 6 if debug_mode == 35 else 7 if debug_mode == 36 else 8 if debug_mode == 37 else 9 if debug_mode == 38 else 0
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:

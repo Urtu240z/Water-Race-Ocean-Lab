@@ -60,6 +60,12 @@ float foam_source_from_jacobian(float jacobian) {
 	return clamp(source * max(params.foam.y, 0.0), 0.0, 1.0);
 }
 
+// Diagnostic topology source. It deliberately bypasses Amount, Birth
+// Selectivity, temporal history and presentation shaping.
+float raw_source_from_jacobian(float jacobian) {
+	return max(0.0, params.foam.x - jacobian);
+}
+
 float foam_target_from_source(float source_normalized, float selectivity) {
 	float selectivity_upper = selectivity + max(params.timing.w, 0.001);
 	float birth_gate = smoothstep(selectivity, selectivity_upper, source_normalized);
@@ -87,6 +93,8 @@ void main() {
 	}
 	float source_a = foam_source_from_jacobian(jacobian_a);
 	float source_b = foam_source_from_jacobian(jacobian_b);
+	float raw_source_a = raw_source_from_jacobian(jacobian_a);
+	float raw_source_b = raw_source_from_jacobian(jacobian_b);
 	float birth_selectivity = clamp(params.foam.z, 0.0, 1.0);
 	float sustain_selectivity = max(birth_selectivity - HISTORY_HYSTERESIS_WIDTH, 0.0);
 	float birth_target_a = foam_target_from_source(source_a, birth_selectivity);
@@ -96,6 +104,7 @@ void main() {
 	float selector = deperiodized_selector(field_world_xz);
 	float selected_birth_target = params.spatial.w == 3.0 ? birth_target_a : mix(birth_target_a, birth_target_b, selector);
 	float selected_sustain_target = params.spatial.w == 3.0 ? sustain_target_a : mix(sustain_target_a, sustain_target_b, selector);
+	float selected_raw_source = params.spatial.w == 3.0 ? raw_source_a : mix(raw_source_a, raw_source_b, selector);
 	float previous = textureLod(surface_foam_previous, field_uv, 0.0).r;
 	if (isnan(previous) || isinf(previous)) {
 		previous = 0.0;
@@ -120,6 +129,19 @@ void main() {
 			direct_jacobian = 1.0;
 		}
 		debug_source = foam_target_from_source(foam_source_from_jacobian(direct_jacobian), birth_selectivity);
+	} else if (params.spatial.w == 5.0 || params.spatial.w == 8.0) {
+		// RAW_J_SOURCE and RAW_SELECTED_SOURCE are the same selected topology.
+		debug_source = selected_raw_source;
+	} else if (params.spatial.w == 6.0) {
+		debug_source = raw_source_a;
+	} else if (params.spatial.w == 7.0) {
+		debug_source = raw_source_b;
+	} else if (params.spatial.w == 9.0) {
+		float direct_jacobian = textureLod(jacobian_map, source_uv_direct(field_world_xz), 0.0).r;
+		if (isnan(direct_jacobian) || isinf(direct_jacobian)) {
+			direct_jacobian = 1.0;
+		}
+		debug_source = raw_source_from_jacobian(direct_jacobian);
 	}
 	imageStore(surface_foam_next, coord, vec4(next, debug_source, 0.0, 1.0));
 }

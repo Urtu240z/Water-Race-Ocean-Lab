@@ -220,7 +220,11 @@ uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 16 SURFACE_SOURCE, 17 SURFACE_RAW, 18 SURFACE_COMPOSED,
 // 19 CREST_ONLY, 20 SURFACE_PLUS_CREST, 21 SURFACE_JACOBIAN,
 // 22 SURFACE_BUBBLES, 23 SURFACE_MACRO, 24 MICRO_INFLUENCE,
-// 25 SURFACE_HISTORY, 26 SURFACE_TEMPORAL_SOURCE, 27 EDGE_FADE, 28 FINAL.
+// 25 SURFACE_HISTORY, 26 SURFACE_TEMPORAL_SOURCE, 27 EDGE_FADE, 28 FINAL,
+// 29 SOURCE_A, 30 SOURCE_B, 31 SELECTED_SOURCE, 32 ONE_SAMPLE,
+// 33 SOURCE_8_DIRECT (all Birth-shaped targets),
+// 34 RAW_J_SOURCE, 35 RAW_SOURCE_A, 36 RAW_SOURCE_B,
+// 37 RAW_SELECTED_SOURCE, 38 RAW_SOURCE_8_DIRECT (all bypass Birth).
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -790,6 +794,18 @@ vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
 }
 
 
+// Strict diagnostic sampling path for the G-channel topology. It deliberately
+// bypasses the presentation filter, distance/composition weight, micro and edge
+// stages, so a raw mode visualizes the stored physical source texel itself.
+vec2 pixel_ocean_surface_foam_raw_debug_field(vec2 world_xz) {
+	vec2 uv = spectrum_uv(world_xz, surface_foam_field_domain_m);
+	ivec2 size = textureSize(surface_foam_short, 0);
+	ivec2 coord = ivec2(floor(fract(uv) * vec2(size)));
+	coord = clamp(coord, ivec2(0), size - ivec2(1));
+	return texelFetch(surface_foam_short, coord, 0).rg;
+}
+
+
 const float SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH = 0.20;
 
 // G owns the primary topology. R is a fading envelope only, so it cannot turn
@@ -1108,6 +1124,7 @@ void fragment() {
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	vec2 surface_foam_field = pixel_ocean_surface_foam_field(surface_foam_world_xz);
+	vec2 surface_foam_debug_raw_field = pixel_ocean_surface_foam_raw_debug_field(surface_foam_world_xz);
 	float surface_foam_raw = surface_foam_field.x;
 	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
@@ -1348,6 +1365,9 @@ void fragment() {
 	} else if (foam_debug_mode == 33) {
 		// Compute debug: direct source-domain 8 m reference, no warp.
 		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode >= 34 && foam_debug_mode <= 38) {
+		// Exact raw max(0, whitecap - J), with only the requested A/B mapping.
+		color = vec3(surface_foam_debug_raw_field.y);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
