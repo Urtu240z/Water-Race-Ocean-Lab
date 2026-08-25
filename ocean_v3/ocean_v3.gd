@@ -405,6 +405,17 @@ extends Node3D
 		surface_foam_threshold_visual = value
 		_request_visual_sync()
 
+@export_range(0.0, 1.0, 0.01) var surface_foam_mid_fold_start: float = 0.10:
+	set(value):
+		surface_foam_mid_fold_start = clampf(value, 0.0, 1.0)
+		surface_foam_mid_fold_end = maxf(surface_foam_mid_fold_end, surface_foam_mid_fold_start + 0.01)
+		_request_visual_sync()
+
+@export_range(0.01, 1.0, 0.01) var surface_foam_mid_fold_end: float = 0.24:
+	set(value):
+		surface_foam_mid_fold_end = maxf(value, surface_foam_mid_fold_start + 0.01)
+		_request_visual_sync()
+
 @export var surface_foam_color: Color = Color(0.78, 0.84, 0.82, 1.0):
 	set(value):
 		surface_foam_color = value
@@ -547,9 +558,9 @@ extends Node3D
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam Debug")
-@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL") var foam_debug_mode: int = 0:
+@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 8)
+		foam_debug_mode = clampi(value, 0, 9)
 		_request_visual_sync()
 
 
@@ -693,6 +704,8 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"surface_foam_distance_fade_end_m", surface_foam_distance_fade_end_m)
 	material.set_shader_parameter(&"surface_foam_strength", surface_foam_strength)
 	material.set_shader_parameter(&"surface_foam_threshold_visual", surface_foam_threshold_visual)
+	material.set_shader_parameter(&"surface_foam_mid_fold_start", surface_foam_mid_fold_start)
+	material.set_shader_parameter(&"surface_foam_mid_fold_end", surface_foam_mid_fold_end)
 	material.set_shader_parameter(&"surface_foam_color", surface_foam_color)
 	material.set_shader_parameter(&"surface_foam_normal_strength", surface_foam_normal_strength)
 	material.set_shader_parameter(&"foam_fresh_roughness", foam_fresh_roughness)

@@ -181,6 +181,8 @@ uniform float surface_foam_distance_fade_start_m : hint_range(0.0, 2000.0, 1.0) 
 uniform float surface_foam_distance_fade_end_m : hint_range(1.0, 2000.0, 1.0) = 600.0;
 uniform float surface_foam_strength : hint_range(0.0, 4.0, 0.01) = 1.0;
 uniform float surface_foam_threshold_visual : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float surface_foam_mid_fold_start : hint_range(0.0, 1.0, 0.01) = 0.10;
+uniform float surface_foam_mid_fold_end : hint_range(0.01, 1.0, 0.01) = 0.24;
 uniform vec4 surface_foam_color : source_color = vec4(0.78, 0.84, 0.82, 1.0);
 uniform float surface_foam_normal_strength : hint_range(0.0, 10.0, 0.01) = 0.55;
 uniform float foam_fresh_roughness : hint_range(0.0, 1.0, 0.01) = 0.95;
@@ -201,7 +203,7 @@ uniform float surface_foam_edge_fade_width : hint_range(0.01, 0.5, 0.01) = 0.14;
 uniform float foam_detail_contribution : hint_range(0.0, 1.0, 0.01) = 0.35;
 // 0 OFF, 1 CREST_FINAL, 2 SURFACE_HISTORY, 3 SURFACE_MACRO,
 // 4 SURFACE_FINAL, 5 SURFACE_DIRECT_RAW, 6 SURFACE_DEPERIODIZED_RAW,
-// 7 SURFACE_PLUS_CREST, 8 FOAM_NORMAL.
+// 7 SURFACE_PLUS_CREST, 8 FOAM_NORMAL, 9 SURFACE_MID_FOLD.
 uniform int foam_debug_mode = 0;
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
@@ -918,6 +920,7 @@ void fragment() {
 	float foam_residual_mask = 0.0;
 	float crest_foam_mask = 0.0;
 	float surface_foam_mask = 0.0;
+	float surface_foam_mid_fold_mask = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
 	if (foam_enabled) {
@@ -926,7 +929,7 @@ void fragment() {
 		// Smooth monotonic response: contrast changes curvature, while intensity
 		// remains a post-shape multiplier and never shifts the effective threshold.
 		float shaped_mask = pow(thresholded_foam, 1.0 / max(foam_contrast, 0.1));
-		float distance_fade = 1.0 - smoothstep(
+		float crest_distance_fade = 1.0 - smoothstep(
 			foam_distance_fade_start,
 			max(foam_distance_fade_end, foam_distance_fade_start + 0.001),
 			distance(ocean_world_xz, camera_world_xz)
@@ -938,7 +941,7 @@ void fragment() {
 		float intensity_gain = intensity <= 1.0
 			? intensity
 			: 1.0 + (intensity - 1.0) / (1.0 + (intensity - 1.0) * 1.5);
-		crest_foam_mask = clamp(shaped_mask * breakup * intensity_gain * distance_fade, 0.0, 1.0);
+		crest_foam_mask = clamp(shaped_mask * breakup * intensity_gain * crest_distance_fade, 0.0, 1.0);
 		float raw_channel_sum = max(raw_residual + raw_fresh, 0.00001);
 		foam_fresh_mask = crest_foam_mask * raw_fresh / raw_channel_sum;
 		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
@@ -984,6 +987,22 @@ void fragment() {
 			float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
 			surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
 			surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
+			// Presence only: sample the exact spectral MID Jacobian in the same
+			// coordinates as the visible MID band. This leaves Surface Foam's
+			// topology, history, microdetail and edge treatment untouched.
+			float mid_j = textureLod(displacement_mid, spectrum_uv(ocean_base_xz, domain_mid_m), 0.0).a;
+			float mid_compression = max(0.0, 1.0 - mid_j);
+			surface_foam_mid_fold_mask = smoothstep(
+				surface_foam_mid_fold_start,
+				max(surface_foam_mid_fold_end, surface_foam_mid_fold_start + 0.001),
+				mid_compression
+			);
+			float mid_visibility = band_mask.y * distance_fade(
+				mid_fade_range_m,
+				distance(ocean_base_xz, camera_world_xz)
+			);
+			surface_foam_mid_fold_mask *= mid_visibility;
+			surface_foam_mask *= surface_foam_mid_fold_mask;
 		}
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
@@ -1064,6 +1083,8 @@ void fragment() {
 	} else if (foam_debug_mode == 8) {
 		vec3 foam_normal_debug = normalize(vec3(-foam_shape_gradient.x * foam_normal_strength, 1.0, -foam_shape_gradient.y * foam_normal_strength));
 		color = foam_normal_debug * 0.5 + 0.5;
+	} else if (foam_debug_mode == 9) {
+		color = vec3(surface_foam_mid_fold_mask);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
