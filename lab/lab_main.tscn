@@ -99,9 +99,10 @@ foam_residual_decay_multiplier = 0.2
 foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
-surface_foam_strength = 1.84
-surface_foam_wind_speed_mps = 25.0
-foam_debug_mode = 0
+surface_foam_whitecap = 0.32
+surface_foam_update_hz = 60
+surface_foam_wind_speed_mps = 9.0
+surface_foam_micro_detail_enabled = false
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
