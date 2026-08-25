@@ -174,6 +174,7 @@ uniform bool foam_breakup_texture_ready = false;
 // Crest foam stays physically owned by its own accumulator. This only shapes
 // its visible mask with the existing direct-J Surface Foam topology.
 uniform bool crest_filigree_enabled = true;
+uniform float crest_filigree_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
 uniform float crest_fresh_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.22;
 uniform float crest_residual_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform float crest_filigree_contrast : hint_range(0.1, 4.0, 0.01) = 1.0;
@@ -641,7 +642,7 @@ float surface_foam_weight(vec2 world_xz) {
 
 
 // Native 512² source topology: no field resampling or presentation weight.
-float surface_foam_direct_j_raw_at(vec2 sample_position) {
+float surface_foam_direct_j_at(vec2 sample_position) {
 	float jacobian = textureLod(
 		surface_foam_jacobian,
 		spectrum_uv(sample_position, surface_foam_source_domain_m),
@@ -650,7 +651,12 @@ float surface_foam_direct_j_raw_at(vec2 sample_position) {
 	if (isnan(jacobian) || isinf(jacobian)) {
 		jacobian = 1.0;
 	}
-	return max(0.0, surface_foam_whitecap - jacobian);
+	return jacobian;
+}
+
+
+float surface_foam_direct_j_raw_at(vec2 sample_position) {
+	return max(0.0, surface_foam_whitecap - surface_foam_direct_j_at(sample_position));
 }
 
 
@@ -713,14 +719,28 @@ void surface_foam_stochastic_triangle(vec2 world_xz, out vec2 v0, out vec2 v1, o
 }
 
 
-float surface_foam_stochastic_direct_raw(vec2 world_xz) {
-	vec2 v0; vec2 v1; vec2 v2; vec3 weights;
-	surface_foam_stochastic_triangle(world_xz, v0, v1, v2, weights);
-	// Threshold happens inside every sample before stochastic composition.
-	float raw0 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_source_domain_m));
-	float raw1 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_source_domain_m));
-	float raw2 = surface_foam_direct_j_raw_at(surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_source_domain_m));
-	return raw0 * weights.x + raw1 * weights.y + raw2 * weights.z;
+// Surface Foam and Crest Filigree share this exact Direct-J sampling work.
+// Each keeps its own post-sample whitecap threshold; never blend J first.
+void surface_foam_shared_direct_topologies(vec2 world_xz, out float surface_raw, out float crest_raw) {
+	if (surface_foam_stochastic_deperiodization_enabled) {
+		vec2 v0; vec2 v1; vec2 v2; vec3 weights;
+		surface_foam_stochastic_triangle(world_xz, v0, v1, v2, weights);
+		float j0 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_source_domain_m));
+		float j1 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_source_domain_m));
+		float j2 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_source_domain_m));
+		float surface_raw0 = max(0.0, surface_foam_whitecap - j0);
+		float surface_raw1 = max(0.0, surface_foam_whitecap - j1);
+		float surface_raw2 = max(0.0, surface_foam_whitecap - j2);
+		float crest_raw0 = max(0.0, crest_filigree_whitecap - j0);
+		float crest_raw1 = max(0.0, crest_filigree_whitecap - j1);
+		float crest_raw2 = max(0.0, crest_filigree_whitecap - j2);
+		surface_raw = surface_raw0 * weights.x + surface_raw1 * weights.y + surface_raw2 * weights.z;
+		crest_raw = crest_raw0 * weights.x + crest_raw1 * weights.y + crest_raw2 * weights.z;
+	} else {
+		float jacobian = surface_foam_direct_j_at(world_xz);
+		surface_raw = max(0.0, surface_foam_whitecap - jacobian);
+		crest_raw = max(0.0, crest_filigree_whitecap - jacobian);
+	}
 }
 
 
@@ -744,20 +764,6 @@ vec2 pixel_ocean_surface_foam_field_unweighted(vec2 world_xz) {
 }
 
 
-float surface_foam_deperiodized_raw(vec2 world_xz) {
-	return surface_foam_stochastic_deperiodization_enabled
-		? surface_foam_stochastic_direct_raw(world_xz)
-		: surface_foam_direct_j_raw_at(world_xz);
-}
-
-
-// A single three-sample stochastic direct topology is used at every visible
-// distance. The history field remains an envelope, never a far periodic shape.
-float surface_foam_visible_topology(vec2 world_xz) {
-	return surface_foam_deperiodized_raw(world_xz);
-}
-
-
 float surface_foam_macro_from_topology(float raw_topology, float history_envelope) {
 	float persistent_gate = smoothstep(0.015, 0.32, history_envelope);
 	float temporal_envelope = mix(0.46, 1.0, persistent_gate);
@@ -768,11 +774,11 @@ float surface_foam_macro_from_topology(float raw_topology, float history_envelop
 // The Surface Foam macro remains an unsaturated, direct-J filament source.
 // The history envelope above stabilizes its intensity but never replaces the
 // topology, so Crest Foam inherits branches rather than the 88 m field shape.
-float crest_filigree_source_from_surface_macro(float surface_macro) {
+float crest_filigree_source_from_macro(float crest_macro) {
 	float thresholded = smoothstep(
 		crest_filigree_threshold,
 		max(1.0, crest_filigree_threshold + 0.001),
-		clamp(surface_macro, 0.0, 1.0)
+		clamp(crest_macro, 0.0, 1.0)
 	);
 	return pow(thresholded, 1.0 / max(crest_filigree_contrast, 0.1));
 }
@@ -941,6 +947,8 @@ void fragment() {
 	vec2 surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
 	float surface_foam_raw_topology = 0.0;
 	float surface_foam_macro = 0.0;
+	float crest_filigree_raw_topology = 0.0;
+	float crest_filigree_macro = 0.0;
 	float surface_foam_shaped = 0.0;
 	float surface_foam_final_no_micro = 0.0;
 	float surface_foam_final_no_edge = 0.0;
@@ -958,13 +966,20 @@ void fragment() {
 	float crest_residual_webbed = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
-	// Reuse the production direct-J topology calculation for both families.
-	// This preserves the existing Surface Foam cost and keeps Crest Filigree
-	// driven by the same deperiodized world-space branches.
+	// One shared Direct-J sampling pass supplies both post-threshold topologies.
+	// The temporal field remains the common envelope, never a second history.
 	if (foam_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
-		surface_foam_raw_topology = surface_foam_visible_topology(ocean_base_xz);
+		surface_foam_shared_direct_topologies(
+			ocean_base_xz,
+			surface_foam_raw_topology,
+			crest_filigree_raw_topology
+		);
 		surface_foam_macro = surface_foam_macro_from_topology(
 			surface_foam_raw_topology,
+			surface_foam_field_unweighted.x
+		);
+		crest_filigree_macro = surface_foam_macro_from_topology(
+			crest_filigree_raw_topology,
 			surface_foam_field_unweighted.x
 		);
 	}
@@ -993,7 +1008,7 @@ void fragment() {
 		crest_fresh_webbed = foam_fresh_mask;
 		crest_residual_webbed = foam_residual_mask;
 		if (crest_filigree_enabled) {
-			crest_filigree_source = crest_filigree_source_from_surface_macro(surface_foam_macro);
+			crest_filigree_source = crest_filigree_source_from_macro(crest_filigree_macro);
 			// The physical Crest mask is the hard support: branches cannot create
 			// foam anywhere a crest accumulator did not already produce it.
 			crest_filigree_mask = crest_foam_mask * crest_filigree_source;
@@ -1130,7 +1145,7 @@ void fragment() {
 	} else if (foam_debug_mode == 5) {
 		color = vec3(surface_foam_direct_j_raw_at(ocean_base_xz));
 	} else if (foam_debug_mode == 6) {
-		color = vec3(surface_foam_deperiodized_raw(ocean_base_xz));
+		color = vec3(surface_foam_raw_topology);
 	} else if (foam_debug_mode == 7) {
 		color = vec3(foam_mask);
 	} else if (foam_debug_mode == 8) {

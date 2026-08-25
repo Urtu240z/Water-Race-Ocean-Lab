@@ -114,6 +114,7 @@ surface_foam_enabled = false
 surface_foam_stochastic_deperiodization_enabled = null
 surface_foam_stochastic_cell_size_m = null
 surface_foam_whitecap = 0.32
+crest_filigree_whitecap = 0.32
 surface_foam_update_hz = 60
 surface_foam_source_domain_m = 4.0
 surface_foam_wind_speed_mps = 9.0

@@ -458,6 +458,11 @@ var _applying_wave_preset := false
 		crest_filigree_enabled = value
 		_request_visual_sync()
 
+@export_range(0.0, 1.5, 0.01) var crest_filigree_whitecap: float = 0.0:
+	set(value):
+		crest_filigree_whitecap = value
+		_request_visual_sync()
+
 @export_range(0.0, 1.0, 0.01) var crest_fresh_filigree_strength := 0.22:
 	set(value):
 		crest_fresh_filigree_strength = value
@@ -1037,6 +1042,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_edge_softness", foam_edge_softness)
 	material.set_shader_parameter(&"foam_breakup_texture_ready", foam_breakup_texture_ready)
 	material.set_shader_parameter(&"crest_filigree_enabled", crest_filigree_enabled)
+	material.set_shader_parameter(&"crest_filigree_whitecap", crest_filigree_whitecap)
 	material.set_shader_parameter(&"crest_fresh_filigree_strength", crest_fresh_filigree_strength)
 	material.set_shader_parameter(&"crest_residual_filigree_strength", crest_residual_filigree_strength)
 	material.set_shader_parameter(&"crest_filigree_contrast", crest_filigree_contrast)

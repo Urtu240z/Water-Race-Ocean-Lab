@@ -23,10 +23,13 @@ func _validate_stochastic_shader(shader: String) -> void:
 	_check(shader.contains("surface_foam_stochastic_cell_size_m") and shader.contains("= 32.0"), "32 m stochastic cell default")
 	_check(shader.contains("void surface_foam_stochastic_triangle"), "triangular lattice exists")
 	_check(shader.contains("surface_foam_stochastic_hash12"), "deterministic mathematical hash exists")
-	_check(shader.contains("float raw0 = surface_foam_direct_j_raw_at") and shader.contains("float raw1 = surface_foam_direct_j_raw_at") and shader.contains("float raw2 = surface_foam_direct_j_raw_at"), "three Direct-J samples threshold independently")
-	_check(shader.contains("return raw0 * weights.x + raw1 * weights.y + raw2 * weights.z;"), "raw samples compose only after threshold")
+	_check(shader.contains("void surface_foam_shared_direct_topologies"), "Surface Foam and Crest Filigree share one Direct-J topology pass")
+	_check(shader.contains("float j0 = surface_foam_direct_j_at") and shader.contains("float j1 = surface_foam_direct_j_at") and shader.contains("float j2 = surface_foam_direct_j_at"), "three Direct-J samples are fetched once")
+	_check(shader.contains("float surface_raw0 = max(0.0, surface_foam_whitecap - j0)") and shader.contains("float crest_raw0 = max(0.0, crest_filigree_whitecap - j0)"), "each consumer thresholds the same J sample independently")
+	_check(shader.contains("surface_raw = surface_raw0 * weights.x + surface_raw1 * weights.y + surface_raw2 * weights.z;") and shader.contains("crest_raw = crest_raw0 * weights.x + crest_raw1 * weights.y + crest_raw2 * weights.z;"), "both raw topologies compose only after threshold")
+	_check(shader.contains("float jacobian = surface_foam_direct_j_at(world_xz);") and shader.contains("crest_raw = max(0.0, crest_filigree_whitecap - jacobian);"), "periodic fallback shares one Direct-J sample")
+	_check(shader.contains("crest_filigree_source = crest_filigree_source_from_macro(crest_filigree_macro);"), "Crest source uses the Crest whitecap topology")
 	_check(shader.contains("vec2 field0 = textureLod") and shader.contains("vec2 field1 = textureLod") and shader.contains("vec2 field2 = textureLod"), "history envelope also samples stochastically")
-	_check(shader.contains("? surface_foam_stochastic_direct_raw(world_xz)\n\t\t: surface_foam_direct_j_raw_at(world_xz);"), "toggle falls back to original periodic Direct-J")
 	_check(not shader.contains("surface_foam_direct_warp_a") and not shader.contains("surface_foam_direct_sample_position_b") and not shader.contains("surface_foam_direct_selector"), "legacy A/B mechanism removed")
 	var stochastic_section := shader.substr(shader.find("float surface_foam_stochastic_hash12"), shader.find("float surface_foam_macro_from_topology") - shader.find("float surface_foam_stochastic_hash12"))
 	_check(not stochastic_section.contains("TIME"), "stochastic mapping has no temporal seed")
@@ -35,6 +38,8 @@ func _validate_stochastic_shader(shader: String) -> void:
 func _validate_root_controls(root: String) -> void:
 	_check(root.contains("@export var surface_foam_stochastic_deperiodization_enabled: bool = true"), "root exposes stochastic toggle")
 	_check(root.contains("@export_range(16.0, 96.0, 0.5) var surface_foam_stochastic_cell_size_m: float = 32.0"), "root exposes 16-96 m cell size")
+	_check(root.contains("@export_range(0.0, 1.5, 0.01) var crest_filigree_whitecap: float = 0.0"), "root exposes independent Crest Filigree whitecap")
+	_check(root.contains("set_shader_parameter(&\"crest_filigree_whitecap\", crest_filigree_whitecap)"), "Crest Filigree whitecap syncs live")
 	_check(root.contains("@export_range(4.0, 32.0, 0.5) var surface_foam_source_domain_m: float = 8.0"), "source domain remains 8 m")
 
 
