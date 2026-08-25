@@ -670,17 +670,47 @@ float surface_foam_stochastic_hash12(vec2 p) {
 }
 
 
-vec2 surface_foam_rotate_quarter(vec2 p, float rotation_index) {
-	if (rotation_index < 0.5) return p;
-	if (rotation_index < 1.5) return vec2(-p.y, p.x);
-	if (rotation_index < 2.5) return -p;
-	return vec2(p.y, -p.x);
+float surface_foam_stochastic_rotation_angle(vec2 lattice_vertex) {
+	float index = floor(surface_foam_stochastic_hash12(lattice_vertex + vec2(17.0, 31.0)) * 8.0);
+	if (index < 0.5) return 0.29670597; // 17 degrees
+	if (index < 1.5) return 0.71558499; // 41 degrees
+	if (index < 2.5) return 1.27409035; // 73 degrees
+	if (index < 3.5) return 1.90240888; // 109 degrees
+	if (index < 4.5) return 2.39110108; // 137 degrees
+	if (index < 5.5) return 2.84488668; // 163 degrees
+	if (index < 6.5) return 3.68264472; // 211 degrees
+	return 4.48549618; // 257 degrees
+}
+
+
+float surface_foam_stochastic_scale(vec2 lattice_vertex) {
+	return mix(0.91, 1.09, surface_foam_stochastic_hash12(lattice_vertex + vec2(89.0, 37.0)));
+}
+
+
+vec2 surface_foam_stochastic_rotate(vec2 p, float angle) {
+	float c = cos(angle);
+	float s = sin(angle);
+	return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+
+vec2 surface_foam_lattice_vertex_world(vec2 lattice_vertex) {
+	float cell_m = max(surface_foam_stochastic_cell_size_m, 0.001);
+	return vec2(
+		(lattice_vertex.x + 0.5 * lattice_vertex.y) * cell_m,
+		lattice_vertex.y * (0.8660254037844386 * cell_m)
+	);
 }
 
 
 vec2 surface_foam_stochastic_sample_position(vec2 world_xz, vec2 lattice_vertex, float domain_m) {
-	float rotation_index = floor(surface_foam_stochastic_hash12(lattice_vertex + vec2(17.0, 31.0)) * 4.0);
-	vec2 transformed = surface_foam_rotate_quarter(world_xz, rotation_index);
+	vec2 vertex_world = surface_foam_lattice_vertex_world(lattice_vertex);
+	vec2 local = world_xz - vertex_world;
+	vec2 transformed = surface_foam_stochastic_rotate(
+		local * surface_foam_stochastic_scale(lattice_vertex),
+		surface_foam_stochastic_rotation_angle(lattice_vertex)
+	);
 	if (surface_foam_stochastic_hash12(lattice_vertex + vec2(47.0, 11.0)) > 0.5) {
 		transformed.x = -transformed.x;
 	}
@@ -688,7 +718,7 @@ vec2 surface_foam_stochastic_sample_position(vec2 world_xz, vec2 lattice_vertex,
 		surface_foam_stochastic_hash12(lattice_vertex + vec2(7.0, 53.0)),
 		surface_foam_stochastic_hash12(lattice_vertex + vec2(71.0, 19.0))
 	) * domain_m;
-	return transformed + phase;
+	return vertex_world + transformed + phase;
 }
 
 
