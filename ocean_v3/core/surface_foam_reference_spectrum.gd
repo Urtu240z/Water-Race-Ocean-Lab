@@ -33,8 +33,13 @@ static func build_h0_rgba32f(config: SurfaceFoamReferenceConfig, simulation_seed
 			var hasselmann := _hasselmann_directional(omega, omega_p, config.wind_speed_mps, config.swell, theta - wind_angle)
 			var directional := lerpf(0.5 / PI, hasselmann, 1.0 - clampf(config.directional_spread, 0.0, 1.0))
 			var detail_damping := exp(-(1.0 - config.detail) * (1.0 - config.detail) * k * k)
+			# Soft one-octave high-pass: wavelengths much longer than the artistic
+			# feature scale fade out, while shorter structure reaches full weight.
+			# Apply sqrt(weight) to amplitude so the control is energy-consistent.
+			var k_cut := TAU / maxf(config.max_feature_wavelength_m, 0.1)
+			var feature_weight := smoothstep(k_cut * 0.5, k_cut, k)
 			var w_norm := domega_dk / k * dk * dk
-			var amplitude := sqrt(maxf(2.0 * tma * directional * detail_damping * w_norm, 0.0))
+			var amplitude := sqrt(maxf(2.0 * tma * directional * detail_damping * feature_weight * w_norm, 0.0))
 			h0[index] = _gaussian_pair(simulation_seed, index) * amplitude
 	return _pack_h0(h0, n)
 

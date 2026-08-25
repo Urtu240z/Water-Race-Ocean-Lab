@@ -10,7 +10,6 @@ uniform sampler2D normal_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D normal_mid : repeat_enable, filter_linear;
 uniform sampler2D normal_short : repeat_enable, filter_linear;
 // Dedicated persistent RG16F foam fields: R=residual/history, G=fresh crest.
-// normal_map.a remains only for the OLD_RAW_FOAM_256 diagnostic.
 uniform sampler2D foam_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D foam_mid : repeat_enable, filter_linear;
@@ -18,6 +17,7 @@ uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_displacement : repeat_enable, filter_linear;
 uniform sampler2D previous_surface_foam_displacement : repeat_enable, filter_linear;
+// RG8 tile: R=organic breakup, G=bubble distance-like field.
 uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
 uniform sampler2D previous_displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D previous_displacement_long_remainder : repeat_enable, filter_linear;
@@ -186,6 +186,8 @@ uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
 uniform float surface_foam_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
 uniform float surface_foam_temporal_alpha : hint_range(0.0, 1.0, 0.01) = 0.0;
 uniform float surface_foam_ocean_coupling : hint_range(0.0, 1.0, 0.01) = 0.35;
+uniform float surface_foam_distance_fade_start_m : hint_range(0.0, 2000.0, 1.0) = 200.0;
+uniform float surface_foam_distance_fade_end_m : hint_range(1.0, 2000.0, 1.0) = 600.0;
 uniform float surface_foam_strength : hint_range(0.0, 4.0, 0.01) = 1.0;
 uniform float surface_foam_threshold_visual : hint_range(0.0, 1.0, 0.01) = 0.0;
 uniform float surface_foam_contrast_visual : hint_range(0.1, 4.0, 0.01) = 1.0;
@@ -202,8 +204,7 @@ uniform float surface_foam_specular : hint_range(0.0, 1.0, 0.01) = 0.20;
 uniform bool surface_foam_micro_detail_enabled = true;
 uniform bool surface_foam_micro_texture_ready = false;
 uniform float surface_foam_micro_strength : hint_range(0.0, 1.0, 0.01) = 0.45;
-uniform vec2 surface_foam_micro_scale_m = vec2(8.0, 2.7);
-uniform vec2 surface_foam_micro_distance_m = vec2(12.0, 45.0);
+uniform vec2 surface_foam_micro_scale_m = vec2(10.0, 3.2);
 uniform float surface_foam_micro_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.25;
 uniform float surface_foam_edge_fade_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float surface_foam_edge_fade_width : hint_range(0.01, 0.5, 0.01) = 0.14;
@@ -215,16 +216,14 @@ uniform float foam_short_erosion_strength : hint_range(0.0, 1.0, 0.01) = 0.30;
 uniform float foam_fresh_erosion_ratio : hint_range(0.0, 1.0, 0.01) = 0.25;
 uniform float foam_detail_contribution : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
-// 0 OFF, 1 OLD_RAW_FOAM_256, 2 SHAPED, 3 COMPRESSION, 4 SPECTRAL_JACOBIAN,
-// 5 SOURCE, 6 FILTERED_OLD_RAW_256, 7 HIRES_RAW_FOAM, 8 FOAM_SOURCE_HIRES,
-// 9 HIRES_FRESH, 10 HIRES_RESIDUAL, 11 HIRES_TOTAL, 12 FOAM_VELOCITY,
-// 13 FOAM_NORMAL, 14 FOAM_SPECTRAL_DETAIL, 15 FOAM_EROSION_MASK,
-// 16 FOAM_ERODED_RESIDUAL, 17 FOAM_ERODED_FRESH, 18 SURFACE_FOAM_SOURCE,
-// 19 SURFACE_FOAM_RAW, 20 SURFACE_FOAM_SHAPED, 21 CREST_FOAM_ONLY,
-// 22 SURFACE_PLUS_CREST, 23 SURFACE_FOAM_JACOBIAN,
-// 24 SURFACE_FOAM_SOURCE_SHORT_LEGACY, 25 SURFACE_FOAM_MICRO,
-// 26 SURFACE_FOAM_MACRO, 27 SURFACE_FOAM_MICRO_INFLUENCE, 28 HISTORY,
-// 29 TEMPORAL_SOURCE, 30 EDGE_FADE, 31 FINAL.
+// 0 OFF, 1 SHAPED, 2 COMPRESSION, 3 SPECTRAL_JACOBIAN, 4 SOURCE,
+// 5 HIRES_RAW, 6 FOAM_SOURCE_HIRES, 7 HIRES_FRESH, 8 HIRES_RESIDUAL,
+// 9 HIRES_TOTAL, 10 FOAM_VELOCITY, 11 FOAM_NORMAL, 12 SPECTRAL_DETAIL,
+// 13 EROSION_MASK, 14 ERODED_RESIDUAL, 15 ERODED_FRESH,
+// 16 SURFACE_SOURCE, 17 SURFACE_RAW, 18 SURFACE_COMPOSED,
+// 19 CREST_ONLY, 20 SURFACE_PLUS_CREST, 21 SURFACE_JACOBIAN,
+// 22 SURFACE_BUBBLES, 23 SURFACE_MACRO, 24 MICRO_INFLUENCE,
+// 25 SURFACE_HISTORY, 26 SURFACE_TEMPORAL_SOURCE, 27 EDGE_FADE, 28 FINAL.
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -601,41 +600,6 @@ vec4 foam_bspline_weights(float t) {
 }
 
 
-// Four hardware-bilinear taps reconstruct a 4x4 cubic B-spline footprint.
-// UVs are deliberately allowed outside [0, 1]; the sampler repeat mode keeps
-// the FFT domain periodic without special edge branches.
-float sample_foam_bicubic(sampler2D tex, vec2 uv) {
-	vec2 size = vec2(textureSize(tex, 0));
-	vec2 texel_position = uv * size - 0.5;
-	vec2 cell = floor(texel_position);
-	vec2 fraction = fract(texel_position);
-	vec4 weight_x = foam_bspline_weights(fraction.x);
-	vec4 weight_y = foam_bspline_weights(fraction.y);
-	vec2 pair_x = vec2(weight_x.x + weight_x.y, weight_x.z + weight_x.w);
-	vec2 pair_y = vec2(weight_y.x + weight_y.y, weight_y.z + weight_y.w);
-	vec2 sample_x = vec2(
-		cell.x - 1.0 + weight_x.y / max(pair_x.x, 0.00001),
-		cell.x + 1.0 + weight_x.w / max(pair_x.y, 0.00001)
-	);
-	vec2 sample_y = vec2(
-		cell.y - 1.0 + weight_y.y / max(pair_y.x, 0.00001),
-		cell.y + 1.0 + weight_y.w / max(pair_y.y, 0.00001)
-	);
-	float sample_00 = textureLod(tex, (vec2(sample_x.x, sample_y.x) + 0.5) / size, 0.0).a;
-	float sample_10 = textureLod(tex, (vec2(sample_x.y, sample_y.x) + 0.5) / size, 0.0).a;
-	float sample_01 = textureLod(tex, (vec2(sample_x.x, sample_y.y) + 0.5) / size, 0.0).a;
-	float sample_11 = textureLod(tex, (vec2(sample_x.y, sample_y.y) + 0.5) / size, 0.0).a;
-	return clamp(
-		sample_00 * pair_x.x * pair_y.x
-		+ sample_10 * pair_x.y * pair_y.x
-		+ sample_01 * pair_x.x * pair_y.y
-		+ sample_11 * pair_x.y * pair_y.y,
-		0.0,
-		1.0
-	);
-}
-
-
 float foam_filter_amount(sampler2D tex, vec2 base_xz, float domain_size_m) {
 	if (!foam_filter_bicubic_enabled) {
 		return 1.0;
@@ -649,79 +613,6 @@ float foam_filter_amount(sampler2D tex, vec2 base_xz, float domain_size_m) {
 	float footprint_m = max(fwidth(base_xz.x), fwidth(base_xz.y));
 	float footprint_amount = smoothstep(texel_m * 0.55, texel_m * 1.25, footprint_m);
 	return max(distance_amount, footprint_amount);
-}
-
-
-float sample_foam_filtered(sampler2D tex, vec2 uv, vec2 base_xz, float domain_size_m) {
-	float filter_amount = foam_filter_amount(tex, base_xz, domain_size_m);
-	if (filter_amount <= 0.001) {
-		return sample_foam_bicubic(tex, uv);
-	}
-	float bilinear = textureLod(tex, uv, 0.0).a;
-	if (filter_amount >= 0.999) {
-		return bilinear;
-	}
-	float bicubic = sample_foam_bicubic(tex, uv);
-	return mix(bicubic, bilinear, filter_amount);
-}
-
-
-// Legacy 256² alpha composition, retained for diagnostic A/B only. Production
-// uses pixel_ocean_hires_foam() below.
-// SHORT spatial weights as the FFT normal path. Surface Detail is deliberately
-// absent: it is decorative normal detail, not a whitecap source.
-// filtered=false is retained exclusively for the OLD_RAW_FOAM_256 A/B.
-float pixel_ocean_legacy_foam(vec2 world_xz, bool filtered) {
-	float distance_to_camera = distance(world_xz, camera_world_xz);
-	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
-	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
-	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
-
-	vec2 coast_uv = coastal_uv(world_xz);
-	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
-	bool coast_active = has_coastal_data(coast_uv, field_data);
-	bool coast_transform_active = coastal_transform_enabled && coast_active;
-	vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
-	if (coast_transform_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
-		warp_sample = warp_deep_sample(world_xz);
-	}
-	float warp_confidence = warp_sample.z;
-	vec2 deep_xz = warp_sample.xy;
-
-	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
-	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
-	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
-	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
-
-	vec2 coastal_uv_open = spectrum_uv(world_xz, domain_long_coastal_m);
-	vec2 coastal_uv_warped = spectrum_uv(deep_xz, domain_long_coastal_m);
-	float coastal_foam_open = filtered
-		? sample_foam_filtered(normal_long_coastal, coastal_uv_open, world_xz, domain_long_coastal_m)
-		: textureLod(normal_long_coastal, coastal_uv_open, 0.0).a;
-	float coastal_foam_warped = filtered
-		? sample_foam_filtered(normal_long_coastal, coastal_uv_warped, world_xz, domain_long_coastal_m)
-		: textureLod(normal_long_coastal, coastal_uv_warped, 0.0).a;
-	float coastal_foam = mix(coastal_foam_open, coastal_foam_warped, warp_confidence) * coastal_gain;
-	vec2 remainder_uv = spectrum_uv(world_xz, domain_long_remainder_m);
-	vec2 mid_uv = spectrum_uv(world_xz, domain_mid_m);
-	float remainder_foam = filtered
-		? sample_foam_filtered(normal_long_remainder, remainder_uv, world_xz, domain_long_remainder_m)
-		: textureLod(normal_long_remainder, remainder_uv, 0.0).a;
-	float mid_foam = filtered
-		? sample_foam_filtered(normal_mid, mid_uv, world_xz, domain_mid_m)
-		: textureLod(normal_mid, mid_uv, 0.0).a;
-	// SHORT has a much smaller physical foam weight and naturally finer texels;
-	// retain the existing bilinear path there to keep the near-field cost bounded.
-	float short_foam = textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
-
-	// The cascade weight is already applied when each GPU alpha is grown. Do
-	// not normalize by the number/weight of cascades: foam contributions add.
-	const float MID_FOAM_WEIGHT = 1.0;
-	const float SHORT_FOAM_WEIGHT = 1.0;
-	float combined = coastal_foam * coastal_weight + remainder_foam * remainder_weight;
-	combined += mid_foam * mid_weight * mid_short_weight * MID_FOAM_WEIGHT;
-	combined += short_foam * short_weight * mid_short_weight * SHORT_FOAM_WEIGHT;
-	return clamp(combined, 0.0, 1.0);
 }
 
 
@@ -864,11 +755,24 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 }
 
 
-float surface_foam_weight(vec2 world_xz) {
+const float SURFACE_FOAM_NEAR_END_M = 45.0;
+const float SURFACE_FOAM_MID_END_M = 150.0;
+
+float surface_foam_distance_weight(vec2 world_xz) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
-	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
-	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
-	return short_weight * mid_short_weight;
+	return 1.0 - smoothstep(
+		surface_foam_distance_fade_start_m,
+		max(surface_foam_distance_fade_end_m, surface_foam_distance_fade_start_m + 0.001),
+		distance_to_camera
+	);
+}
+
+float surface_foam_weight(vec2 world_xz) {
+	// Dedicated distance policy. It deliberately does not inherit clipmap band
+	// masks or short_fade_range_m, which made the persistent field read as a
+	// texel block when the camera crossed a clipmap boundary.
+	float composition_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
+	return surface_foam_distance_weight(world_xz) * composition_weight;
 }
 
 
@@ -917,43 +821,55 @@ vec2 surface_foam_visual_xz() {
 }
 
 
-float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float noise_value) {
-	noise_value = 0.5;
-	if (!surface_foam_micro_detail_enabled || !surface_foam_micro_texture_ready || physical_mask <= 0.00001) {
-		return smoothstep(base_threshold, 1.0, physical_mask);
-	}
+int surface_foam_lod(vec2 world_xz) {
 	float camera_distance = distance(world_xz, camera_world_xz);
-	float near_distance = max(surface_foam_micro_distance_m.x, 0.01);
-	float end_distance = max(surface_foam_micro_distance_m.y, near_distance + 0.01);
-	if (camera_distance >= end_distance) {
-		return smoothstep(base_threshold, 1.0, physical_mask);
+	return camera_distance < SURFACE_FOAM_NEAR_END_M ? 0 : camera_distance < SURFACE_FOAM_MID_END_M ? 1 : 2;
+}
+
+
+float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float breakup_value, out float bubble_value, out vec2 bubble_gradient) {
+	// Far is history-only: no micro fetch, no bubble work and no derivative
+	// reconstruction. Mid gets one RG sample; Near gets at most two.
+	breakup_value = 0.5;
+	bubble_value = 0.5;
+	bubble_gradient = vec2(0.0);
+	int lod = surface_foam_lod(world_xz);
+	float history_shaped = smoothstep(base_threshold, 1.0, physical_mask);
+	if (lod >= 2 || !surface_foam_micro_detail_enabled || !surface_foam_micro_texture_ready || physical_mask <= 0.00001) {
+		return history_shaped;
 	}
-	float near_weight = 1.0 - smoothstep(0.0, near_distance, camera_distance);
-	float medium_weight = 1.0 - smoothstep(near_distance, end_distance, camera_distance);
 	vec2 world_dx = dFdx(world_xz);
 	vec2 world_dy = dFdy(world_xz);
 	vec2 medium_uv = world_xz / max(surface_foam_micro_scale_m.x, 0.5);
 	vec2 medium_dx = world_dx / max(surface_foam_micro_scale_m.x, 0.5);
 	vec2 medium_dy = world_dy / max(surface_foam_micro_scale_m.x, 0.5);
-	float medium = textureGrad(surface_foam_micro_texture, medium_uv, medium_dx, medium_dy).r;
-	float combined = medium;
-	if (near_weight > 0.001) {
+	vec2 medium = textureGrad(surface_foam_micro_texture, medium_uv, medium_dx, medium_dy).rg;
+	vec2 combined = medium;
+	if (lod == 0) {
 		mat2 rotation = mat2(vec2(0.70710678, -0.70710678), vec2(0.70710678, 0.70710678));
 		vec2 fine_uv = rotation * world_xz / max(surface_foam_micro_scale_m.y, 0.5) + vec2(0.371, 0.619);
 		vec2 fine_dx = rotation * world_dx / max(surface_foam_micro_scale_m.y, 0.5);
 		vec2 fine_dy = rotation * world_dy / max(surface_foam_micro_scale_m.y, 0.5);
-		float fine = textureGrad(surface_foam_micro_texture, fine_uv, fine_dx, fine_dy).r;
-		combined = mix(medium, fine, near_weight * 0.38);
+		vec2 fine = textureGrad(surface_foam_micro_texture, fine_uv, fine_dx, fine_dy).rg;
+		combined = mix(medium, fine, 0.38);
 	}
-	noise_value = combined;
+	breakup_value = combined.r;
+	bubble_value = combined.g;
+	// G is already the distance-like field. Derivatives provide the subtle
+	// bubble normal without an additional texture fetch.
+	bubble_gradient = vec2(dFdx(combined.g), dFdy(combined.g));
+	float near_weight = lod == 0 ? 1.0 : 0.45;
 	float edge_factor = 4.0 * physical_mask * (1.0 - physical_mask);
-	float micro_domain = smoothstep(0.002, 0.08, physical_mask);
-	float visibility = max(medium_weight * 0.55, near_weight);
-	float threshold_offset = (combined - 0.5) * surface_foam_micro_strength * visibility * micro_domain * (0.35 + 0.65 * edge_factor);
+	float threshold_offset = (combined.r - 0.5) * surface_foam_micro_strength * near_weight * (0.35 + 0.65 * edge_factor);
 	float softness = max(fwidth(physical_mask) * 1.5, 0.018);
 	float shaped = smoothstep(base_threshold + threshold_offset - softness, base_threshold + threshold_offset + softness, physical_mask);
-	float interior_hole = smoothstep(0.62, 0.92, physical_mask) * (1.0 - edge_factor) * near_weight * 0.06;
-	return shaped * (1.0 - interior_hole * (1.0 - combined));
+	// Bubble interiors are deliberately sparse: only a fraction of the
+	// distance-field interior can open, and only where the physical mask exists.
+	float bubble_aa = max(fwidth(combined.g) * 1.5, 0.02);
+	float bubble_ring = 1.0 - smoothstep(0.16 - bubble_aa, 0.16 + bubble_aa, abs(combined.g - 0.5));
+	float bubble_hole = bubble_ring * smoothstep(0.56, 0.88, combined.r) * (lod == 0 ? 0.18 : 0.12);
+	return shaped * (1.0 - bubble_hole * smoothstep(0.30, 0.82, physical_mask));
+
 }
 
 
@@ -962,18 +878,6 @@ float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float b
 float pixel_ocean_surface_foam_source(vec2 world_xz, float jacobian) {
 	return clamp(max(0.0, surface_foam_whitecap - jacobian) * surface_foam_weight(world_xz), 0.0, 1.0);
 }
-
-
-// Temporary A/B reference: the former SHORT-driven source, never used by the
-// production accumulator after the dedicated spectrum was introduced.
-float pixel_ocean_surface_foam_source_short_legacy(vec2 world_xz) {
-	float short_j = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).a;
-	if (isnan(short_j) || isinf(short_j)) {
-		short_j = 1.0;
-	}
-	return clamp(max(0.0, surface_foam_whitecap - short_j) * surface_foam_weight(world_xz), 0.0, 1.0);
-}
-
 
 // Debug-only motion in metres per frame: current horizontal displacement minus
 // the exact previous snapshot that update_foam used for its backtrace.
@@ -1218,13 +1122,19 @@ void fragment() {
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	float surface_foam_raw = pixel_ocean_surface_foam_raw(surface_foam_world_xz);
-	float surface_foam_jacobian = pixel_ocean_surface_foam_jacobian(surface_foam_world_xz);
+	int surface_foam_distance_lod = surface_foam_lod(surface_foam_world_xz);
+	// Far keeps the persistent history at one sample and scalar shaping only.
+	// J remains available in Near/Mid and in its explicit diagnostic mode.
+	float surface_foam_jacobian = 1.0;
+	if (surface_foam_distance_lod < 2 || foam_debug_mode == 21) {
+		surface_foam_jacobian = pixel_ocean_surface_foam_jacobian(surface_foam_world_xz);
+	}
 	float surface_foam_source = pixel_ocean_surface_foam_source(surface_foam_world_xz, surface_foam_jacobian);
-	float surface_foam_source_short_legacy = pixel_ocean_surface_foam_source_short_legacy(surface_foam_world_xz);
 	float surface_foam_macro = 0.0;
 	float surface_foam_shaped = 0.0;
 	float surface_foam_micro_noise = 0.5;
 	float surface_foam_micro_influence = 0.0;
+	float surface_foam_bubble_field = 0.5;
 	float surface_foam_edge_fade = 0.0;
 	float foam_mask = 0.0;
 	float foam_fresh_mask = 0.0;
@@ -1261,11 +1171,23 @@ void fragment() {
 
 		float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
 		surface_foam_macro = surface_foam_macro_shape(surface_foam_raw, surface_foam_source);
-		float surface_thresholded = surface_foam_micro_thresholded(surface_foam_world_xz, surface_foam_macro, surface_threshold, surface_foam_micro_noise);
+		float surface_thresholded = surface_foam_micro_thresholded(
+			surface_foam_world_xz,
+			surface_foam_macro,
+			surface_threshold,
+			surface_foam_micro_noise,
+			surface_foam_bubble_field,
+			surface_foam_micro_gradient
+		);
 		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
+		// Edge fade is evaluated against the raw history before binary shaping.
+		// That keeps the persistent core intact and makes the boundary organic.
 		float edge_width = clamp(surface_foam_edge_fade_width, 0.01, 0.5);
-		float edge_band = smoothstep(0.01, edge_width, surface_foam_shaped)
-			* (1.0 - smoothstep(1.0 - edge_width, 1.0, surface_foam_shaped));
+		float edge_aa = max(fwidth(surface_foam_raw) * 1.5, 0.01);
+		float edge_low = max(surface_threshold - edge_width - edge_aa, 0.0);
+		float edge_high = min(surface_threshold + edge_width + edge_aa, 1.0);
+		float edge_band = smoothstep(edge_low, edge_high, surface_foam_raw)
+			* (1.0 - smoothstep(surface_threshold + edge_width * 0.8, surface_threshold + edge_width * 2.4 + edge_aa, surface_foam_raw));
 		float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
 		surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
 		surface_foam_mask = clamp(surface_foam_shaped * surface_foam_strength * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
@@ -1277,7 +1199,7 @@ void fragment() {
 		);
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
-		surface_foam_micro_gradient = foam_gradient_world(vec2(surface_foam_micro_noise, 0.0), surface_foam_world_xz);
+		// Bubble G derivatives are the only bubble normal input; no extra sample.
 	}
 	if (foam_debug_mode == 3) {
 		compression_debug = pixel_ocean_compression_debug(ocean_base_xz);
@@ -1355,72 +1277,66 @@ void fragment() {
 	// 4C-S3.3: el takeover ya no descarta fragmentos del FFT. La ocultación se
 	// resuelve en vertex() hundiendo verticalmente el océano bajo la seam S3.2.
 	if (foam_debug_mode == 1) {
-		color = vec3(pixel_ocean_legacy_foam(ocean_base_xz, false));
-	} else if (foam_debug_mode == 2) {
 		color = vec3(foam_mask);
-	} else if (foam_debug_mode == 3) {
+	} else if (foam_debug_mode == 2) {
 		// Gray = J≈1, white = low J, red = current foam source > 0.
 		color = vec3(compression_debug.y);
 		color = mix(color, vec3(1.0, 0.08, 0.02), smoothstep(0.0, 0.15, compression_debug.x));
-	} else if (foam_debug_mode == 4) {
+	} else if (foam_debug_mode == 3) {
 		// Exact spectral J stored by assemble_maps: J≈1 gray, compression white.
 		color = vec3(clamp(0.5 + (1.0 - spectral_debug.x) * 2.0, 0.0, 1.0));
-	} else if (foam_debug_mode == 5) {
+	} else if (foam_debug_mode == 4) {
 		// Current source only: black when J >= whitecap.
 		color = vec3(spectral_debug.y);
+	} else if (foam_debug_mode == 5) {
+		color = vec3(raw_foam);
 	} else if (foam_debug_mode == 6) {
-		color = vec3(pixel_ocean_legacy_foam(ocean_base_xz, true));
-	} else if (foam_debug_mode == 7) {
-		color = vec3(raw_foam);
-	} else if (foam_debug_mode == 8) {
 		color = vec3(spectral_debug.y);
-	} else if (foam_debug_mode == 9) {
+	} else if (foam_debug_mode == 7) {
 		color = vec3(raw_fresh);
-	} else if (foam_debug_mode == 10) {
+	} else if (foam_debug_mode == 8) {
 		color = vec3(raw_residual);
-	} else if (foam_debug_mode == 11) {
+	} else if (foam_debug_mode == 9) {
 		color = vec3(raw_foam);
-	} else if (foam_debug_mode == 12) {
+	} else if (foam_debug_mode == 10) {
 		float motion_length = length(foam_motion);
 		color = vec3(0.5 + foam_motion.x * 8.0, 0.5 + foam_motion.y * 8.0, 0.15 + motion_length * 12.0);
-	} else if (foam_debug_mode == 13) {
+	} else if (foam_debug_mode == 11) {
 		vec3 foam_normal_debug = normalize(vec3(-foam_shape_gradient.x * foam_normal_strength, 1.0, -foam_shape_gradient.y * foam_normal_strength));
 		color = foam_normal_debug * 0.5 + 0.5;
-	} else if (foam_debug_mode == 14) {
+	} else if (foam_debug_mode == 12) {
 		color = vec3(hires_foam_composition.z);
-	} else if (foam_debug_mode == 15) {
+	} else if (foam_debug_mode == 13) {
 		color = vec3(hires_foam_composition.w);
-	} else if (foam_debug_mode == 16) {
+	} else if (foam_debug_mode == 14) {
 		color = vec3(eroded_residual_debug);
-	} else if (foam_debug_mode == 17) {
+	} else if (foam_debug_mode == 15) {
 		color = vec3(eroded_fresh_debug);
-	} else if (foam_debug_mode == 18) {
+	} else if (foam_debug_mode == 16) {
 		color = vec3(surface_foam_source);
-	} else if (foam_debug_mode == 19) {
+	} else if (foam_debug_mode == 17) {
 		color = vec3(surface_foam_raw);
-	} else if (foam_debug_mode == 20) {
+	} else if (foam_debug_mode == 18) {
 		color = vec3(surface_foam_shaped);
-	} else if (foam_debug_mode == 21) {
+	} else if (foam_debug_mode == 19) {
 		color = vec3(crest_foam_mask);
-	} else if (foam_debug_mode == 22) {
+	} else if (foam_debug_mode == 20) {
 		color = vec3(foam_mask);
-	} else if (foam_debug_mode == 23) {
+	} else if (foam_debug_mode == 21) {
 		color = vec3(clamp(surface_foam_jacobian, 0.0, 1.0));
-	} else if (foam_debug_mode == 24) {
-		color = vec3(surface_foam_source_short_legacy);
-	} else if (foam_debug_mode == 25) {
-		color = vec3(surface_foam_shaped);
-	} else if (foam_debug_mode == 26) {
+	} else if (foam_debug_mode == 22) {
+		color = vec3(surface_foam_bubble_field);
+	} else if (foam_debug_mode == 23) {
 		color = vec3(surface_foam_macro);
-	} else if (foam_debug_mode == 27) {
+	} else if (foam_debug_mode == 24) {
 		color = vec3(surface_foam_micro_influence);
-	} else if (foam_debug_mode == 28) {
+	} else if (foam_debug_mode == 25) {
 		color = vec3(clamp(surface_foam_raw, 0.0, 1.0));
-	} else if (foam_debug_mode == 29) {
+	} else if (foam_debug_mode == 26) {
 		color = vec3(clamp(surface_foam_source, 0.0, 1.0));
-	} else if (foam_debug_mode == 30) {
+	} else if (foam_debug_mode == 27) {
 		color = vec3(surface_foam_edge_fade);
-	} else if (foam_debug_mode == 31) {
+	} else if (foam_debug_mode == 28) {
 		color = vec3(surface_foam_mask);
 	}
 

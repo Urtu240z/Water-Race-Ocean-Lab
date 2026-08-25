@@ -15,6 +15,10 @@ extends Resource
 # 0 = Hasselmann completo/direccional; 1 = 1/(2π) isotrópico.
 @export_range(0.0, 1.0, 0.01) var directional_spread := 0.0
 @export_range(0.0, 1.0, 0.01) var detail := 1.0
+## Artistic high-pass only for Surface Foam. The physical ocean spectra never
+## consume this value. It attenuates wavelengths longer than this scale while
+## preserving the reference-compatible JONSWAP/TMA construction.
+@export_range(2.0, 40.0, 0.25) var max_feature_wavelength_m := 10.0
 
 # API mínima que reutiliza GPUStockhamFFT. No hay target_hs_m, band-pass ni
 # multiplicador de choppiness en la ruta reference-compatible.
