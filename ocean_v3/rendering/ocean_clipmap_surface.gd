@@ -70,13 +70,13 @@ func _ready() -> void:
 		_prepare_editor_preview()
 
 
-func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], previous_displacements: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
+func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
 	assert(clipmap_config.is_valid())
 	# 3B.2B: 4 cascadas de render: LONG_COASTAL, LONG_REMAINDER, MID, SHORT.
-	assert(configs.size() == 4 and displacements.size() == 4 and normals.size() == 4 and foams.size() == 4 and previous_displacements.size() == 4 and surface_foam != null)
+	assert(configs.size() == 4 and displacements.size() == 4 and normals.size() == 4 and foams.size() == 4 and surface_foam != null)
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
-	_configure_materials(configs, displacements, normals, foams, previous_displacements, surface_foam, surface_foam_field_domain_m)
+	_configure_materials(configs, displacements, normals, foams, surface_foam, surface_foam_field_domain_m)
 	_rebuild_levels()
 	_apply_debug_mode()
 
@@ -272,7 +272,7 @@ func final_half_extent_m() -> float:
 	return clipmap_config.final_half_extent_m()
 
 
-func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], previous_displacements: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
+func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
 	# 3B.2B: índices de render -> LONG_COASTAL=0, LONG_REMAINDER=1, MID=2, SHORT=3.
 	var ids := ["long_coastal", "long_remainder", "mid", "short"]
 	for material in [_surface_material, _wireframe_material]:
@@ -310,10 +310,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 	_surface_material.set_shader_parameter(&"foam_short", foams[3])
 	_surface_material.set_shader_parameter(&"surface_foam_short", surface_foam)
 	_surface_material.set_shader_parameter(&"surface_foam_field_domain_m", surface_foam_field_domain_m)
-	_surface_material.set_shader_parameter(&"previous_displacement_long_coastal", previous_displacements[0])
-	_surface_material.set_shader_parameter(&"previous_displacement_long_remainder", previous_displacements[1])
-	_surface_material.set_shader_parameter(&"previous_displacement_mid", previous_displacements[2])
-	_surface_material.set_shader_parameter(&"previous_displacement_short", previous_displacements[3])
 
 
 func _prepare_editor_preview() -> void:

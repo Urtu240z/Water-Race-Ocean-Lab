@@ -124,7 +124,6 @@ var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
-var _surface_foam_debug_mode := 0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
@@ -215,9 +214,8 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_field_domain_m)
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _surface_foam_texture, _surface_foam_field_domain_m)
 	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
-	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
 	# inactivo y no renderiza nada.
@@ -239,8 +237,6 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 	var displacement := Texture2DRD.new()
 	var normal := Texture2DRD.new()
 	var foam := Texture2DRD.new()
-	var surface_foam := Texture2DRD.new()
-	var previous_displacement := Texture2DRD.new()
 	var solver := SolverScript.new()
 	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0_data, resource_prefix, _crest_foam_resolution_for_cascade(cascade_index)))
 	return {
@@ -249,8 +245,6 @@ func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resourc
 		"displacement": displacement,
 		"normal": normal,
 		"foam": foam,
-		"surface_foam": surface_foam,
-		"previous_displacement": previous_displacement,
 	}
 
 
@@ -277,8 +271,6 @@ func _exit_tree() -> void:
 		cascade.displacement.texture_rd_rid = RID()
 		cascade.normal.texture_rd_rid = RID()
 		cascade.foam.texture_rd_rid = RID()
-		cascade.surface_foam.texture_rd_rid = RID()
-		cascade.previous_displacement.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
@@ -302,9 +294,6 @@ func _process(delta: float) -> void:
 			# The solver receives the actual frame delta and converts per-second foam
 			# rates into exponential attack/release and decay. No fixed-FPS assumption.
 			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta))
-			# The snapshot ring exposes the exact old displacement consumed by this
-			# update, while the copy writes a different ring entry for next frame.
-			cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 		# Independent fixed-rate scheduler: the material keeps its last completed
 		# field while this J-only FFT advances in small pass batches.
@@ -334,7 +323,6 @@ func set_sea_state(state: int) -> void:
 		var config := configs[0] if index < 2 else configs[index - 1]
 		cascade["config"] = config
 		RenderingServer.call_on_render_thread(cascade["solver"].update_config.bind(config))
-	_apply_foam_debug_config()
 	dispatches_per_update = 0
 	for cascade in _cascades:
 		dispatches_per_update += cascade["config"].compute_pass_count()
@@ -344,22 +332,6 @@ func set_sea_state(state: int) -> void:
 
 func sea_state_name() -> String:
 	return SeaStateScript.state_name(_sea_state)
-
-
-func _apply_foam_debug_config() -> void:
-	# The production alpha is already stored per cascade. These thresholds are
-	# only supplied to the COMPRESSION/JACOBIAN diagnostic so it can mark the
-	# current source condition without a CPU readback.
-	if configs.size() < 3:
-		return
-	surface.get_surface_material().set_shader_parameter(
-		&"foam_debug_whitecap_by_band",
-		Vector3(configs[0].foam_whitecap, configs[1].foam_whitecap, configs[2].foam_whitecap)
-	)
-	surface.get_surface_material().set_shader_parameter(
-		&"foam_debug_cascade_weight_by_band",
-		Vector3(configs[0].foam_cascade_weight, configs[1].foam_cascade_weight, configs[2].foam_cascade_weight)
-	)
 
 
 ## --- A/B de espectro: PHILLIPS <-> JONSWAP_HASSELMANN. ---
@@ -1045,7 +1017,6 @@ func _initialize_surface_foam_solver() -> void:
 		_surface_foam_birth_selectivity,
 		_surface_foam_evolution_speed
 	))
-	RenderingServer.call_on_render_thread(_surface_foam_solver.set_debug_variant.bind(_surface_foam_debug_mode))
 
 
 func _rebuild_surface_foam_solver() -> void:
@@ -1083,7 +1054,6 @@ func _publish_ready_textures() -> void:
 			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
 			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
 		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
-		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
 		_surface_foam_jacobian_texture.texture_rd_rid = _surface_foam_solver.jacobian_rid
@@ -1165,12 +1135,6 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 			birth_selectivity,
 			evolution_speed
 		))
-
-
-func set_surface_foam_debug_mode(debug_mode: int) -> void:
-	_surface_foam_debug_mode = debug_mode
-	if _surface_foam_solver != null:
-		RenderingServer.call_on_render_thread(_surface_foam_solver.set_debug_variant.bind(debug_mode))
 
 
 func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, source_domain_m: float, field_domain_m: float, depth_m: float,

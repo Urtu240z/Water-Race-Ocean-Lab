@@ -100,9 +100,8 @@ foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
 surface_foam_strength = 1.84
-surface_foam_contrast_visual = 0.6699999999999999
 surface_foam_wind_speed_mps = 25.0
-foam_debug_mode = 38
+foam_debug_mode = 0
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
