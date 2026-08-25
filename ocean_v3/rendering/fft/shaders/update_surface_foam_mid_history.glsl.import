@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cethkay8j8blf"
+path="res://.godot/imported/update_surface_foam_mid_history.glsl-fbcc95a31477341600a051b7b0f0e51a.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/fft/shaders/update_surface_foam_mid_history.glsl"
+dest_files=["res://.godot/imported/update_surface_foam_mid_history.glsl-fbcc95a31477341600a051b7b0f0e51a.res"]
+
+[params]

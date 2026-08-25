@@ -16,6 +16,7 @@ uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_jacobian : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_mid_fold_history : repeat_enable, filter_linear;
 // Packed RGB tile: R=organic breakup, G=bubble distance-like field,
 // B=microheight for the derived foam normal.
 uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
@@ -920,7 +921,7 @@ void fragment() {
 	float foam_residual_mask = 0.0;
 	float crest_foam_mask = 0.0;
 	float surface_foam_mask = 0.0;
-	float surface_foam_mid_fold_mask = 0.0;
+	float surface_foam_mid_fold_history_value = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
 	if (foam_enabled) {
@@ -987,22 +988,14 @@ void fragment() {
 			float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
 			surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
 			surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
-			// Presence only: sample the exact spectral MID Jacobian in the same
-			// coordinates as the visible MID band. This leaves Surface Foam's
-			// topology, history, microdetail and edge treatment untouched.
-			float mid_j = textureLod(displacement_mid, spectrum_uv(ocean_base_xz, domain_mid_m), 0.0).a;
-			float mid_compression = max(0.0, 1.0 - mid_j);
-			surface_foam_mid_fold_mask = smoothstep(
-				surface_foam_mid_fold_start,
-				max(surface_foam_mid_fold_end, surface_foam_mid_fold_start + 0.001),
-				mid_compression
-			);
-			float mid_visibility = band_mask.y * distance_fade(
-				mid_fade_range_m,
-				distance(ocean_base_xz, camera_world_xz)
-			);
-			surface_foam_mid_fold_mask *= mid_visibility;
-			surface_foam_mask *= surface_foam_mid_fold_mask;
+			// The MID Jacobian updates this persistent eligibility field in compute.
+			// Its release is physical-time based, never tied to MID render LOD/fade.
+			surface_foam_mid_fold_history_value = textureLod(
+				surface_foam_mid_fold_history,
+				spectrum_uv(ocean_base_xz, domain_mid_m),
+				0.0
+			).r;
+			surface_foam_mask *= surface_foam_mid_fold_history_value;
 		}
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
@@ -1084,7 +1077,7 @@ void fragment() {
 		vec3 foam_normal_debug = normalize(vec3(-foam_shape_gradient.x * foam_normal_strength, 1.0, -foam_shape_gradient.y * foam_normal_strength));
 		color = foam_normal_debug * 0.5 + 0.5;
 	} else if (foam_debug_mode == 9) {
-		color = vec3(surface_foam_mid_fold_mask);
+		color = vec3(surface_foam_mid_fold_history_value);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

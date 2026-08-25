@@ -8,6 +8,7 @@ const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SurfaceFoamConfigScript := preload("res://ocean_v3/core/surface_foam_reference_config.gd")
 const SurfaceFoamSpectrumScript := preload("res://ocean_v3/core/surface_foam_reference_spectrum.gd")
 const SurfaceFoamSolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_spectrum_solver.gd")
+const SurfaceFoamMidHistorySolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_mid_history_solver.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
@@ -110,6 +111,8 @@ var _surface_foam_birth_attack_s := 0.16
 var _surface_foam_lifetime_s := 1.10
 var _surface_foam_birth_selectivity := 0.28
 var _surface_foam_evolution_speed := 0.35
+var _surface_foam_mid_fold_start := 0.10
+var _surface_foam_mid_fold_end := 0.24
 # Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
 var _surface_foam_fft_resolution := 512
 var _surface_foam_field_resolution := 1024
@@ -128,6 +131,8 @@ var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_jacobian_texture := Texture2DRD.new()
+var _surface_foam_mid_fold_history_texture := Texture2DRD.new()
+var _surface_foam_mid_history_solver = null
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -216,6 +221,7 @@ func _ready() -> void:
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _surface_foam_texture, _surface_foam_field_domain_m)
 	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
+	surface.set_surface_foam_mid_fold_history(_surface_foam_mid_fold_history_texture)
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
 	# inactivo y no renderiza nada.
@@ -275,9 +281,13 @@ func _exit_tree() -> void:
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_jacobian_texture.texture_rd_rid = RID()
+	_surface_foam_mid_fold_history_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
+	if _surface_foam_mid_history_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.free_resources)
 	_surface_foam_solver = null
+	_surface_foam_mid_history_solver = null
 	_surface_foam_config = null
 
 
@@ -298,6 +308,8 @@ func _process(delta: float) -> void:
 		# Independent fixed-rate scheduler: the material keeps its last completed
 		# field while this J-only FFT advances in small pass batches.
 		RenderingServer.call_on_render_thread(_surface_foam_solver.advance.bind(delta))
+	if _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.advance.bind(delta))
 	_dispatch_requested = false
 
 
@@ -1019,6 +1031,27 @@ func _initialize_surface_foam_solver() -> void:
 	))
 
 
+func _initialize_surface_foam_mid_history() -> void:
+	if _surface_foam_mid_history_solver != null or _cascades.size() <= 2:
+		return
+	var mid_solver = _cascades[2].solver
+	if mid_solver == null or not mid_solver.ready:
+		return
+	_surface_foam_mid_history_solver = SurfaceFoamMidHistorySolverScript.new()
+	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.initialize.bind(
+		mid_solver.displacement_rid,
+		_cascades[2].config.resolution
+	))
+	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
+		_surface_foam_enabled,
+		_surface_foam_update_hz,
+		_surface_foam_birth_attack_s,
+		_surface_foam_lifetime_s,
+		_surface_foam_mid_fold_start,
+		_surface_foam_mid_fold_end
+	))
+
+
 func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_jacobian_texture.texture_rd_rid = RID()
@@ -1057,6 +1090,9 @@ func _publish_ready_textures() -> void:
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
 		_surface_foam_jacobian_texture.texture_rd_rid = _surface_foam_solver.jacobian_rid
+	_initialize_surface_foam_mid_history()
+	if _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready:
+		_surface_foam_mid_fold_history_texture.texture_rd_rid = _surface_foam_mid_history_solver.history_rid
 	_textures_published = true
 
 
@@ -1115,7 +1151,7 @@ func foam_render_diagnostics() -> Dictionary:
 
 func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, update_hz: float,
 		birth_attack_s: float = 0.16, lifetime_s: float = 1.10, birth_selectivity: float = 0.28,
-		evolution_speed: float = 0.35) -> void:
+		evolution_speed: float = 0.35, mid_fold_start: float = 0.10, mid_fold_end: float = 0.24) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
@@ -1124,6 +1160,8 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 	_surface_foam_lifetime_s = clampf(lifetime_s, 0.1, 5.0)
 	_surface_foam_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
 	_surface_foam_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
+	_surface_foam_mid_fold_start = clampf(mid_fold_start, 0.0, 1.0)
+	_surface_foam_mid_fold_end = maxf(mid_fold_end, _surface_foam_mid_fold_start + 0.01)
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 			_surface_foam_enabled,
@@ -1134,6 +1172,15 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 			lifetime_s,
 			birth_selectivity,
 			evolution_speed
+		))
+	if _surface_foam_mid_history_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
+			_surface_foam_enabled,
+			_surface_foam_update_hz,
+			_surface_foam_birth_attack_s,
+			_surface_foam_lifetime_s,
+			_surface_foam_mid_fold_start,
+			_surface_foam_mid_fold_end
 		))
 
 

@@ -112,6 +112,10 @@ func set_surface_foam_jacobian(jacobian: Texture2DRD, source_domain_m: float) ->
 	_surface_material.set_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
 
 
+func set_surface_foam_mid_fold_history(history: Texture2DRD) -> void:
+	_surface_material.set_shader_parameter(&"surface_foam_mid_fold_history", history)
+
+
 ## 3B.2B: reaplica los rangos de fade (la demo ajusta long_fade para ver el
 ## warp sobre el banco local). No altera el campo FFT.
 func apply_fade_ranges(config) -> void:

@@ -743,7 +743,9 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_birth_attack_s,
 				surface_foam_lifetime_s,
 				surface_foam_birth_selectivity,
-				surface_foam_evolution_speed
+				surface_foam_evolution_speed,
+				surface_foam_mid_fold_start,
+				surface_foam_mid_fold_end
 			)
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
