@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://c2swf61455l5h" path="res://lab/lab_main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
+[ext_resource type="Texture2D" uid="uid://jhmh6vahy3vd" path="res://NightEnvironmentHDRI004_4K_HDR.exr" id="2_mi5lw"]
 [ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
@@ -11,23 +12,16 @@
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
 [ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
-sky_top_color = Color(0.06812644, 0.110983275, 0.18569785, 1)
-sky_horizon_color = Color(0.11112737, 0.17615071, 0.23699433, 1)
-sky_curve = 4.636485
-sky_energy_multiplier = 1.38
-ground_bottom_color = Color(0.035, 0.04, 0.05, 1)
-ground_horizon_color = Color(0.14, 0.17, 0.2, 1)
-sun_angle_max = 147.16
-sun_curve = 1.4773726
-energy_multiplier = 2.46
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_5myqe"]
+panorama = ExtResource("2_mi5lw")
+energy_multiplier = 5.54
 
 [sub_resource type="Sky" id="Sky_lab"]
-sky_material = SubResource("ProceduralSkyMaterial_lab")
+sky_material = SubResource("PanoramaSkyMaterial_5myqe")
 
 [sub_resource type="Environment" id="Environment_lab"]
 background_mode = 2
-background_energy_multiplier = 2.2
+background_energy_multiplier = 0.19
 sky = SubResource("Sky_lab")
 ambient_light_source = 3
 reflected_light_source = 2
@@ -99,7 +93,7 @@ horizon_water_alpha = 1.0
 fresnel_power = 9.4
 near_roughness = 0.2
 water_specular = 0.4
-foam_color = Color(3.7501602, 3.7937264, 3.7937264, 1)
+foam_color = Color(2.3958, 3.4121144, 3.4269989, 1)
 foam_intensity = 4.0
 foam_fresh_color = Color(0.6971579, 0.7115656, 0.70580256, 1)
 foam_residual_color = Color(0.49183583, 0.6706126, 0.65739405, 1)
@@ -107,15 +101,21 @@ foam_residual_decay_multiplier = 0.2
 foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
-crest_fresh_filigree_strength = 1.0
-crest_filigree_contrast = 4.0
-crest_filigree_normal_influence = 2.0
-surface_foam_enabled = false
-surface_foam_stochastic_deperiodization_enabled = null
-surface_foam_stochastic_cell_size_m = null
-surface_foam_whitecap = 0.32
-crest_filigree_whitecap = 0.32
-surface_foam_update_hz = 60
+crest_filigree_whitecap = 1.5
+crest_fresh_filigree_strength = 0.46
+crest_residual_filigree_strength = 0.03
+crest_filigree_contrast = 1.96
+crest_filigree_normal_influence = 0.0
+surface_foam_stochastic_cell_size_m = 55.0
+surface_foam_whitecap = 0.71
+surface_foam_evolution_speed = 0.59
+surface_foam_strength = 2.52
+surface_foam_threshold_visual = 0.11
+surface_foam_mid_fold_start = 0.0
+surface_foam_mid_fold_end = 1.0
+foam_fresh_specular = 0.57
+foam_residual_specular = 0.53
+surface_foam_specular = 0.76
 surface_foam_source_domain_m = 4.0
 surface_foam_wind_speed_mps = 9.0
 surface_foam_micro_detail_enabled = false
