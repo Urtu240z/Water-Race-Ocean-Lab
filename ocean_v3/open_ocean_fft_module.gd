@@ -105,6 +105,7 @@ var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
 var _crest_foam_update_hz := 60.0
 var _surface_foam_enabled := true
+var _surface_foam_topology_required := true
 var _surface_foam_whitecap := 0.0
 var _surface_foam_amount := 8.573
 var _surface_foam_birth_attack_s := 0.16
@@ -1036,7 +1037,7 @@ func _initialize_surface_foam_solver() -> void:
 		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", _surface_foam_field_resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
-		_surface_foam_enabled, _surface_foam_whitecap, _surface_foam_amount,
+		_surface_foam_topology_required, _surface_foam_whitecap, _surface_foam_amount,
 		_surface_foam_update_hz,
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
@@ -1057,7 +1058,7 @@ func _initialize_surface_foam_mid_history() -> void:
 		_cascades[2].config.resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-		_surface_foam_enabled,
+		_surface_foam_topology_required,
 		_surface_foam_update_hz,
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
@@ -1165,8 +1166,10 @@ func foam_render_diagnostics() -> Dictionary:
 
 func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, update_hz: float,
 		birth_attack_s: float = 0.16, lifetime_s: float = 1.10, birth_selectivity: float = 0.28,
-		evolution_speed: float = 0.35, mid_fold_start: float = 0.10, mid_fold_end: float = 0.24) -> void:
+		evolution_speed: float = 0.35, mid_fold_start: float = 0.10, mid_fold_end: float = 0.24,
+		topology_required: bool = true) -> void:
 	_surface_foam_enabled = enabled
+	_surface_foam_topology_required = topology_required
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_update_hz = clampf(update_hz, 30.0, 60.0)
@@ -1178,7 +1181,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 	_surface_foam_mid_fold_end = maxf(mid_fold_end, _surface_foam_mid_fold_start + 0.01)
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
-			_surface_foam_enabled,
+			_surface_foam_topology_required,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
 			_surface_foam_update_hz,
@@ -1189,7 +1192,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-			_surface_foam_enabled,
+			_surface_foam_topology_required,
 			_surface_foam_update_hz,
 			_surface_foam_birth_attack_s,
 			_surface_foam_lifetime_s,

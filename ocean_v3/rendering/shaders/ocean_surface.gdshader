@@ -640,9 +640,8 @@ float surface_foam_weight(vec2 world_xz) {
 // unweighted read so R can modulate direct-J topology, then apply the existing
 // distance/composition policy only at final presentation.
 vec2 pixel_ocean_surface_foam_field_unweighted(vec2 world_xz) {
-	if (!surface_foam_enabled) {
-		return vec2(0.0);
-	}
+	// This is technical temporal support shared with Crest Filigree. Visibility
+	// is decided only at the final Surface Foam presentation stage below.
 	return textureLod(surface_foam_short, spectrum_uv(world_xz, surface_foam_field_domain_m), 0.0).rg;
 }
 
@@ -955,7 +954,7 @@ void fragment() {
 	// Reuse the production direct-J topology calculation for both families.
 	// This preserves the existing Surface Foam cost and keeps Crest Filigree
 	// driven by the same deperiodized world-space branches.
-	if (foam_enabled && surface_foam_enabled) {
+	if (foam_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
 		float surface_distance = distance(ocean_base_xz, camera_world_xz);
 		surface_foam_raw_topology = surface_foam_visible_topology(
 			ocean_base_xz,
@@ -991,7 +990,7 @@ void fragment() {
 		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
 		crest_fresh_webbed = foam_fresh_mask;
 		crest_residual_webbed = foam_residual_mask;
-		if (crest_filigree_enabled && surface_foam_enabled) {
+		if (crest_filigree_enabled) {
 			crest_filigree_source = crest_filigree_source_from_surface_macro(surface_foam_macro);
 			// The physical Crest mask is the hard support: branches cannot create
 			// foam anywhere a crest accumulator did not already produce it.
