@@ -56,7 +56,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			var fft_module_x := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module_x:
 				fft_module_x.cycle_spectrum_model()
-		KEY_S:
+		KEY_H:
 			var fft_module_s := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module_s:
 				fft_module_s.toggle_ocean_shape_debug()

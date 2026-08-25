@@ -111,7 +111,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ocean.set_sea_state(SeaStateScript.State.ROUGH)
 		KEY_T:
 			_ocean.cycle_spectrum_model()
-		KEY_S:
+		KEY_L:
 			_ocean.toggle_ocean_shape_debug()
 		KEY_Q:
 			_ocean.adjust_breaker_debug_stage(-0.05)

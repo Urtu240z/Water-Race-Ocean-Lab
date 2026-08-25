@@ -6,6 +6,10 @@
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
+[ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
+[ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
+[ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
+[ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_lab"]
 sky_top_color = Color(0.06812644, 0.110983275, 0.18569785, 1)
@@ -34,6 +38,11 @@ tonemap_agx_contrast = 1.15
 ssr_enabled = true
 adjustment_enabled = true
 adjustment_saturation = 0.81
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bk4pj"]
+albedo_texture = ExtResource("10_vvhv5")
+uv1_scale = Vector3(-0.02, -0.02, -0.02)
+uv1_triplanar = true
 
 [node name="LabMain" type="Node3D" unique_id=1698941175]
 script = ExtResource("1_main")
@@ -99,8 +108,15 @@ foam_residual_decay_multiplier = 0.2
 foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
+crest_filigree_enabled = null
+crest_fresh_filigree_strength = null
+crest_residual_filigree_strength = null
+crest_filigree_contrast = null
+crest_filigree_threshold = null
+crest_filigree_normal_influence = null
 surface_foam_whitecap = 0.32
 surface_foam_update_hz = 60
+surface_foam_source_domain_m = 4.0
 surface_foam_wind_speed_mps = 9.0
 surface_foam_micro_detail_enabled = false
 
@@ -132,3 +148,17 @@ offset_right = 1700.0
 offset_bottom = 138.0
 theme_override_colors/font_color = Color(0.82, 0.9, 0.95, 1)
 theme_override_font_sizes/font_size = 14
+
+[node name="boat_02" parent="." unique_id=936208299 instance=ExtResource("7_nwk5u")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 591.20557, -6.093811, -741.18176)
+
+[node name="boat_03" parent="." unique_id=810739 instance=ExtResource("8_mi5lw")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 527.7775, 1.2421999, -593.01697)
+
+[node name="paradise_island" parent="." unique_id=2062542373 instance=ExtResource("9_73jaq")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, -7.8204727, -506.55515)
+
+[node name="Terrain_Master_VIS" parent="paradise_island" index="0" unique_id=2078926670]
+surface_material_override/0 = SubResource("StandardMaterial3D_bk4pj")
+
+[editable path="paradise_island"]
