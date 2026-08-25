@@ -15,6 +15,7 @@ uniform sampler2D foam_long_remainder : repeat_enable, filter_linear;
 uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_jacobian : repeat_enable, filter_linear;
 // Packed RGB tile: R=organic breakup, G=bubble distance-like field,
 // B=microheight for the derived foam normal.
 uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipmap;
@@ -181,7 +182,9 @@ uniform bool foam_breakup_texture_ready = false;
 // Dedicated SHORT-J accumulator: physical birth/persistence is computed on the
 // GPU; these controls only shape its material presentation.
 uniform bool surface_foam_enabled = true;
+uniform float surface_foam_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
 uniform float surface_foam_field_domain_m : hint_range(8.0, 256.0, 0.5) = 88.0;
+uniform float surface_foam_source_domain_m : hint_range(4.0, 32.0, 0.5) = 8.0;
 uniform float surface_foam_ocean_coupling : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float surface_foam_distance_fade_start_m : hint_range(0.0, 2000.0, 1.0) = 200.0;
 uniform float surface_foam_distance_fade_end_m : hint_range(1.0, 2000.0, 1.0) = 600.0;
@@ -224,7 +227,8 @@ uniform float foam_erosion_softness : hint_range(0.01, 1.0, 0.01) = 0.18;
 // 29 SOURCE_A, 30 SOURCE_B, 31 SELECTED_SOURCE, 32 ONE_SAMPLE,
 // 33 SOURCE_8_DIRECT (all Birth-shaped targets),
 // 34 RAW_J_SOURCE, 35 RAW_SOURCE_A, 36 RAW_SOURCE_B,
-// 37 RAW_SELECTED_SOURCE, 38 RAW_SOURCE_8_DIRECT (all bypass Birth).
+// 37 RAW_SELECTED_SOURCE, 38 RAW_SOURCE_8_DIRECT (all bypass Birth),
+// 39 DIRECT_J_FRAGMENT_RAW (native 8 m / 512 Jacobian texture).
 uniform int foam_debug_mode = 0;
 // Diagnostic thresholds for LONG, MID and SHORT. They are supplied by the
 // active SeaStateConfig; this is not part of the production foam signal.
@@ -806,6 +810,21 @@ vec2 pixel_ocean_surface_foam_raw_debug_field(vec2 world_xz) {
 }
 
 
+// Temporary diagnostic only: read the completed 512² J spectrum directly in
+// fragment, with no field resampling, deperiodization or presentation weight.
+float pixel_ocean_surface_foam_direct_j_fragment_raw(vec2 world_xz) {
+	float jacobian = textureLod(
+		surface_foam_jacobian,
+		spectrum_uv(world_xz, surface_foam_source_domain_m),
+		0.0
+	).r;
+	if (isnan(jacobian) || isinf(jacobian)) {
+		jacobian = 1.0;
+	}
+	return max(0.0, surface_foam_whitecap - jacobian);
+}
+
+
 const float SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH = 0.20;
 
 // G owns the primary topology. R is a fading envelope only, so it cannot turn
@@ -1125,6 +1144,7 @@ void fragment() {
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	vec2 surface_foam_field = pixel_ocean_surface_foam_field(surface_foam_world_xz);
 	vec2 surface_foam_debug_raw_field = pixel_ocean_surface_foam_raw_debug_field(surface_foam_world_xz);
+	float surface_foam_direct_j_raw_value = pixel_ocean_surface_foam_direct_j_fragment_raw(ocean_base_xz);
 	float surface_foam_raw = surface_foam_field.x;
 	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
@@ -1368,6 +1388,8 @@ void fragment() {
 	} else if (foam_debug_mode >= 34 && foam_debug_mode <= 38) {
 		// Exact raw max(0, whitecap - J), with only the requested A/B mapping.
 		color = vec3(surface_foam_debug_raw_field.y);
+	} else if (foam_debug_mode == 39) {
+		color = vec3(surface_foam_direct_j_raw_value);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

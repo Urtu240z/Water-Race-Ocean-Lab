@@ -128,6 +128,7 @@ var _surface_foam_debug_mode := 0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
+var _surface_foam_jacobian_texture := Texture2DRD.new()
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -215,6 +216,7 @@ func _ready() -> void:
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_field_domain_m)
+	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -280,6 +282,7 @@ func _exit_tree() -> void:
 		RenderingServer.call_on_render_thread(cascade.solver.free_resources)
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
+	_surface_foam_jacobian_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
@@ -1047,11 +1050,13 @@ func _initialize_surface_foam_solver() -> void:
 
 func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_texture.texture_rd_rid = RID()
+	_surface_foam_jacobian_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
 	_initialize_surface_foam_solver()
 	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_field_domain_m)
+	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
 	_dispatch_requested = true
 
 
@@ -1081,6 +1086,7 @@ func _publish_ready_textures() -> void:
 		cascade.previous_displacement.texture_rd_rid = cascade.solver.previous_displacement_rid
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
+		_surface_foam_jacobian_texture.texture_rd_rid = _surface_foam_solver.jacobian_rid
 	_textures_published = true
 
 
