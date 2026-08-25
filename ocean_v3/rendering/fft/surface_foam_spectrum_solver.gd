@@ -164,7 +164,7 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		_rd.compute_list_dispatch(list, groups, groups, 1)
 	elif _job_pass <= fft_count:
 		var fft_index := _job_pass - 1
-		var axis := fft_index / _config.fft_stage_count()
+		var axis := floori(float(fft_index) / float(_config.fft_stage_count()))
 		var stage := fft_index % _config.fft_stage_count()
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[1])
 		_rd.compute_list_bind_uniform_set(list, _fft_sets[fft_index % 2], 0)
