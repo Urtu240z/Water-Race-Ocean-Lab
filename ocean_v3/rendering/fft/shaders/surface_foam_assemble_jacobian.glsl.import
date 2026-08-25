@@ -11,3 +11,4 @@ source_file="res://ocean_v3/rendering/fft/shaders/surface_foam_assemble_jacobian
 dest_files=["res://.godot/imported/surface_foam_assemble_jacobian.glsl-c7314f3fdd80d7431c19a8819be579b2.res"]
 
 [params]
+
