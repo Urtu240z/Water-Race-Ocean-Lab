@@ -517,9 +517,10 @@ extends Node3D
 		surface_foam_detail = value
 		_request_visual_sync()
 
-@export_range(2.0, 40.0, 0.25) var surface_foam_max_feature_wavelength_m: float = 10.0:
+## Controls spectral feature size without changing the 88 m repetition period.
+@export_range(4.0, 32.0, 0.25) var surface_foam_feature_domain_m: float = 8.0:
 	set(value):
-		surface_foam_max_feature_wavelength_m = clampf(value, 2.0, 40.0)
+		surface_foam_feature_domain_m = clampf(value, 4.0, 32.0)
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam / Surface Foam Micro Detail")
@@ -799,7 +800,7 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_swell,
 				surface_foam_directional_spread,
 				surface_foam_detail,
-				surface_foam_max_feature_wavelength_m
+				surface_foam_feature_domain_m
 			)
 	var effective_foam_debug_mode := foam_debug_mode
 	if foam_mask_debug and effective_foam_debug_mode == 0:

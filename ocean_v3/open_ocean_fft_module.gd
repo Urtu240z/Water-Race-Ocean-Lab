@@ -123,7 +123,7 @@ var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
-var _surface_foam_max_feature_wavelength_m := 10.0
+var _surface_foam_feature_domain_m := 8.0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
@@ -1009,7 +1009,7 @@ func _make_surface_foam_config() -> SurfaceFoamReferenceConfig:
 	config.fetch_length_m = _surface_foam_fetch_m
 	config.swell = _surface_foam_swell
 	config.detail = _surface_foam_detail
-	config.max_feature_wavelength_m = _surface_foam_max_feature_wavelength_m
+	config.feature_domain_m = _surface_foam_feature_domain_m
 	# 0 is the narrow/full Hasselmann directional distribution; 1 is flat.
 	config.directional_spread = _surface_foam_directional_spread
 	return config
@@ -1170,11 +1170,12 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 
 func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
-		directional_spread: float, detail: float, max_feature_wavelength_m: float) -> void:
+		directional_spread: float, detail: float, feature_domain_m: float) -> void:
 	var effective_wind_speed := maxf(wind_speed_mps, 0.1)
 	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
 	var next_field_resolution := 256 if field_resolution <= 256 else 512 if field_resolution <= 512 else 1024
 	var next_domain := maxf(domain_m, 8.0)
+	var next_feature_domain := clampf(feature_domain_m, 4.0, 32.0)
 	var changed := next_resolution != _surface_foam_fft_resolution \
 		or next_field_resolution != _surface_foam_field_resolution \
 		or not is_equal_approx(next_domain, _surface_foam_domain_m) \
@@ -1185,7 +1186,7 @@ func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, 
 		or not is_equal_approx(swell, _surface_foam_swell) \
 		or not is_equal_approx(directional_spread, _surface_foam_directional_spread) \
 		or not is_equal_approx(detail, _surface_foam_detail) \
-		or not is_equal_approx(max_feature_wavelength_m, _surface_foam_max_feature_wavelength_m)
+		or not is_equal_approx(next_feature_domain, _surface_foam_feature_domain_m)
 	if not changed:
 		return
 	_surface_foam_fft_resolution = next_resolution
@@ -1198,7 +1199,7 @@ func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, 
 	_surface_foam_swell = clampf(swell, 0.0, 1.0)
 	_surface_foam_directional_spread = clampf(directional_spread, 0.0, 1.0)
 	_surface_foam_detail = clampf(detail, 0.0, 1.0)
-	_surface_foam_max_feature_wavelength_m = clampf(max_feature_wavelength_m, 2.0, 40.0)
+	_surface_foam_feature_domain_m = next_feature_domain
 	_rebuild_surface_foam_solver()
 
 

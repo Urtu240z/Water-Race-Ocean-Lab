@@ -164,7 +164,11 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 	if _job_pass == 0:
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[0])
 		_rd.compute_list_bind_uniform_set(list, _evolve_set, 0)
-		_rd.compute_list_set_push_constant(list, PackedFloat32Array([_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m]).to_byte_array(), 16)
+		var compression := maxf(_config.domain_size_m / maxf(_config.feature_domain_m, 0.000001), 1.0)
+		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
+			_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m,
+			compression, 0.0, 0.0, 0.0
+		]).to_byte_array(), 32)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
 	elif _job_pass <= fft_count:
 		var fft_index := _job_pass - 1

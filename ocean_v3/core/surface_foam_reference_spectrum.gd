@@ -14,7 +14,9 @@ static func build_h0_rgba32f(config: SurfaceFoamReferenceConfig, simulation_seed
 	var n := config.resolution
 	var h0 := PackedVector2Array()
 	h0.resize(n * n)
-	var dk := TAU / config.domain_size_m
+	var dk_out := TAU / config.domain_size_m
+	var compression := maxf(config.domain_size_m / maxf(config.feature_domain_m, 0.000001), 1.0)
+	var dk_eval := dk_out / compression
 	var half := float(n) * 0.5
 	var alpha := 0.076 * pow(config.wind_speed_mps * config.wind_speed_mps / (config.fetch_length_m * G), 0.22)
 	var omega_p := 22.0 * pow(G * G / (config.wind_speed_mps * config.fetch_length_m), 1.0 / 3.0)
@@ -23,23 +25,22 @@ static func build_h0_rgba32f(config: SurfaceFoamReferenceConfig, simulation_seed
 	for y in n:
 		for x in n:
 			var index := y * n + x
-			var k_vec := Vector2(float(x) - half, float(y) - half) * dk
-			var k := k_vec.length() + 0.000001
-			var dispersion := _finite_depth_dispersion(k, config.depth_m)
+			var k_out_vec := Vector2(float(x) - half, float(y) - half) * dk_out
+			var k_eval_vec := k_out_vec / compression
+			var k_eval := k_eval_vec.length() + 0.000001
+			var dispersion := _finite_depth_dispersion(k_eval, config.depth_m)
 			var omega := dispersion.x
 			var domega_dk := dispersion.y
 			var tma := _tma_spectrum(omega, omega_p, alpha, config.depth_m)
-			var theta := atan2(k_vec.x, k_vec.y)
+			# Direction follows the real output grid; only spectral magnitude is remapped.
+			var theta := atan2(k_out_vec.x, k_out_vec.y)
 			var hasselmann := _hasselmann_directional(omega, omega_p, config.wind_speed_mps, config.swell, theta - wind_angle)
 			var directional := lerpf(0.5 / PI, hasselmann, 1.0 - clampf(config.directional_spread, 0.0, 1.0))
-			var detail_damping := exp(-(1.0 - config.detail) * (1.0 - config.detail) * k * k)
-			# Soft one-octave high-pass: wavelengths much longer than the artistic
-			# feature scale fade out, while shorter structure reaches full weight.
-			# Apply sqrt(weight) to amplitude so the control is energy-consistent.
-			var k_cut := TAU / maxf(config.max_feature_wavelength_m, 0.1)
-			var feature_weight := smoothstep(k_cut * 0.5, k_cut, k)
-			var w_norm := domega_dk / k * dk * dk
-			var amplitude := sqrt(maxf(2.0 * tma * directional * detail_damping * feature_weight * w_norm, 0.0))
+			var detail_damping := exp(-(1.0 - config.detail) * (1.0 - config.detail) * k_eval * k_eval)
+			# 2D spectral remap: d²k_out = compression² d²k_eval, so the
+			# energy-consistent amplitude uses dk_eval² directly.
+			var w_norm := domega_dk / k_eval * dk_eval * dk_eval
+			var amplitude := sqrt(maxf(2.0 * tma * directional * detail_damping * w_norm, 0.0))
 			h0[index] = _gaussian_pair(simulation_seed, index) * amplitude
 	return _pack_h0(h0, n)
 
