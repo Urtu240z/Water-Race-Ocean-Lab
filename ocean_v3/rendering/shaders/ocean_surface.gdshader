@@ -790,16 +790,18 @@ vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
 }
 
 
-// The persistent field is the converged filament history. The selected,
-// independently-shaped target remains a soft support signal, not a replacement
-// for that history.
-float surface_foam_macro_shape(float persistent_mask, float source_mask) {
-	// The converged RG16F history owns the visible topology. The selected source
-	// only provides a soft energy support, so render FPS cannot redraw the
-	// filament silhouette from an instantaneous source.
-	float history = smoothstep(0.015, 0.24, persistent_mask);
-	float source_support = smoothstep(0.015, 0.28, source_mask);
-	return clamp(history * (0.88 + 0.12 * source_support), 0.0, 1.0);
+const float SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH = 0.20;
+
+// G owns the primary topology. R is a fading envelope only, so it cannot turn
+// former positions of a moving filament into fully visible coverage.
+float surface_foam_residual_only(float history_mask, float current_target) {
+	return max(history_mask - current_target, 0.0);
+}
+
+
+float surface_foam_macro_shape(float history_mask, float current_target) {
+	float residual = surface_foam_residual_only(history_mask, current_target);
+	return clamp(current_target + residual * SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH, 0.0, 1.0);
 }
 
 
@@ -1110,6 +1112,8 @@ void fragment() {
 	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
 	float surface_foam_shaped = 0.0;
+	float surface_foam_final_no_micro = 0.0;
+	float surface_foam_final_no_edge = 0.0;
 	float surface_foam_micro_noise = 0.5;
 	float surface_foam_micro_influence = 0.0;
 	float surface_foam_bubble_field = 0.5;
@@ -1149,6 +1153,12 @@ void fragment() {
 
 		float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
 		surface_foam_macro = surface_foam_macro_shape(surface_foam_raw, surface_foam_source);
+		float macro_thresholded = smoothstep(surface_threshold, 1.0, surface_foam_macro);
+		surface_foam_final_no_micro = clamp(
+			pow(macro_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1)) * surface_foam_strength,
+			0.0,
+			1.0
+		);
 		float surface_thresholded = surface_foam_micro_thresholded(
 			surface_foam_world_xz,
 			surface_foam_macro,
@@ -1158,17 +1168,23 @@ void fragment() {
 			surface_foam_microheight_gradient
 		);
 		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
-		// Edge fade is evaluated against the raw history before binary shaping.
-		// That keeps the persistent core intact and makes the boundary organic.
+		// Micro breakup is subtractive at this stage: it can erode the current
+		// macro silhouette, but cannot lower its threshold and create coverage
+		// outside the physical current-core/residual support.
+		surface_foam_final_no_edge = min(
+			clamp(surface_foam_shaped * surface_foam_strength, 0.0, 1.0),
+			surface_foam_final_no_micro
+		);
+		// Edge fade follows the current-core-led macro, never the full residual R.
 		float edge_width = clamp(surface_foam_edge_fade_width, 0.01, 0.5);
-		float edge_aa = max(fwidth(surface_foam_raw) * 1.5, 0.01);
+		float edge_aa = max(fwidth(surface_foam_macro) * 1.5, 0.01);
 		float edge_low = max(surface_threshold - edge_width - edge_aa, 0.0);
 		float edge_high = min(surface_threshold + edge_width + edge_aa, 1.0);
-		float edge_band = smoothstep(edge_low, edge_high, surface_foam_raw)
-			* (1.0 - smoothstep(surface_threshold + edge_width * 0.8, surface_threshold + edge_width * 2.4 + edge_aa, surface_foam_raw));
+		float edge_band = smoothstep(edge_low, edge_high, surface_foam_macro)
+			* (1.0 - smoothstep(surface_threshold + edge_width * 0.8, surface_threshold + edge_width * 2.4 + edge_aa, surface_foam_macro));
 		float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
 		surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
-		surface_foam_mask = clamp(surface_foam_shaped * surface_foam_strength * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
+		surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
 		surface_foam_micro_influence = clamp(
 			abs(surface_foam_micro_noise - 0.5) * 2.0
 			* smoothstep(0.001, 0.22, surface_foam_macro),

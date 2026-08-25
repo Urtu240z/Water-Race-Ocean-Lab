@@ -14,6 +14,8 @@ layout(push_constant, std430) uniform Params {
 } params;
 
 const float TAU = 6.283185307179586;
+const float HISTORY_HYSTERESIS_WIDTH = 0.12;
+const float HISTORY_ACTIVE_EPSILON = 0.001;
 
 vec2 source_uv_a(vec2 field_world_xz) {
 	float field_domain = max(params.spatial.x, 0.001);
@@ -53,10 +55,12 @@ float deperiodized_selector(vec2 field_world_xz) {
 	return smoothstep(0.42, 0.58, selector_raw);
 }
 
-float foam_target_from_jacobian(float jacobian) {
+float foam_source_from_jacobian(float jacobian) {
 	float source = max(0.0, params.foam.x - jacobian) * clamp(params.foam.w, 0.0, 1.0);
-	float source_normalized = clamp(source * max(params.foam.y, 0.0), 0.0, 1.0);
-	float selectivity = clamp(params.foam.z, 0.0, 1.0);
+	return clamp(source * max(params.foam.y, 0.0), 0.0, 1.0);
+}
+
+float foam_target_from_source(float source_normalized, float selectivity) {
 	float selectivity_upper = selectivity + max(params.timing.w, 0.001);
 	float birth_gate = smoothstep(selectivity, selectivity_upper, source_normalized);
 	return source_normalized * birth_gate;
@@ -81,32 +85,41 @@ void main() {
 	if (isnan(jacobian_b) || isinf(jacobian_b)) {
 		jacobian_b = 1.0;
 	}
-	float target_a = foam_target_from_jacobian(jacobian_a);
-	float target_b = foam_target_from_jacobian(jacobian_b);
+	float source_a = foam_source_from_jacobian(jacobian_a);
+	float source_b = foam_source_from_jacobian(jacobian_b);
+	float birth_selectivity = clamp(params.foam.z, 0.0, 1.0);
+	float sustain_selectivity = max(birth_selectivity - HISTORY_HYSTERESIS_WIDTH, 0.0);
+	float birth_target_a = foam_target_from_source(source_a, birth_selectivity);
+	float birth_target_b = foam_target_from_source(source_b, birth_selectivity);
+	float sustain_target_a = foam_target_from_source(source_a, sustain_selectivity);
+	float sustain_target_b = foam_target_from_source(source_b, sustain_selectivity);
 	float selector = deperiodized_selector(field_world_xz);
-	float selected_target = params.spatial.w == 3.0 ? target_a : mix(target_a, target_b, selector);
+	float selected_birth_target = params.spatial.w == 3.0 ? birth_target_a : mix(birth_target_a, birth_target_b, selector);
+	float selected_sustain_target = params.spatial.w == 3.0 ? sustain_target_a : mix(sustain_target_a, sustain_target_b, selector);
 	float previous = textureLod(surface_foam_previous, field_uv, 0.0).r;
 	if (isnan(previous) || isinf(previous)) {
 		previous = 0.0;
 	}
 	float delta_s = max(params.timing.x, 0.0);
-	float target = selected_target;
+	// New coverage must clear the original birth gate. Existing coverage gets a
+	// slightly lower sustain gate, but releases when physical support is gone.
+	float target = previous > HISTORY_ACTIVE_EPSILON ? selected_sustain_target : selected_birth_target;
 	float attack_rate = 1.0 / max(params.timing.y, 0.001);
 	float release_rate = 1.0 / max(params.timing.z, 0.001);
 	float rate = target > previous ? attack_rate : release_rate;
 	float alpha = 1.0 - exp(-rate * delta_s);
 	float next = mix(previous, target, clamp(alpha, 0.0, 1.0));
-	float debug_source = selected_target;
+	float debug_source = selected_birth_target;
 	if (params.spatial.w == 1.0) {
-		debug_source = target_a;
+		debug_source = birth_target_a;
 	} else if (params.spatial.w == 2.0) {
-		debug_source = target_b;
+		debug_source = birth_target_b;
 	} else if (params.spatial.w == 4.0) {
 		float direct_jacobian = textureLod(jacobian_map, source_uv_direct(field_world_xz), 0.0).r;
 		if (isnan(direct_jacobian) || isinf(direct_jacobian)) {
 			direct_jacobian = 1.0;
 		}
-		debug_source = foam_target_from_jacobian(direct_jacobian);
+		debug_source = foam_target_from_source(foam_source_from_jacobian(direct_jacobian), birth_selectivity);
 	}
 	imageStore(surface_foam_next, coord, vec4(next, debug_source, 0.0, 1.0));
 }
