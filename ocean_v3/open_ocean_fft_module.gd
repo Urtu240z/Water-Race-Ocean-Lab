@@ -107,10 +107,14 @@ var _surface_foam_enabled := true
 var _surface_foam_whitecap := 0.0
 var _surface_foam_amount := 8.573
 var _surface_foam_advection_strength := 0.0
+var _surface_foam_birth_attack_s := 0.16
+var _surface_foam_lifetime_s := 1.10
+var _surface_foam_birth_selectivity := 0.28
+var _surface_foam_evolution_speed := 0.35
 # Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
 var _surface_foam_fft_resolution := 512
 var _surface_foam_field_resolution := 1024
-var _surface_foam_update_hz := 60.0
+var _surface_foam_update_hz := 30.0
 var _surface_foam_domain_m := 88.0
 var _surface_foam_depth_m := 20.0
 var _surface_foam_wind_speed_mps := 25.0
@@ -124,6 +128,7 @@ var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_displacement := Texture2DRD.new()
+var _surface_foam_previous_displacement := Texture2DRD.new()
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -210,7 +215,7 @@ func _ready() -> void:
 		_query_golden.set_spectrum(configs, h0_datas)
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
-	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_displacement, _surface_foam_domain_m)
+	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _textures_for(&"previous_displacement"), _surface_foam_texture, _surface_foam_displacement, _surface_foam_previous_displacement, _surface_foam_domain_m)
 	_apply_foam_debug_config()
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -277,6 +282,7 @@ func _exit_tree() -> void:
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_displacement.texture_rd_rid = RID()
+	_surface_foam_previous_displacement.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
@@ -1020,18 +1026,23 @@ func _initialize_surface_foam_solver() -> void:
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 		_surface_foam_enabled, _surface_foam_whitecap, _surface_foam_amount,
-		_surface_foam_update_hz
+		_surface_foam_update_hz,
+		_surface_foam_birth_attack_s,
+		_surface_foam_lifetime_s,
+		_surface_foam_birth_selectivity,
+		_surface_foam_evolution_speed
 	))
 
 
 func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_displacement.texture_rd_rid = RID()
+	_surface_foam_previous_displacement.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
 	_initialize_surface_foam_solver()
-	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_displacement, _surface_foam_domain_m)
+	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_displacement, _surface_foam_previous_displacement, _surface_foam_domain_m)
 	_dispatch_requested = true
 
 
@@ -1062,6 +1073,8 @@ func _publish_ready_textures() -> void:
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
 		_surface_foam_displacement.texture_rd_rid = _surface_foam_solver.jacobian_rid
+		_surface_foam_previous_displacement.texture_rd_rid = _surface_foam_solver.previous_jacobian_rid
+		surface.set_surface_foam_temporal(_surface_foam_solver.temporal_alpha())
 	_textures_published = true
 
 
@@ -1118,18 +1131,28 @@ func foam_render_diagnostics() -> Dictionary:
 	}
 
 
-func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float, update_hz: float) -> void:
+func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, advection_strength: float, update_hz: float,
+		birth_attack_s: float = 0.16, lifetime_s: float = 1.10, birth_selectivity: float = 0.28,
+		evolution_speed: float = 0.35) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_advection_strength = clampf(advection_strength, 0.0, 2.0)
 	_surface_foam_update_hz = clampf(update_hz, 30.0, 60.0)
+	_surface_foam_birth_attack_s = clampf(birth_attack_s, 0.02, 1.0)
+	_surface_foam_lifetime_s = clampf(lifetime_s, 0.1, 5.0)
+	_surface_foam_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
+	_surface_foam_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 			_surface_foam_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
-			_surface_foam_update_hz
+			_surface_foam_update_hz,
+			birth_attack_s,
+			lifetime_s,
+			birth_selectivity,
+			evolution_speed
 		))
 
 

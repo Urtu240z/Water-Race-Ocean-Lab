@@ -12,6 +12,7 @@ var ready := false
 var last_error := ""
 var surface_foam_rid := RID()
 var jacobian_rid := RID()
+var previous_jacobian_rid := RID()
 var h0_upload_byte_count := 0
 
 var _rd: RenderingDevice
@@ -37,12 +38,18 @@ var _job_pass := 0
 var _job_delta := 0.0
 var _job_time := 0.0
 var _simulation_time := 0.0
+var _spectral_time := 0.0
+var _time_since_last_job := 0.0
 var _update_accumulator := 0.0
 var _pass_credit := 0.0
-var _update_hz := 60.0
+var _update_hz := 30.0
 var _enabled := true
 var _whitecap := 0.0
 var _amount := 8.573
+var _birth_attack_s := 0.16
+var _lifetime_s := 1.10
+var _birth_selectivity := 0.28
+var _evolution_speed := 0.35
 var _completed_jobs_total := 0
 var _passes_dispatched_total := 0
 var _jobs_window := 0
@@ -85,14 +92,21 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		last_error = "No se pudieron crear los uniform sets de Surface Foam."
 		return
 	jacobian_rid = _jacobian[0]
+	previous_jacobian_rid = _jacobian[1]
 	surface_foam_rid = _foam[0]
 
 
-func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: float) -> void:
+func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: float,
+		birth_attack_s := 0.16, lifetime_s := 1.10, birth_selectivity := 0.28,
+		evolution_speed := 0.35) -> void:
 	_enabled = enabled
 	_whitecap = clampf(whitecap, 0.0, 1.5)
 	_amount = clampf(amount, 0.0, 10.0)
 	_update_hz = clampf(update_hz, 30.0, 60.0)
+	_birth_attack_s = clampf(birth_attack_s, 0.02, 1.0)
+	_lifetime_s = clampf(lifetime_s, 0.1, 5.0)
+	_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
+	_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:
@@ -108,17 +122,20 @@ func total_job_passes() -> int:
 func advance(frame_delta: float) -> void:
 	if not ready or not _enabled:
 		return
-	_diagnostic_window_s += maxf(frame_delta, 0.0)
+	var safe_delta := maxf(frame_delta, 0.0)
+	_diagnostic_window_s += safe_delta
+	_time_since_last_job += safe_delta
 	var period := 1.0 / _update_hz
-	_update_accumulator += maxf(frame_delta, 0.0)
-	_pass_credit = minf(_pass_credit + total_job_passes() * _update_hz * maxf(frame_delta, 0.0), float(total_job_passes() * 2))
+	_update_accumulator += safe_delta
+	_pass_credit = minf(_pass_credit + total_job_passes() * _update_hz * safe_delta, float(total_job_passes() * 2))
 	if not _job_active and _update_accumulator >= period:
 		_job_active = true
 		_job_pass = 0
 		_job_delta = _update_accumulator
 		_update_accumulator = 0.0
 		_simulation_time += _job_delta
-		_job_time = _simulation_time
+		_spectral_time += _job_delta * _evolution_speed
+		_job_time = _spectral_time
 	var pass_budget := mini(int(floor(_pass_credit)), 24)
 	if pass_budget <= 0 or not _job_active:
 		return
@@ -167,21 +184,33 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		var target_jacobian := 1 - _jacobian_read_index
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[3])
 		_rd.compute_list_bind_uniform_set(list, _foam_sets[target_jacobian * 2 + _foam_read_index], 0)
-		_rd.compute_list_set_push_constant(list, PackedFloat32Array([_whitecap, _amount * 7.5, maxf(0.5, 10.0 - _amount) * 1.15, 1.0, _job_delta, 0.0, 0.0, 0.0]).to_byte_array(), 32)
+		var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
+		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
+			_whitecap, source_gain, _birth_selectivity, 1.0,
+			_job_delta, _birth_attack_s, _lifetime_s, 0.12
+		]).to_byte_array(), 32)
 		_rd.compute_list_dispatch(list, foam_groups, foam_groups, 1)
 	_job_pass += 1
 	if _job_pass >= total_job_passes():
 		_jacobian_read_index = 1 - _jacobian_read_index
 		_foam_read_index = 1 - _foam_read_index
 		jacobian_rid = _jacobian[_jacobian_read_index]
+		previous_jacobian_rid = _jacobian[1 - _jacobian_read_index]
 		surface_foam_rid = _foam[_foam_read_index]
+		_time_since_last_job = 0.0
 		_job_active = false
 		_completed_jobs_total += 1
 		_jobs_window += 1
 
 
 func diagnostic_state() -> Dictionary:
-	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "h0_upload_bytes": h0_upload_byte_count, "completed_jobs_total": _completed_jobs_total, "passes_dispatched_total": _passes_dispatched_total, "jobs_per_second": _jobs_per_second, "passes_per_second": _passes_per_second, "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2}
+	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "h0_upload_bytes": h0_upload_byte_count, "completed_jobs_total": _completed_jobs_total, "passes_dispatched_total": _passes_dispatched_total, "jobs_per_second": _jobs_per_second, "passes_per_second": _passes_per_second, "simulation_time_s": _simulation_time, "temporal_alpha": temporal_alpha(), "update_hz": _update_hz, "birth_attack_s": _birth_attack_s, "lifetime_s": _lifetime_s, "birth_selectivity": _birth_selectivity, "evolution_speed": _evolution_speed, "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2}
+
+
+func temporal_alpha() -> float:
+	if not ready:
+		return 0.0
+	return clampf(_time_since_last_job * _update_hz, 0.0, 1.0)
 
 
 func free_resources() -> void:
@@ -199,7 +228,7 @@ func free_resources() -> void:
 		if shader.is_valid(): _rd.free_rid(shader)
 	_sets.clear(); _pipelines.clear(); _shaders.clear()
 	_h0 = RID(); _ping_a = [RID(), RID()]; _ping_b = [RID(), RID()]; _jacobian = [RID(), RID()]; _foam = [RID(), RID()]
-	_sampler = RID(); surface_foam_rid = RID(); jacobian_rid = RID()
+	_sampler = RID(); surface_foam_rid = RID(); jacobian_rid = RID(); previous_jacobian_rid = RID()
 
 
 func _create_pipeline(path: String, prefix: String) -> RID:

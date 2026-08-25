@@ -29,8 +29,15 @@ void main() {
 	}
 	float delta_s = max(params.timing.x, 0.0);
 	float source = max(0.0, params.foam.x - jacobian) * clamp(params.foam.w, 0.0, 1.0);
-	float decayed = previous * exp(-max(params.foam.z, 0.0) * delta_s);
-	float deposited = source * max(params.foam.y, 0.0) * delta_s;
-	float next = clamp(decayed + deposited, 0.0, 1.0);
+	float source_normalized = clamp(source * max(params.foam.y, 0.0), 0.0, 1.0);
+	float selectivity = clamp(params.foam.z, 0.0, 1.0);
+	float selectivity_upper = selectivity + max(params.timing.w, 0.001);
+	float birth_gate = smoothstep(selectivity, selectivity_upper, source_normalized);
+	float target = source_normalized * birth_gate;
+	float attack_rate = 1.0 / max(params.timing.y, 0.001);
+	float release_rate = 1.0 / max(params.timing.z, 0.001);
+	float rate = target > previous ? attack_rate : release_rate;
+	float alpha = 1.0 - exp(-rate * delta_s);
+	float next = mix(previous, target, clamp(alpha, 0.0, 1.0));
 	imageStore(surface_foam_next, coord, vec4(next, 0.0, 0.0, 1.0));
 }

@@ -379,9 +379,34 @@ extends Node3D
 		surface_foam_advection_strength = value
 		_request_visual_sync()
 
-@export_enum("30 Hz:30", "45 Hz:45", "60 Hz:60") var surface_foam_update_hz: int = 60:
+@export_enum("30 Hz:30", "45 Hz:45", "60 Hz:60") var surface_foam_update_hz: int = 30:
 	set(value):
 		surface_foam_update_hz = 30 if value <= 30 else 45 if value <= 45 else 60
+		_request_visual_sync()
+
+@export_range(0.02, 1.0, 0.01) var surface_foam_birth_attack_s: float = 0.16:
+	set(value):
+		surface_foam_birth_attack_s = value
+		_request_visual_sync()
+
+@export_range(0.1, 5.0, 0.05) var surface_foam_lifetime_s: float = 1.10:
+	set(value):
+		surface_foam_lifetime_s = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var surface_foam_birth_selectivity: float = 0.28:
+	set(value):
+		surface_foam_birth_selectivity = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.5, 0.01) var surface_foam_evolution_speed: float = 0.35:
+	set(value):
+		surface_foam_evolution_speed = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var surface_foam_ocean_coupling: float = 0.35:
+	set(value):
+		surface_foam_ocean_coupling = value
 		_request_visual_sync()
 
 @export_range(0.0, 4.0, 0.01) var surface_foam_strength: float = 1.0:
@@ -529,6 +554,16 @@ extends Node3D
 		surface_foam_micro_normal_strength = value
 		_request_visual_sync()
 
+@export_range(0.0, 1.0, 0.01) var surface_foam_edge_fade_strength: float = 0.35:
+	set(value):
+		surface_foam_edge_fade_strength = value
+		_request_visual_sync()
+
+@export_range(0.01, 0.5, 0.01) var surface_foam_edge_fade_width: float = 0.14:
+	set(value):
+		surface_foam_edge_fade_width = value
+		_request_visual_sync()
+
 @export_category("Whitecaps Foam Shaping")
 @export var foam_spectral_erosion_enabled: bool = false:
 	set(value):
@@ -560,9 +595,9 @@ extends Node3D
 		foam_erosion_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_SOURCE_SHORT_LEGACY", "SURFACE_FOAM_MICRO", "SURFACE_FOAM_MACRO", "SURFACE_FOAM_MICRO_INFLUENCE") var foam_debug_mode: int = 18:
+@export_enum("OFF", "OLD_RAW_FOAM_256", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "FILTERED_OLD_RAW_256", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_SHAPED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_SOURCE_SHORT_LEGACY", "SURFACE_FOAM_MICRO", "SURFACE_FOAM_MACRO", "SURFACE_FOAM_MICRO_INFLUENCE", "SURFACE_FOAM_HISTORY", "SURFACE_FOAM_TEMPORAL_SOURCE", "SURFACE_FOAM_EDGE_FADE", "SURFACE_FOAM_FINAL") var foam_debug_mode: int = 18:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 27)
+		foam_debug_mode = clampi(value, 0, 31)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -702,6 +737,7 @@ func _sync_water_visual_parameters() -> void:
 		material.set_shader_parameter(&"surface_foam_micro_texture", surface_foam_micro_texture)
 	material.set_shader_parameter(&"surface_foam_enabled", surface_foam_enabled)
 	material.set_shader_parameter(&"surface_foam_whitecap", surface_foam_whitecap)
+	material.set_shader_parameter(&"surface_foam_ocean_coupling", surface_foam_ocean_coupling)
 	material.set_shader_parameter(&"surface_foam_strength", surface_foam_strength)
 	material.set_shader_parameter(&"surface_foam_threshold_visual", surface_foam_threshold_visual)
 	material.set_shader_parameter(&"surface_foam_contrast_visual", surface_foam_contrast_visual)
@@ -718,6 +754,8 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"surface_foam_micro_scale_m", surface_foam_micro_scale)
 	material.set_shader_parameter(&"surface_foam_micro_distance_m", surface_foam_micro_distance)
 	material.set_shader_parameter(&"surface_foam_micro_normal_strength", surface_foam_micro_normal_strength)
+	material.set_shader_parameter(&"surface_foam_edge_fade_strength", surface_foam_edge_fade_strength)
+	material.set_shader_parameter(&"surface_foam_edge_fade_width", surface_foam_edge_fade_width)
 	material.set_shader_parameter(&"foam_spectral_erosion_enabled", foam_spectral_erosion_enabled)
 	material.set_shader_parameter(&"foam_mid_erosion_strength", foam_mid_erosion_strength)
 	material.set_shader_parameter(&"foam_short_erosion_strength", foam_short_erosion_strength)
@@ -743,7 +781,11 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_whitecap,
 				surface_foam_amount,
 				surface_foam_advection_strength,
-				surface_foam_update_hz
+				surface_foam_update_hz,
+				surface_foam_birth_attack_s,
+				surface_foam_lifetime_s,
+				surface_foam_birth_selectivity,
+				surface_foam_evolution_speed
 			)
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
