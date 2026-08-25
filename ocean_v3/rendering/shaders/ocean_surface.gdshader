@@ -762,8 +762,8 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 }
 
 
-const float SURFACE_FOAM_NEAR_END_M = 45.0;
-const float SURFACE_FOAM_MID_END_M = 150.0;
+const float SURFACE_FOAM_NEAR_END_M = 80.0;
+const float SURFACE_FOAM_MID_END_M = 160.0;
 
 float surface_foam_distance_weight(vec2 world_xz) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
@@ -783,20 +783,28 @@ float surface_foam_weight(vec2 world_xz) {
 }
 
 
-// Surface foam is a separate RG16F accumulator fed exclusively by its
-// deperiodized technical spectrum; it never contributes displacement.
-// It shares only sampling/filtering policy with crest foam, not state or rates.
-vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
+// The field is temporal support, not the near visible silhouette. Keep an
+// unweighted read so R can modulate direct-J topology, then apply the existing
+// distance/composition policy only at final presentation.
+vec2 pixel_ocean_surface_foam_field_unweighted(vec2 world_xz) {
 	if (!surface_foam_enabled) {
 		return vec2(0.0);
 	}
-	vec2 surface_field = sample_foam_field_filtered(
+	return sample_foam_field_filtered(
 		surface_foam_short,
 		spectrum_uv(world_xz, surface_foam_field_domain_m),
 		world_xz,
 		surface_foam_field_domain_m
 	);
-	return clamp(surface_field * surface_foam_weight(world_xz), 0.0, 1.0);
+}
+
+
+vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
+	return clamp(
+		pixel_ocean_surface_foam_field_unweighted(world_xz) * surface_foam_weight(world_xz),
+		0.0,
+		1.0
+	);
 }
 
 
@@ -812,8 +820,7 @@ vec2 pixel_ocean_surface_foam_raw_debug_field(vec2 world_xz) {
 }
 
 
-// Temporary diagnostic only: read the completed 512² J spectrum directly in
-// fragment, with no field resampling or presentation weight.
+// Native 512² source topology: no field resampling or presentation weight.
 float surface_foam_direct_j_raw_at(vec2 sample_position) {
 	float jacobian = textureLod(
 		surface_foam_jacobian,
@@ -889,18 +896,44 @@ float pixel_ocean_surface_foam_direct_j_deperiodized_raw(vec2 world_xz) {
 }
 
 
-const float SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH = 0.20;
-
-// G owns the primary topology. R is a fading envelope only, so it cannot turn
-// former positions of a moving filament into fully visible coverage.
-float surface_foam_residual_only(float history_mask, float current_target) {
-	return max(history_mask - current_target, 0.0);
+float surface_foam_direct_selector(vec2 world_xz) {
+	float selector_raw = 0.5 + 0.5
+		* sin(world_xz.x * SURFACE_FOAM_DIRECT_TAU / 61.0 + 0.43)
+		* cos(world_xz.y * SURFACE_FOAM_DIRECT_TAU / 83.0 + 1.37);
+	return smoothstep(0.42, 0.58, selector_raw);
 }
 
 
-float surface_foam_macro_shape(float history_mask, float current_target) {
-	float residual = surface_foam_residual_only(history_mask, current_target);
-	return clamp(current_target + residual * SURFACE_FOAM_RESIDUAL_VISUAL_STRENGTH, 0.0, 1.0);
+// Near is the two-sample direct topology from debug 42. Mid fades to just A;
+// far fades to existing field coarse support. R is absent here by design: it
+// belongs only to the temporal envelope below.
+float surface_foam_visible_topology(vec2 world_xz, float camera_distance, float field_coarse) {
+	if (camera_distance >= SURFACE_FOAM_MID_END_M + 10.0) {
+		return field_coarse;
+	}
+	float raw_a = pixel_ocean_surface_foam_direct_j_warp_a_raw(world_xz);
+	float topology = raw_a;
+	if (camera_distance < SURFACE_FOAM_NEAR_END_M + 10.0) {
+		float raw_b = pixel_ocean_surface_foam_direct_j_warp_b_raw(world_xz);
+		float selected_raw = mix(raw_a, raw_b, surface_foam_direct_selector(world_xz));
+		topology = mix(
+			selected_raw,
+			raw_a,
+			smoothstep(SURFACE_FOAM_NEAR_END_M - 8.0, SURFACE_FOAM_NEAR_END_M + 10.0, camera_distance)
+		);
+	}
+	return mix(
+		topology,
+		field_coarse,
+		smoothstep(SURFACE_FOAM_MID_END_M - 10.0, SURFACE_FOAM_MID_END_M + 10.0, camera_distance)
+	);
+}
+
+
+float surface_foam_macro_from_topology(float raw_topology, float history_envelope) {
+	float persistent_gate = smoothstep(0.015, 0.32, history_envelope);
+	float temporal_envelope = mix(0.46, 1.0, persistent_gate);
+	return clamp(raw_topology * 2.05 * temporal_envelope, 0.0, 1.0);
 }
 
 
@@ -1206,8 +1239,8 @@ void fragment() {
 	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
-	vec2 surface_foam_field = pixel_ocean_surface_foam_field(surface_foam_world_xz);
-	vec2 surface_foam_debug_raw_field = pixel_ocean_surface_foam_raw_debug_field(surface_foam_world_xz);
+	vec2 surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	vec2 surface_foam_field = clamp(surface_foam_field_unweighted * surface_foam_weight(surface_foam_world_xz), 0.0, 1.0);
 	float surface_foam_raw = surface_foam_field.x;
 	float surface_foam_source = surface_foam_field.y;
 	float surface_foam_macro = 0.0;
@@ -1251,46 +1284,55 @@ void fragment() {
 		foam_fresh_mask = crest_foam_mask * raw_fresh / raw_channel_sum;
 		foam_residual_mask = crest_foam_mask * raw_residual / raw_channel_sum;
 
-		float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
-		surface_foam_macro = surface_foam_macro_shape(surface_foam_raw, surface_foam_source);
-		float macro_thresholded = smoothstep(surface_threshold, 1.0, surface_foam_macro);
-		surface_foam_final_no_micro = clamp(
-			pow(macro_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1)) * surface_foam_strength,
-			0.0,
-			1.0
-		);
-		float surface_thresholded = surface_foam_micro_thresholded(
-			surface_foam_world_xz,
-			surface_foam_macro,
-			surface_threshold,
-			surface_foam_micro_noise,
-			surface_foam_bubble_field,
-			surface_foam_microheight_gradient
-		);
-		surface_foam_shaped = pow(surface_thresholded, 1.0 / max(surface_foam_contrast_visual, 0.1));
-		// Micro breakup is subtractive at this stage: it can erode the current
-		// macro silhouette, but cannot lower its threshold and create coverage
-		// outside the physical current-core/residual support.
-		surface_foam_final_no_edge = min(
-			clamp(surface_foam_shaped * surface_foam_strength, 0.0, 1.0),
-			surface_foam_final_no_micro
-		);
-		// Edge fade follows the current-core-led macro, never the full residual R.
-		float edge_width = clamp(surface_foam_edge_fade_width, 0.01, 0.5);
-		float edge_aa = max(fwidth(surface_foam_macro) * 1.5, 0.01);
-		float edge_low = max(surface_threshold - edge_width - edge_aa, 0.0);
-		float edge_high = min(surface_threshold + edge_width + edge_aa, 1.0);
-		float edge_band = smoothstep(edge_low, edge_high, surface_foam_macro)
-			* (1.0 - smoothstep(surface_threshold + edge_width * 0.8, surface_threshold + edge_width * 2.4 + edge_aa, surface_foam_macro));
-		float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
-		surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
-		surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
-		surface_foam_micro_influence = clamp(
-			abs(surface_foam_micro_noise - 0.5) * 2.0
-			* smoothstep(0.001, 0.22, surface_foam_macro),
-			0.0,
-			1.0
-		);
+		if (surface_foam_enabled) {
+			float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
+			float surface_distance = distance(ocean_base_xz, camera_world_xz);
+			float raw_topology = surface_foam_visible_topology(
+				ocean_base_xz,
+				surface_distance,
+				surface_foam_field_unweighted.y
+			);
+			surface_foam_macro = surface_foam_macro_from_topology(raw_topology, surface_foam_field_unweighted.x);
+			// Direct macro is the silhouette. Strength and distance are post-shape
+			// gains only; threshold/contrast cannot turn it into dots.
+			surface_foam_final_no_micro = clamp(
+				surface_foam_macro * surface_foam_strength * surface_foam_weight(surface_foam_world_xz),
+				0.0,
+				1.0
+			);
+			float surface_thresholded = surface_foam_micro_thresholded(
+				surface_foam_world_xz,
+				surface_foam_macro,
+				surface_threshold,
+				surface_foam_micro_noise,
+				surface_foam_bubble_field,
+				surface_foam_microheight_gradient
+			);
+			surface_foam_shaped = surface_thresholded;
+			// Micro breakup is subtractive at this stage: it can erode the current
+			// macro silhouette, but cannot lower its threshold and create coverage
+			// outside the physical current-core/residual support.
+			surface_foam_final_no_edge = min(
+				clamp(surface_foam_shaped * surface_foam_strength, 0.0, 1.0),
+				surface_foam_final_no_micro
+			);
+			// Edge fade follows the direct macro, never the temporal envelope R.
+			float edge_width = clamp(surface_foam_edge_fade_width, 0.01, 0.5);
+			float edge_aa = max(fwidth(surface_foam_macro) * 1.5, 0.01);
+			float edge_low = max(surface_threshold - edge_width - edge_aa, 0.0);
+			float edge_high = min(surface_threshold + edge_width + edge_aa, 1.0);
+			float edge_band = smoothstep(edge_low, edge_high, surface_foam_macro)
+				* (1.0 - smoothstep(surface_threshold + edge_width * 0.8, surface_threshold + edge_width * 2.4 + edge_aa, surface_foam_macro));
+			float edge_selector = smoothstep(0.50, 0.86, surface_foam_micro_noise);
+			surface_foam_edge_fade = clamp(edge_band * edge_selector * surface_foam_edge_fade_strength, 0.0, 1.0);
+			surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
+			surface_foam_micro_influence = clamp(
+				abs(surface_foam_micro_noise - 0.5) * 2.0
+				* smoothstep(0.001, 0.22, surface_foam_macro),
+				0.0,
+				1.0
+			);
+		}
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
 	}
@@ -1450,7 +1492,7 @@ void fragment() {
 		color = vec3(surface_foam_source);
 	} else if (foam_debug_mode >= 34 && foam_debug_mode <= 38) {
 		// Exact raw max(0, whitecap - J), with only the requested A/B mapping.
-		color = vec3(surface_foam_debug_raw_field.y);
+		color = vec3(pixel_ocean_surface_foam_raw_debug_field(surface_foam_world_xz).y);
 	} else if (foam_debug_mode == 39) {
 		color = vec3(pixel_ocean_surface_foam_direct_j_fragment_raw(ocean_base_xz));
 	} else if (foam_debug_mode == 40) {
