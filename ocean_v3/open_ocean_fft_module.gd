@@ -5,6 +5,8 @@ extends Node3D
 const MODULE_ID := &"open_ocean_fft"
 const FFTConfigScript := preload("res://ocean_v3/core/open_ocean_fft_config.gd")
 const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
+const SurfaceFoamConfigScript := preload("res://ocean_v3/core/surface_foam_reference_config.gd")
+const SurfaceFoamSpectrumScript := preload("res://ocean_v3/core/surface_foam_reference_spectrum.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
@@ -95,21 +97,22 @@ var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
 var _surface_foam_enabled := true
 var _surface_foam_whitecap := 0.0
-var _surface_foam_amount := 8.57
+var _surface_foam_amount := 8.573
 var _surface_foam_advection_strength := 0.0
 # Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
-var _surface_foam_fft_resolution := 256
+var _surface_foam_fft_resolution := 512
 var _surface_foam_domain_m := 88.0
+var _surface_foam_depth_m := 20.0
 var _surface_foam_wind_speed_mps := 25.0
 var _surface_foam_wind_direction_deg := 110.0
 var _surface_foam_fetch_m := 6000.0
-var _surface_foam_swell := 0.78
+var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
 var _surface_foam_min_wavelength_m := 2.0
 var _surface_foam_max_wavelength_m := 32.0
-var _surface_foam_config: OpenOceanFFTConfig = null
+var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_displacement := Texture2DRD.new()
@@ -973,14 +976,11 @@ func _build_h0(config: Resource, simulation_seed: int) -> PackedByteArray:
 	return SpectrumScript.build_h0_rgba32f(config, SpectrumScript.derive_cascade_seed(simulation_seed, config.id))
 
 
-func _make_surface_foam_config() -> OpenOceanFFTConfig:
-	var config := FFTConfigScript.new()
-	config.id = &"SURFACE_FOAM"
+func _make_surface_foam_config() -> SurfaceFoamReferenceConfig:
+	var config := SurfaceFoamConfigScript.new()
 	config.resolution = _surface_foam_fft_resolution
 	config.domain_size_m = _surface_foam_domain_m
-	config.min_wavelength_m = _surface_foam_min_wavelength_m
-	config.max_wavelength_m = _surface_foam_max_wavelength_m
-	config.transition_width_m = 0.75
+	config.depth_m = _surface_foam_depth_m
 	var direction := deg_to_rad(_surface_foam_wind_direction_deg)
 	config.wind_direction = Vector2(cos(direction), sin(direction))
 	config.wind_speed_mps = _surface_foam_wind_speed_mps
@@ -988,13 +988,7 @@ func _make_surface_foam_config() -> OpenOceanFFTConfig:
 	config.swell = _surface_foam_swell
 	config.detail = _surface_foam_detail
 	# 0 is the narrow/full Hasselmann directional distribution; 1 is flat.
-	config.jonswap_spread = _surface_foam_directional_spread
-	config.spectrum_model = OpenOceanFFTConfig.SpectrumModel.JONSWAP_HASSELMANN
-	# Technical amplitude only: this spectrum is never included in ocean Hs/query.
-	config.target_hs_m = 2.5
-	config.choppiness = 1.25
-	config.foam_enabled = false
-	config.foam_cascade_weight = 0.0
+	config.directional_spread = _surface_foam_directional_spread
 	return config
 
 
@@ -1004,8 +998,9 @@ func _initialize_surface_foam_solver() -> void:
 		push_error("Configuración FFT de Surface Foam inválida.")
 		return
 	_surface_foam_solver = SolverScript.new()
-	var h0_data := _build_h0(_surface_foam_config, SimulationClock.simulation_seed)
-	# The existing 1024² R16F accumulator remains independent from the 256² FFT.
+	var h0_data := SurfaceFoamSpectrumScript.build_h0_rgba32f(_surface_foam_config as SurfaceFoamReferenceConfig, SimulationClock.simulation_seed)
+	# This H0 is TMA/JONSWAP reference-compatible and deliberately has no Hs
+	# normalization, band-pass, or physical-ocean amplitude coupling.
 	RenderingServer.call_on_render_thread(_surface_foam_solver.initialize.bind(
 		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", DEFAULT_FOAM_RESOLUTION
 	))
@@ -1030,7 +1025,7 @@ func _rebuild_surface_foam_h0(simulation_seed: int) -> void:
 	if _surface_foam_solver == null or _surface_foam_config == null:
 		return
 	RenderingServer.call_on_render_thread(_surface_foam_solver.upload_h0.bind(
-		_build_h0(_surface_foam_config, simulation_seed)
+		SurfaceFoamSpectrumScript.build_h0_rgba32f(_surface_foam_config as SurfaceFoamReferenceConfig, simulation_seed)
 	))
 
 
@@ -1084,36 +1079,32 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, ad
 		))
 
 
-func set_surface_foam_spectrum_settings(resolution: int, domain_m: float,
+func set_surface_foam_spectrum_settings(resolution: int, domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
-		directional_spread: float, detail: float, min_wavelength_m: float,
-		max_wavelength_m: float) -> void:
-	var next_resolution := 512 if resolution > 256 else 256
+		directional_spread: float, detail: float, _legacy_min_wavelength_m: float,
+		_legacy_max_wavelength_m: float) -> void:
+	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
 	var next_domain := maxf(domain_m, 8.0)
-	var next_min_wavelength := maxf(min_wavelength_m, 0.25)
-	var next_max_wavelength := maxf(max_wavelength_m, next_min_wavelength)
 	var changed := next_resolution != _surface_foam_fft_resolution \
 		or not is_equal_approx(next_domain, _surface_foam_domain_m) \
+		or not is_equal_approx(depth_m, _surface_foam_depth_m) \
 		or not is_equal_approx(wind_speed_mps, _surface_foam_wind_speed_mps) \
 		or not is_equal_approx(wind_direction_deg, _surface_foam_wind_direction_deg) \
 		or not is_equal_approx(fetch_m, _surface_foam_fetch_m) \
 		or not is_equal_approx(swell, _surface_foam_swell) \
 		or not is_equal_approx(directional_spread, _surface_foam_directional_spread) \
-		or not is_equal_approx(detail, _surface_foam_detail) \
-		or not is_equal_approx(next_min_wavelength, _surface_foam_min_wavelength_m) \
-		or not is_equal_approx(next_max_wavelength, _surface_foam_max_wavelength_m)
+		or not is_equal_approx(detail, _surface_foam_detail)
 	if not changed:
 		return
 	_surface_foam_fft_resolution = next_resolution
 	_surface_foam_domain_m = next_domain
+	_surface_foam_depth_m = maxf(depth_m, 0.1)
 	_surface_foam_wind_speed_mps = maxf(wind_speed_mps, 0.1)
 	_surface_foam_wind_direction_deg = wind_direction_deg
 	_surface_foam_fetch_m = maxf(fetch_m, 1.0)
 	_surface_foam_swell = clampf(swell, 0.0, 1.0)
 	_surface_foam_directional_spread = clampf(directional_spread, 0.0, 1.0)
 	_surface_foam_detail = clampf(detail, 0.0, 1.0)
-	_surface_foam_min_wavelength_m = next_min_wavelength
-	_surface_foam_max_wavelength_m = next_max_wavelength
 	_rebuild_surface_foam_solver()
 
 

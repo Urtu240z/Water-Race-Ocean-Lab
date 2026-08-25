@@ -3,6 +3,7 @@ extends RefCounted
 ## Unidad GPU persistente: evolución, IFFT Stockham 2D y ensamblado final.
 
 const EVOLVE_SHADER := "res://ocean_v3/rendering/fft/shaders/evolve_spectrum.glsl"
+const SURFACE_FOAM_EVOLVE_SHADER := "res://ocean_v3/rendering/fft/shaders/surface_foam_evolve_spectrum.glsl"
 const STOCKHAM_SHADER := "res://ocean_v3/rendering/fft/shaders/stockham_ifft.glsl"
 const ASSEMBLE_SHADER := "res://ocean_v3/rendering/fft/shaders/assemble_maps.glsl"
 const UPDATE_FOAM_SHADER := "res://ocean_v3/rendering/fft/shaders/update_foam.glsl"
@@ -61,7 +62,8 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 		last_error = "RenderingDevice global no disponible."
 		return
 
-	var evolve_pipeline := _create_pipeline(EVOLVE_SHADER, resource_prefix + ".Evolve")
+	var evolve_shader := SURFACE_FOAM_EVOLVE_SHADER if _is_surface_foam_source() else EVOLVE_SHADER
+	var evolve_pipeline := _create_pipeline(evolve_shader, resource_prefix + ".Evolve")
 	var fft_pipeline := _create_pipeline(STOCKHAM_SHADER, resource_prefix + ".StockhamIFFT")
 	var assemble_pipeline := _create_pipeline(ASSEMBLE_SHADER, resource_prefix + ".Assemble")
 	var foam_pipeline := _create_pipeline(UPDATE_FOAM_SHADER, resource_prefix + ".UpdateFoam")
@@ -158,7 +160,13 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[0])
 	_rd.compute_list_bind_uniform_set(compute_list, _evolve_set, 0)
-	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, _config.choppiness, _config.domain_size_m])
+	var evolution_depth_or_choppiness := 0.0
+	if _is_surface_foam_source():
+		var surface_foam_config := _config as SurfaceFoamReferenceConfig
+		evolution_depth_or_choppiness = surface_foam_config.depth_m
+	else:
+		evolution_depth_or_choppiness = _config.choppiness
+	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, evolution_depth_or_choppiness, _config.domain_size_m])
 	_rd.compute_list_set_push_constant(compute_list, evolve_push.to_byte_array(), 16)
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	_rd.compute_list_add_barrier(compute_list)
@@ -178,9 +186,13 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[2])
 	_rd.compute_list_bind_uniform_set(compute_list, _assemble_set, 0)
+	# GodotOceanWaves' inverse Stockham route leaves its spatial result
+	# unnormalised.  Surface Foam follows that convention exactly; production
+	# cascades retain their existing 1 / N² conversion.
+	var spatial_normalization := 1.0 if _is_surface_foam_source() else 1.0 / float(_config.resolution * _config.resolution)
 	var assemble_push = PackedFloat32Array([
 		_config.domain_size_m,
-		1.0 / float(_config.resolution * _config.resolution),
+		spatial_normalization,
 		_config.domain_size_m / float(_config.resolution),
 		7.5,
 		_config.foam_whitecap,

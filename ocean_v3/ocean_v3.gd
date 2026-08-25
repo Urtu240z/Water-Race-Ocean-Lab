@@ -354,7 +354,7 @@ extends Node3D
 		surface_foam_whitecap = value
 		_request_visual_sync()
 
-@export_range(0.0, 10.0, 0.01) var surface_foam_amount: float = 8.57:
+@export_range(0.0, 10.0, 0.001) var surface_foam_amount: float = 8.573:
 	set(value):
 		surface_foam_amount = value
 		_request_visual_sync()
@@ -420,14 +420,19 @@ extends Node3D
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam / Surface Foam Spectrum")
-@export_enum("256", "512") var surface_foam_fft_resolution: int = 256:
+@export_enum("256", "512", "1024") var surface_foam_fft_resolution: int = 512:
 	set(value):
-		surface_foam_fft_resolution = 512 if value > 256 else 256
+		surface_foam_fft_resolution = 256 if value <= 256 else 512 if value <= 512 else 1024
 		_request_visual_sync()
 
 @export_range(8.0, 256.0, 0.5) var surface_foam_domain_m: float = 88.0:
 	set(value):
 		surface_foam_domain_m = value
+		_request_visual_sync()
+
+@export_range(0.1, 200.0, 0.1) var surface_foam_depth_m: float = 20.0:
+	set(value):
+		surface_foam_depth_m = value
 		_request_visual_sync()
 
 @export_range(0.1, 60.0, 0.1) var surface_foam_wind_speed_mps: float = 25.0:
@@ -445,7 +450,7 @@ extends Node3D
 		surface_foam_fetch_m = value
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var surface_foam_swell: float = 0.78:
+@export_range(0.0, 1.0, 0.001) var surface_foam_swell: float = 0.779:
 	set(value):
 		surface_foam_swell = value
 		_request_visual_sync()
@@ -461,6 +466,7 @@ extends Node3D
 		surface_foam_detail = value
 		_request_visual_sync()
 
+# Legacy experimental controls: reference-compatible mode ignores band-pass.
 @export_range(0.25, 32.0, 0.25) var surface_foam_min_wavelength_m: float = 2.0:
 	set(value):
 		surface_foam_min_wavelength_m = value
@@ -665,6 +671,7 @@ func _sync_water_visual_parameters() -> void:
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
 				surface_foam_domain_m,
+				surface_foam_depth_m,
 				surface_foam_wind_speed_mps,
 				surface_foam_wind_direction_deg,
 				surface_foam_fetch_m,
