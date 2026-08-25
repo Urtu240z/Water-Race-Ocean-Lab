@@ -4,6 +4,119 @@ extends Node3D
 ## Public visual/material controls for the OceanV3 root.
 ## Physics, FFT and internal rendering configuration remain owned by their modules.
 
+const WAVE_REBUILD_DEBOUNCE_MS := 150
+const BASE_WAVE_PRESET_PATHS := [
+	"res://ocean_v3/presets/waves/calm.tres",
+	"res://ocean_v3/presets/waves/race.tres",
+	"res://ocean_v3/presets/waves/rough.tres",
+]
+
+var _wave_spectrum_dirty := false
+var _wave_spectrum_apply_at_ms := 0
+var _applying_wave_preset := false
+
+@export_category("Wave Spectrum")
+@export var wave_preset: OceanWavePreset:
+	set(value):
+		wave_preset = value
+		if wave_preset != null and is_inside_tree():
+			apply_selected_wave_preset()
+
+@export_range(0.0, 60.0, 0.1) var global_wind_speed_mps := 12.0:
+	set(value):
+		global_wind_speed_mps = maxf(value, 0.0)
+		_mark_wave_spectrum_dirty()
+
+@export var auto_apply_wave_changes := true
+@export_file("*.tres") var preset_save_path := "res://ocean_v3/presets/waves/custom_wave.tres"
+@export_tool_button("Apply Selected Preset", "Reload") var apply_selected_wave_preset_button = apply_selected_wave_preset
+@export_tool_button("Apply Wave Changes", "Play") var apply_wave_changes_button = apply_wave_changes
+@export_tool_button("Save Current Wave Preset", "Save") var save_current_wave_preset_button = save_current_wave_preset
+
+@export_category("Wave Spectrum / LONG")
+@export_range(0.0, 10.0, 0.01) var long_target_hs_m := 0.59:
+	set(value): long_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export_range(0.0, 4.0, 0.01) var long_choppiness := 1.0:
+	set(value): long_choppiness = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export var long_wind_direction := Vector2(1.0, 0.15):
+	set(value): long_wind_direction = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 12.0, 0.1) var long_directional_spread := 7.0:
+	set(value): long_directional_spread = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 100000.0, 1.0) var long_fetch_length_m := 25000.0:
+	set(value): long_fetch_length_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var long_swell := 0.8:
+	set(value): long_swell = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var long_jonswap_spread := 0.05:
+	set(value): long_jonswap_spread = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var long_detail := 1.0:
+	set(value): long_detail = value; _mark_wave_spectrum_dirty()
+
+@export_category("Wave Spectrum / MID")
+@export_range(0.0, 10.0, 0.01) var mid_target_hs_m := 0.25:
+	set(value): mid_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export_range(0.0, 4.0, 0.01) var mid_choppiness := 0.7:
+	set(value): mid_choppiness = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export var mid_wind_direction := Vector2(1.0, 0.3):
+	set(value): mid_wind_direction = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 12.0, 0.1) var mid_directional_spread := 5.0:
+	set(value): mid_directional_spread = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 100000.0, 1.0) var mid_fetch_length_m := 3000.0:
+	set(value): mid_fetch_length_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var mid_swell := 0.45:
+	set(value): mid_swell = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var mid_jonswap_spread := 0.35:
+	set(value): mid_jonswap_spread = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var mid_detail := 1.0:
+	set(value): mid_detail = value; _mark_wave_spectrum_dirty()
+
+@export_category("Wave Spectrum / SHORT")
+@export_range(0.0, 10.0, 0.01) var short_target_hs_m := 0.05:
+	set(value): short_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export_range(0.0, 4.0, 0.01) var short_choppiness := 0.35:
+	set(value): short_choppiness = maxf(value, 0.0); _mark_wave_spectrum_dirty()
+@export var short_wind_direction := Vector2(1.0, 0.45):
+	set(value): short_wind_direction = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 12.0, 0.1) var short_directional_spread := 4.0:
+	set(value): short_directional_spread = value; _mark_wave_spectrum_dirty()
+@export_range(1.0, 100000.0, 1.0) var short_fetch_length_m := 300.0:
+	set(value): short_fetch_length_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var short_swell := 0.15:
+	set(value): short_swell = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var short_jonswap_spread := 0.75:
+	set(value): short_jonswap_spread = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 1.0, 0.01) var short_detail := 1.0:
+	set(value): short_detail = value; _mark_wave_spectrum_dirty()
+
+@export_category("Wave Spectrum / LONG Advanced")
+@export_range(0.01, 1000.0, 0.01) var long_min_wavelength_m := 16.0:
+	set(value): long_min_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.01, 2000.0, 0.01) var long_max_wavelength_m := 128.0:
+	set(value): long_max_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 100.0, 0.01) var long_transition_width_m := 4.0:
+	set(value): long_transition_width_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 10.0, 0.01) var long_short_wave_damping_m := 0.35:
+	set(value): long_short_wave_damping_m = value; _mark_wave_spectrum_dirty()
+
+@export_category("Wave Spectrum / MID Advanced")
+@export_range(0.01, 1000.0, 0.01) var mid_min_wavelength_m := 4.0:
+	set(value): mid_min_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.01, 2000.0, 0.01) var mid_max_wavelength_m := 20.0:
+	set(value): mid_max_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 100.0, 0.01) var mid_transition_width_m := 0.75:
+	set(value): mid_transition_width_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 10.0, 0.01) var mid_short_wave_damping_m := 0.35:
+	set(value): mid_short_wave_damping_m = value; _mark_wave_spectrum_dirty()
+
+@export_category("Wave Spectrum / SHORT Advanced")
+@export_range(0.01, 1000.0, 0.01) var short_min_wavelength_m := 0.5:
+	set(value): short_min_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.01, 2000.0, 0.01) var short_max_wavelength_m := 5.0:
+	set(value): short_max_wavelength_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 100.0, 0.01) var short_transition_width_m := 0.15:
+	set(value): short_transition_width_m = value; _mark_wave_spectrum_dirty()
+@export_range(0.0, 10.0, 0.01) var short_short_wave_damping_m := 0.2:
+	set(value): short_short_wave_damping_m = value; _mark_wave_spectrum_dirty()
+
 @export_group("Surface Detail")
 @export var surface_detail_enabled: bool = true:
 	set(value):
@@ -602,6 +715,8 @@ var _visual_sync_pending := true
 
 func _ready() -> void:
 	_visual_sync_pending = true
+	if wave_preset != null:
+		apply_selected_wave_preset()
 	call_deferred(&"_flush_visual_sync")
 
 
@@ -610,6 +725,191 @@ func _process(_delta: float) -> void:
 	# the root setter ran while the scene was loading.
 	if _visual_sync_pending:
 		_sync_water_visual_parameters()
+	if _wave_spectrum_dirty and auto_apply_wave_changes and Time.get_ticks_msec() >= _wave_spectrum_apply_at_ms:
+		apply_wave_changes()
+
+
+func _mark_wave_spectrum_dirty() -> void:
+	if _applying_wave_preset:
+		return
+	_wave_spectrum_dirty = true
+	_wave_spectrum_apply_at_ms = Time.get_ticks_msec() + WAVE_REBUILD_DEBOUNCE_MS
+
+
+func apply_selected_wave_preset() -> void:
+	if wave_preset == null:
+		push_warning("Select an OceanWavePreset before applying it.")
+		return
+	_applying_wave_preset = true
+	global_wind_speed_mps = wave_preset.global_wind_speed_mps
+	_copy_band_from_settings(wave_preset.long_band, 0)
+	_copy_band_from_settings(wave_preset.mid_band, 1)
+	_copy_band_from_settings(wave_preset.short_band, 2)
+	short_geometry_strength = wave_preset.short_geometry_strength
+	_applying_wave_preset = false
+	_request_visual_sync()
+	apply_wave_changes()
+
+
+func apply_wave_changes() -> void:
+	_wave_spectrum_dirty = false
+	# OpenOceanFFTModule intentionally remains a runtime GPU owner. In @tool
+	# scenes it is a Godot placeholder; the root exports are still authored and
+	# serialized there, then the same canonical H0 route runs on the next launch.
+	if Engine.is_editor_hint():
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT")
+	if fft_module != null and fft_module.has_method(&"set_wave_spectrum_settings"):
+		fft_module.call(&"set_wave_spectrum_settings", _build_active_wave_configs())
+
+
+func save_current_wave_preset() -> void:
+	var target_path := preset_save_path.strip_edges()
+	if target_path.is_empty() or not target_path.begins_with("res://"):
+		push_error("Preset Save Path must be a res:// .tres path.")
+		return
+	if target_path in BASE_WAVE_PRESET_PATHS:
+		push_error("Base CALM/RACE/ROUGH presets are protected; choose a custom .tres path.")
+		return
+	if not target_path.ends_with(".tres"):
+		push_error("Preset Save Path must end in .tres.")
+		return
+	var directory_error := DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(target_path.get_base_dir()))
+	if directory_error != OK:
+		push_error("Could not create preset directory for %s (error %d)." % [target_path, directory_error])
+		return
+	var preset := OceanWavePreset.new()
+	preset.preset_name = target_path.get_file().get_basename()
+	preset.global_wind_speed_mps = global_wind_speed_mps
+	preset.long_band = _band_settings_from_exports(0)
+	preset.mid_band = _band_settings_from_exports(1)
+	preset.short_band = _band_settings_from_exports(2)
+	preset.short_geometry_strength = short_geometry_strength
+	var error := ResourceSaver.save(preset, target_path)
+	if error != OK:
+		push_error("Could not save wave preset at %s (error %d)." % [target_path, error])
+		return
+	wave_preset = load(target_path) as OceanWavePreset
+	print("Saved OceanWavePreset: %s" % target_path)
+
+
+func _build_active_wave_configs() -> Array[OpenOceanFFTConfig]:
+	var preset := OceanWavePreset.new()
+	preset.global_wind_speed_mps = global_wind_speed_mps
+	preset.long_band = _band_settings_from_exports(0)
+	preset.mid_band = _band_settings_from_exports(1)
+	preset.short_band = _band_settings_from_exports(2)
+	return preset.build_cascades()
+
+
+func _copy_band_from_settings(band: OceanWaveBandSettings, index: int) -> void:
+	if band == null:
+		return
+	match index:
+		0:
+			long_target_hs_m = band.target_hs_m
+			long_choppiness = band.choppiness
+			long_wind_direction = band.wind_direction
+			long_directional_spread = band.directional_spread
+			long_fetch_length_m = band.fetch_length_m
+			long_swell = band.swell
+			long_jonswap_spread = band.jonswap_spread
+			long_detail = band.detail
+			long_min_wavelength_m = band.min_wavelength_m
+			long_max_wavelength_m = band.max_wavelength_m
+			long_transition_width_m = band.transition_width_m
+			long_short_wave_damping_m = band.short_wave_damping_m
+		1:
+			mid_target_hs_m = band.target_hs_m
+			mid_choppiness = band.choppiness
+			mid_wind_direction = band.wind_direction
+			mid_directional_spread = band.directional_spread
+			mid_fetch_length_m = band.fetch_length_m
+			mid_swell = band.swell
+			mid_jonswap_spread = band.jonswap_spread
+			mid_detail = band.detail
+			mid_min_wavelength_m = band.min_wavelength_m
+			mid_max_wavelength_m = band.max_wavelength_m
+			mid_transition_width_m = band.transition_width_m
+			mid_short_wave_damping_m = band.short_wave_damping_m
+		2:
+			short_target_hs_m = band.target_hs_m
+			short_choppiness = band.choppiness
+			short_wind_direction = band.wind_direction
+			short_directional_spread = band.directional_spread
+			short_fetch_length_m = band.fetch_length_m
+			short_swell = band.swell
+			short_jonswap_spread = band.jonswap_spread
+			short_detail = band.detail
+			short_min_wavelength_m = band.min_wavelength_m
+			short_max_wavelength_m = band.max_wavelength_m
+			short_transition_width_m = band.transition_width_m
+			short_short_wave_damping_m = band.short_wave_damping_m
+
+
+func _band_settings_from_exports(index: int) -> OceanWaveBandSettings:
+	var band := OceanWaveBandSettings.new()
+	match index:
+		0:
+			band.target_hs_m = long_target_hs_m
+			band.choppiness = long_choppiness
+			band.wind_direction = long_wind_direction
+			band.directional_spread = long_directional_spread
+			band.fetch_length_m = long_fetch_length_m
+			band.swell = long_swell
+			band.jonswap_spread = long_jonswap_spread
+			band.detail = long_detail
+			band.min_wavelength_m = long_min_wavelength_m
+			band.max_wavelength_m = long_max_wavelength_m
+			band.transition_width_m = long_transition_width_m
+			band.short_wave_damping_m = long_short_wave_damping_m
+			_copy_hidden_foam_from_base_preset(band, 0)
+		1:
+			band.target_hs_m = mid_target_hs_m
+			band.choppiness = mid_choppiness
+			band.wind_direction = mid_wind_direction
+			band.directional_spread = mid_directional_spread
+			band.fetch_length_m = mid_fetch_length_m
+			band.swell = mid_swell
+			band.jonswap_spread = mid_jonswap_spread
+			band.detail = mid_detail
+			band.min_wavelength_m = mid_min_wavelength_m
+			band.max_wavelength_m = mid_max_wavelength_m
+			band.transition_width_m = mid_transition_width_m
+			band.short_wave_damping_m = mid_short_wave_damping_m
+			_copy_hidden_foam_from_base_preset(band, 1)
+		2:
+			band.target_hs_m = short_target_hs_m
+			band.choppiness = short_choppiness
+			band.wind_direction = short_wind_direction
+			band.directional_spread = short_directional_spread
+			band.fetch_length_m = short_fetch_length_m
+			band.swell = short_swell
+			band.jonswap_spread = short_jonswap_spread
+			band.detail = short_detail
+			band.min_wavelength_m = short_min_wavelength_m
+			band.max_wavelength_m = short_max_wavelength_m
+			band.transition_width_m = short_transition_width_m
+			band.short_wave_damping_m = short_short_wave_damping_m
+			_copy_hidden_foam_from_base_preset(band, 2)
+	return band
+
+
+func _copy_hidden_foam_from_base_preset(target: OceanWaveBandSettings, index: int) -> void:
+	# Root doesn't expose legacy whitecap controls. Keep their selected preset's
+	# values when authoring the spectrum, falling back to RACE if no preset exists.
+	var source_preset := wave_preset
+	if source_preset == null:
+		source_preset = load("res://ocean_v3/presets/waves/race.tres") as OceanWavePreset
+	if source_preset == null:
+		return
+	var source: OceanWaveBandSettings = [source_preset.long_band, source_preset.mid_band, source_preset.short_band][index]
+	if source != null:
+		target.foam_enabled = source.foam_enabled
+		target.foam_whitecap = source.foam_whitecap
+		target.foam_amount = source.foam_amount
+		target.foam_decay = source.foam_decay
+		target.foam_cascade_weight = source.foam_cascade_weight
 
 
 func _request_visual_sync() -> void:

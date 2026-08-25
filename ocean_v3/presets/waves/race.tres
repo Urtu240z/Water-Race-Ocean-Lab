@@ -1,0 +1,73 @@
+[gd_resource type="Resource" script_class="OceanWavePreset" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://ocean_v3/core/ocean_wave_preset.gd" id="1_preset"]
+[ext_resource type="Script" path="res://ocean_v3/core/ocean_wave_band_settings.gd" id="2_band"]
+
+[sub_resource type="Resource" id="Band_long"]
+script = ExtResource("2_band")
+target_hs_m = 0.59
+choppiness = 1.0
+wind_direction = Vector2(1, 0.15)
+directional_spread = 7.0
+fetch_length_m = 25000.0
+swell = 0.8
+detail = 1.0
+jonswap_spread = 0.05
+min_wavelength_m = 16.0
+max_wavelength_m = 128.0
+transition_width_m = 4.0
+short_wave_damping_m = 0.35
+foam_enabled = true
+foam_whitecap = 0.5
+foam_amount = 0.8
+foam_decay = 5.5
+foam_cascade_weight = 1.0
+
+[sub_resource type="Resource" id="Band_mid"]
+script = ExtResource("2_band")
+target_hs_m = 0.25
+choppiness = 0.7
+wind_direction = Vector2(1, 0.3)
+directional_spread = 5.0
+fetch_length_m = 3000.0
+swell = 0.45
+detail = 1.0
+jonswap_spread = 0.35
+min_wavelength_m = 4.0
+max_wavelength_m = 20.0
+transition_width_m = 0.75
+short_wave_damping_m = 0.35
+foam_enabled = true
+foam_whitecap = 0.54
+foam_amount = 0.16
+foam_decay = 5.5
+foam_cascade_weight = 0.5
+
+[sub_resource type="Resource" id="Band_short"]
+script = ExtResource("2_band")
+target_hs_m = 0.05
+choppiness = 0.35
+wind_direction = Vector2(1, 0.45)
+directional_spread = 4.0
+fetch_length_m = 300.0
+swell = 0.15
+detail = 1.0
+jonswap_spread = 0.75
+min_wavelength_m = 0.5
+max_wavelength_m = 5.0
+transition_width_m = 0.15
+short_wave_damping_m = 0.2
+foam_enabled = true
+foam_whitecap = 0.58
+foam_amount = 0.12
+foam_decay = 5.5
+foam_cascade_weight = 0.05
+
+[resource]
+script = ExtResource("1_preset")
+preset_name = "RACE"
+global_wind_speed_mps = 12.0
+long_band = SubResource("Band_long")
+mid_band = SubResource("Band_mid")
+short_band = SubResource("Band_short")
+short_geometry_strength = 0.25

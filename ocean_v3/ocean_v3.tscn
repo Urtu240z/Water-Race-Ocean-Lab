@@ -1,4 +1,4 @@
-[gd_scene format=3 uid="uid://da7bkkbh7g742"]
+[gd_scene load_steps=2 format=3 uid="uid://da7bkkbh7g742"]
 
 [ext_resource type="Script" uid="uid://chx6lk258tyrt" path="res://ocean_v3/open_ocean_fft_module.gd" id="1_fft"]
 [ext_resource type="Script" uid="uid://cwr3becqg1pvn" path="res://ocean_v3/rendering/ocean_clipmap_surface.gd" id="2_surface"]
@@ -7,9 +7,11 @@
 [ext_resource type="Texture2D" uid="uid://bblan7rbfrudb" path="res://ocean_v3/rendering/surface_detail/surface_warp_noise.tres" id="5_v8q1b"]
 [ext_resource type="Texture2D" path="res://ocean_v3/rendering/surface_detail/surface_foam_micro_detail.png" id="7_foam_micro"]
 [ext_resource type="Script" path="res://ocean_v3/ocean_v3.gd" id="6_root"]
+[ext_resource type="Resource" path="res://ocean_v3/presets/waves/race.tres" id="8_race"]
 
 [node name="OceanV3" type="Node3D" unique_id=919503098]
 script = ExtResource("6_root")
+wave_preset = ExtResource("8_race")
 surface_normal_texture_a = ExtResource("3_5nfe4")
 surface_normal_texture_b = ExtResource("4_hqww3")
 surface_warp_texture = ExtResource("5_v8q1b")

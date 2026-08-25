@@ -321,13 +321,28 @@ func set_sea_state(state: int) -> void:
 	if not SeaStateScript.is_valid_state(state):
 		push_warning("Estado de mar no vÃ¡lido: %s" % state)
 		return
-	if state == _sea_state and _sea_state_initialized:
-		return
 	_sea_state = state
 	_sea_state_initialized = true
-	_apply_surface_foam_wind_preset(state)
-	configs = SeaStateScript.build_cascades(state)
+	# Legacy states now resolve through the same base .tres resources as the
+	# editable root authoring layer. Surface Foam stays intentionally untouched.
+	set_wave_spectrum_settings(SeaStateScript.build_cascades(state))
+
+
+func set_wave_spectrum_settings(wave_configs: Array[OpenOceanFFTConfig]) -> void:
+	## Public owner API for the three physical source configs. OceanV3 never
+	## reaches into _cascades: this method preserves the shared LONG split and
+	## synchronizes GPU H0, REDUCED and optional Golden query H0 in one route.
+	if wave_configs.size() != 3:
+		push_error("Wave spectrum requires exactly LONG, MID and SHORT configs.")
+		return
+	for config in wave_configs:
+		if config == null or not config.is_valid():
+			push_error("Invalid wave spectrum config.")
+			return
+	configs = wave_configs
 	_apply_spectrum_model()
+	if _cascades.is_empty():
+		return
 	# 3B.2B: las dos primeras cascadas de render (COASTAL/REMAINDER) comparten el
 	# config LONG; MID/SHORT usan configs[1]/configs[2].
 	for index in _cascades.size():
@@ -339,7 +354,6 @@ func set_sea_state(state: int) -> void:
 	for cascade in _cascades:
 		dispatches_per_update += cascade["config"].compute_pass_count()
 	_rebuild_h0_all(SimulationClock.simulation_seed)
-	_rebuild_surface_foam_h0(SimulationClock.simulation_seed)
 
 
 func sea_state_name() -> String:
