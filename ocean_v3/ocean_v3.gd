@@ -592,9 +592,9 @@ extends Node3D
 		foam_erosion_softness = value
 		_request_visual_sync()
 
-@export_enum("OFF", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_COMPOSED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_BUBBLES", "SURFACE_FOAM_MACRO", "SURFACE_FOAM_MICRO_INFLUENCE", "SURFACE_FOAM_HISTORY", "SURFACE_FOAM_TEMPORAL_SOURCE", "SURFACE_FOAM_EDGE_FADE", "SURFACE_FOAM_FINAL") var foam_debug_mode: int = 16:
+@export_enum("OFF", "SHAPED_FOAM", "COMPRESSION", "SPECTRAL_JACOBIAN", "FOAM_SOURCE", "HIRES_RAW_FOAM", "FOAM_SOURCE_HIRES", "HIRES_FRESH", "HIRES_RESIDUAL", "HIRES_TOTAL", "FOAM_VELOCITY", "FOAM_NORMAL", "FOAM_SPECTRAL_DETAIL", "FOAM_EROSION_MASK", "FOAM_ERODED_RESIDUAL", "FOAM_ERODED_FRESH", "SURFACE_FOAM_SOURCE", "SURFACE_FOAM_RAW", "SURFACE_FOAM_COMPOSED", "CREST_FOAM_ONLY", "SURFACE_PLUS_CREST", "SURFACE_FOAM_JACOBIAN", "SURFACE_FOAM_BUBBLES", "SURFACE_FOAM_MACRO", "SURFACE_FOAM_MICRO_INFLUENCE", "SURFACE_FOAM_HISTORY", "SURFACE_FOAM_TEMPORAL_SOURCE", "SURFACE_FOAM_EDGE_FADE", "SURFACE_FOAM_FINAL", "SURFACE_FOAM_SOURCE_A", "SURFACE_FOAM_SOURCE_B", "SURFACE_FOAM_SELECTED_SOURCE", "SURFACE_FOAM_ONE_SAMPLE", "SURFACE_FOAM_SOURCE_8_DIRECT") var foam_debug_mode: int = 16:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 28)
+		foam_debug_mode = clampi(value, 0, 33)
 		foam_mask_debug = false
 		_request_visual_sync()
 
@@ -654,6 +654,9 @@ func _sync_water_visual_parameters() -> void:
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material) or material.shader == null:
 		return
+	var effective_foam_debug_mode := foam_debug_mode
+	if foam_mask_debug and effective_foam_debug_mode == 0:
+		effective_foam_debug_mode = 2
 
 	material.set_shader_parameter(&"short_geometry_strength", short_geometry_strength)
 
@@ -790,6 +793,7 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_birth_selectivity,
 				surface_foam_evolution_speed
 			)
+			fft_module.set_surface_foam_debug_mode(effective_foam_debug_mode)
 			fft_module.set_surface_foam_spectrum_settings(
 				surface_foam_fft_resolution,
 				surface_foam_field_resolution,
@@ -803,9 +807,6 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_directional_spread,
 				surface_foam_detail
 			)
-	var effective_foam_debug_mode := foam_debug_mode
-	if foam_mask_debug and effective_foam_debug_mode == 0:
-		effective_foam_debug_mode = 2
 	material.set_shader_parameter(&"foam_debug_mode", effective_foam_debug_mode)
 
 	_visual_sync_pending = false

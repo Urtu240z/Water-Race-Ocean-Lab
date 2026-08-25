@@ -50,6 +50,7 @@ var _birth_attack_s := 0.16
 var _lifetime_s := 1.10
 var _birth_selectivity := 0.28
 var _evolution_speed := 0.35
+var _debug_variant := 0
 var _completed_jobs_total := 0
 var _passes_dispatched_total := 0
 var _jobs_window := 0
@@ -107,6 +108,10 @@ func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: floa
 	_lifetime_s = clampf(lifetime_s, 0.1, 5.0)
 	_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
 	_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
+
+
+func set_debug_variant(debug_mode: int) -> void:
+	_debug_variant = 1 if debug_mode == 29 else 2 if debug_mode == 30 else 3 if debug_mode == 32 else 4 if debug_mode == 33 else 0
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:
@@ -188,7 +193,7 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
 			_whitecap, source_gain, _birth_selectivity, 1.0,
 			_job_delta, _birth_attack_s, _lifetime_s, 0.12,
-			_config.field_domain_m, _config.domain_size_m, 2.25, 0.0
+			_config.field_domain_m, _config.domain_size_m, 2.25, float(_debug_variant)
 		]).to_byte_array(), 48)
 		_rd.compute_list_dispatch(list, foam_groups, foam_groups, 1)
 	_job_pass += 1

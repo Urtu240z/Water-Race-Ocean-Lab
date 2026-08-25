@@ -124,6 +124,7 @@ var _surface_foam_swell := 0.779
 # JONSWAP semantics: 0 = full Hasselmann directionality, 1 = isotropic.
 var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
+var _surface_foam_debug_mode := 0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
@@ -1041,6 +1042,7 @@ func _initialize_surface_foam_solver() -> void:
 		_surface_foam_birth_selectivity,
 		_surface_foam_evolution_speed
 	))
+	RenderingServer.call_on_render_thread(_surface_foam_solver.set_debug_variant.bind(_surface_foam_debug_mode))
 
 
 func _rebuild_surface_foam_solver() -> void:
@@ -1157,6 +1159,12 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 			birth_selectivity,
 			evolution_speed
 		))
+
+
+func set_surface_foam_debug_mode(debug_mode: int) -> void:
+	_surface_foam_debug_mode = debug_mode
+	if _surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_solver.set_debug_variant.bind(debug_mode))
 
 
 func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, source_domain_m: float, field_domain_m: float, depth_m: float,

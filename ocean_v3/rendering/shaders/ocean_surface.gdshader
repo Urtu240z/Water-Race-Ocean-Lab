@@ -790,11 +790,12 @@ vec2 pixel_ocean_surface_foam_field(vec2 world_xz) {
 }
 
 
-// The persistent field is the converged filament history. The interpolated J
-// remains a physical support signal, not a replacement for that history.
+// The persistent field is the converged filament history. The selected,
+// independently-shaped target remains a soft support signal, not a replacement
+// for that history.
 float surface_foam_macro_shape(float persistent_mask, float source_mask) {
-	// The converged R16F history owns the visible topology. The interpolated J
-	// source only provides a soft energy support, so render FPS cannot redraw the
+	// The converged RG16F history owns the visible topology. The selected source
+	// only provides a soft energy support, so render FPS cannot redraw the
 	// filament silhouette from an instantaneous source.
 	float history = smoothstep(0.015, 0.24, persistent_mask);
 	float source_support = smoothstep(0.015, 0.28, source_mask);
@@ -861,8 +862,7 @@ float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float b
 }
 
 
-// Diagnostic only: matches the dedicated compute path's interpolated J
-// threshold before accumulation. It deliberately does not involve LONG/MID/SHORT.
+// Diagnostic-only helpers below deliberately do not involve LONG/MID/SHORT.
 // Debug-only motion in metres per frame: current horizontal displacement minus
 // the exact previous snapshot that update_foam used for its backtrace.
 vec2 foam_motion_at(sampler2D displacement_map, sampler2D previous_map, vec2 world_xz, float domain_size_m) {
@@ -1311,11 +1311,27 @@ void fragment() {
 	} else if (foam_debug_mode == 25) {
 		color = vec3(clamp(surface_foam_raw, 0.0, 1.0));
 	} else if (foam_debug_mode == 26) {
-		color = vec3(clamp(surface_foam_source, 0.0, 1.0));
+		// Persistent history in the RG16F field's R channel.
+		color = vec3(clamp(surface_foam_raw, 0.0, 1.0));
 	} else if (foam_debug_mode == 27) {
 		color = vec3(surface_foam_edge_fade);
 	} else if (foam_debug_mode == 28) {
 		color = vec3(surface_foam_mask);
+	} else if (foam_debug_mode == 29) {
+		// Compute debug: target after Birth shaping for source warp A.
+		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode == 30) {
+		// Compute debug: target after Birth shaping for source warp B.
+		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode == 31) {
+		// Compute debug: regional A/B selection after Birth shaping.
+		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode == 32) {
+		// Compute debug: one-sample A path, with no B Jacobian read.
+		color = vec3(surface_foam_source);
+	} else if (foam_debug_mode == 33) {
+		// Compute debug: direct source-domain 8 m reference, no warp.
+		color = vec3(surface_foam_source);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
