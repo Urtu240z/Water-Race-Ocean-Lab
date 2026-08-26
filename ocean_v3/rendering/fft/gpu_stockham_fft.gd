@@ -53,6 +53,8 @@ var _crest_current_foam_cascade_weight := 0.0
 var _crest_effective_foam_cascade_weight := 0.0
 var _crest_target_foam_cascade_weight := 0.0
 var _crest_foam_accumulator := 0.0
+var _crest_foam_schedule_initialized := false
+var _crest_foam_phase_offset := 0.0
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
 var _uniform_sets: Array[RID] = []
@@ -217,9 +219,20 @@ func set_crest_foam_compute_enabled(enabled: bool) -> void:
 
 
 func set_crest_foam_schedule(update_hz: float, phase_offset: float) -> void:
-	_crest_foam_update_hz = clampf(update_hz, 30.0, 60.0)
+	var validated_update_hz := clampf(update_hz, 30.0, 60.0)
+	var validated_phase_offset := clampf(phase_offset, 0.0, 0.999)
+	# OceanV3 re-sends visual settings while a preset transition advances. Keep
+	# this scheduler idempotent so those syncs do not starve phase-shifted
+	# cascades before their accumulator can reach the update period.
+	if _crest_foam_schedule_initialized \
+		and is_equal_approx(_crest_foam_update_hz, validated_update_hz) \
+		and is_equal_approx(_crest_foam_phase_offset, validated_phase_offset):
+		return
+	_crest_foam_update_hz = validated_update_hz
+	_crest_foam_phase_offset = validated_phase_offset
 	# Deterministic phase distributes the four HIRES updates over one period.
-	_crest_foam_accumulator = (1.0 / _crest_foam_update_hz) * clampf(phase_offset, 0.0, 0.999)
+	_crest_foam_accumulator = (1.0 / _crest_foam_update_hz) * _crest_foam_phase_offset
+	_crest_foam_schedule_initialized = true
 
 
 func set_foam_resolution(foam_resolution: int) -> void:

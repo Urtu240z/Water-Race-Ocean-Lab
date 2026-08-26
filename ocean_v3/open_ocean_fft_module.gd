@@ -447,7 +447,9 @@ func _process(delta: float) -> void:
 		_advance_wave_transition(delta)
 	for cascade in _cascades:
 		var is_visible_band: bool = _band_debug == BandDebug.ALL or _band_index(cascade.config.id) == _band_debug
-		if not is_visible_band:
+		# BandDebug may hide a cascade visually, but its temporal crest-foam field
+		# must continue evolving while H0 CURRENT/TARGET are being blended.
+		if not is_visible_band and not _wave_transition_active:
 			continue
 		if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 			# The solver receives the actual frame delta and converts per-second foam
