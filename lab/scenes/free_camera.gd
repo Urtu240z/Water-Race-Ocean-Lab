@@ -45,7 +45,7 @@ func _process(delta: float) -> void:
 	global_position += movement.normalized() * speed * delta
 
 
-func _unhandled_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
 	if not _is_active:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
