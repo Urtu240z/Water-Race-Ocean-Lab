@@ -14,8 +14,8 @@ var _editor_plugin: EditorPlugin
 
 func _init(editor_plugin: EditorPlugin = null) -> void:
 	_editor_plugin = editor_plugin
-	create_material("core", Color(0.16, 0.86, 1.0))
-	create_material("feather", Color(0.95, 0.66, 0.16))
+	create_material("core", Color(0.16, 0.86, 1.0), false, true)
+	create_material("feather", Color(1.0, 0.42, 0.05), false, true)
 	create_handle_material("handles")
 
 
