@@ -162,7 +162,6 @@ uniform float foam_residual_normal_weight : hint_range(0.0, 2.0, 0.01) = 0.40;
 uniform float foam_micro_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.20;
 uniform float foam_threshold : hint_range(0.0, 1.0, 0.01) = 0.0;
 uniform float foam_contrast : hint_range(0.1, 4.0, 0.01) = 1.35;
-uniform float foam_roughness : hint_range(0.0, 1.0, 0.01) = 0.88;
 uniform float foam_alpha_boost : hint_range(0.0, 1.0, 0.01) = 0.18;
 uniform float foam_distance_fade_start : hint_range(0.0, 4000.0, 1.0) = 180.0;
 uniform float foam_distance_fade_end : hint_range(1.0, 5000.0, 1.0) = 900.0;
@@ -175,7 +174,6 @@ uniform bool foam_breakup_texture_ready = false;
 // Crest foam stays physically owned by its own accumulator. This only shapes
 // its visible mask with the existing direct-J Surface Foam topology.
 uniform bool crest_filigree_enabled = true;
-uniform float crest_filigree_whitecap : hint_range(0.0, 1.5, 0.01) = 0.0;
 uniform float crest_fresh_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.22;
 uniform float crest_residual_filigree_strength : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform float crest_filigree_contrast : hint_range(0.1, 4.0, 0.01) = 1.0;
@@ -196,8 +194,6 @@ uniform float surface_foam_distance_fade_start_m : hint_range(0.0, 2000.0, 1.0) 
 uniform float surface_foam_distance_fade_end_m : hint_range(1.0, 2000.0, 1.0) = 600.0;
 uniform float surface_foam_strength : hint_range(0.0, 4.0, 0.01) = 1.0;
 uniform float surface_foam_threshold_visual : hint_range(0.0, 1.0, 0.01) = 0.0;
-uniform float surface_foam_mid_fold_start : hint_range(0.0, 1.0, 0.01) = 0.10;
-uniform float surface_foam_mid_fold_end : hint_range(0.01, 1.0, 0.01) = 0.24;
 uniform vec4 surface_foam_color : source_color = vec4(0.78, 0.84, 0.82, 1.0);
 uniform float surface_foam_normal_strength : hint_range(0.0, 10.0, 0.01) = 0.55;
 uniform float foam_fresh_roughness : hint_range(0.0, 1.0, 0.01) = 0.95;
@@ -665,13 +661,6 @@ vec2 surface_foam_topology_at(vec2 sample_position, vec2 world_dx, vec2 world_dy
 	return textureGrad(surface_foam_topology, uv, world_dx / surface_foam_source_domain_m, world_dy / surface_foam_source_domain_m).rg;
 }
 
-vec2 surface_foam_stochastic_transform_delta(vec2 delta, vec2 lattice_vertex) {
-	delta *= surface_foam_stochastic_scale(lattice_vertex);
-	delta = surface_foam_stochastic_rotate(delta, surface_foam_stochastic_rotation_angle(lattice_vertex));
-	if (surface_foam_stochastic_hash12(lattice_vertex + vec2(47.0, 11.0)) > 0.5) delta.x *= -1.0;
-	return delta;
-}
-
 
 // Deterministic triangular world-space lattice. Each fragment blends the three
 // vertex-owned transforms of its triangle, so cells meet continuously without
@@ -705,6 +694,14 @@ vec2 surface_foam_stochastic_rotate(vec2 p, float angle) {
 	float c = cos(angle);
 	float s = sin(angle);
 	return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+
+vec2 surface_foam_stochastic_transform_delta(vec2 delta, vec2 lattice_vertex) {
+	delta *= surface_foam_stochastic_scale(lattice_vertex);
+	delta = surface_foam_stochastic_rotate(delta, surface_foam_stochastic_rotation_angle(lattice_vertex));
+	if (surface_foam_stochastic_hash12(lattice_vertex + vec2(47.0, 11.0)) > 0.5) delta.x *= -1.0;
+	return delta;
 }
 
 

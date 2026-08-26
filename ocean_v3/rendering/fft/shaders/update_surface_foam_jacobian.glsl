@@ -7,7 +7,7 @@ layout(set = 0, binding = 0) uniform sampler2D jacobian_map;
 layout(set = 0, binding = 1) uniform sampler2D surface_foam_previous;
 layout(rg16f, set = 0, binding = 2) uniform restrict writeonly image2D surface_foam_next;
 
-layout(push_constant, std430) uniform Params {
+layout(set = 0, binding = 3, std140) uniform Params {
 	vec4 foam;
 	vec4 timing;
 	vec4 spatial; // field domain, source domain, warp amplitude, reserved

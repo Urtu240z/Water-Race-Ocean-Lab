@@ -8,6 +8,13 @@ const FFT_SHADER := "res://ocean_v3/rendering/fft/shaders/surface_foam_stockham_
 const ASSEMBLE_SHADER := "res://ocean_v3/rendering/fft/shaders/surface_foam_assemble_jacobian.glsl"
 const UPDATE_SHADER := "res://ocean_v3/rendering/fft/shaders/update_surface_foam_jacobian.glsl"
 const TOPOLOGY_SHADER := "res://ocean_v3/rendering/fft/shaders/build_surface_foam_topology.glsl"
+const DOWNSAMPLE_SHADER := "res://ocean_v3/rendering/fft/shaders/downsample_surface_foam_topology.glsl"
+const PIPELINE_EVOLVE := 0
+const PIPELINE_FFT := 1
+const PIPELINE_ASSEMBLE := 2
+const PIPELINE_UPDATE := 3
+const PIPELINE_TOPOLOGY := 4
+const PIPELINE_DOWNSAMPLE := 5
 
 var ready := false
 var last_error := ""
@@ -24,7 +31,10 @@ var _ping_b: Array[RID] = [RID(), RID()]
 var _jacobian: Array[RID] = [RID(), RID()]
 var _foam: Array[RID] = [RID(), RID()]
 var _topology: Array[RID] = [RID(), RID()]
+var _topology_mip_views: Array[Array] = [[], []]
 var _sampler := RID()
+var _topology_params_buffer := RID()
+var _foam_params_buffer := RID()
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
 var _sets: Array[RID] = []
@@ -33,6 +43,7 @@ var _fft_sets: Array[RID] = [RID(), RID()]
 var _assemble_sets: Array[RID] = [RID(), RID()]
 var _foam_sets: Array[RID] = []
 var _topology_sets: Array[RID] = []
+var _topology_downsample_sets: Array[Array] = [[], []]
 var _field_resolution := 1024
 var _topology_resolution := 1024
 var _foam_read_index := 0
@@ -58,7 +69,6 @@ var _completed_jobs_total := 0
 var _passes_dispatched_total := 0
 var _jobs_window := 0
 var _passes_window := 0
-var _topology_dirty := false
 var _diagnostic_window_s := 0.0
 var _jobs_per_second := 0.0
 var _passes_per_second := 0.0
@@ -73,7 +83,7 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 	if _rd == null:
 		last_error = "RenderingDevice global no disponible."
 		return
-	for path in [EVOLVE_SHADER, FFT_SHADER, ASSEMBLE_SHADER, UPDATE_SHADER, TOPOLOGY_SHADER]:
+	for path in [EVOLVE_SHADER, FFT_SHADER, ASSEMBLE_SHADER, UPDATE_SHADER, TOPOLOGY_SHADER, DOWNSAMPLE_SHADER]:
 		if not _create_pipeline(path, resource_prefix).is_valid():
 			free_resources()
 			return
@@ -86,6 +96,8 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		_foam[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Field%d" % index, _field_resolution)
 		_topology[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Topology%d" % index, _topology_resolution, PackedByteArray(), false, true)
 	_sampler = _create_sampler()
+	_topology_params_buffer = _rd.uniform_buffer_create(16, PackedFloat32Array([_whitecap, _crest_whitecap, _config.domain_size_m, float(_topology_resolution)]).to_byte_array())
+	_foam_params_buffer = _rd.uniform_buffer_create(48, PackedByteArray())
 	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0]])
 	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]])
 	_fft_sets[1] = _create_image_set(_shaders[1], [_ping_a[1], _ping_b[1], _ping_a[0], _ping_b[0]])
@@ -95,9 +107,13 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		for foam_index in 2:
 			_foam_sets.append(_create_foam_set(_jacobian[jacobian_index], _foam[foam_index], _foam[1 - foam_index]))
 	_topology_sets = []
+	_topology_downsample_sets = [[], []]
 	for index in 2:
-		_topology_sets.append(_create_topology_set(_jacobian[index], _topology[index]))
-	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_sets[0].is_valid() and _assemble_sets[1].is_valid() and _foam_sets.size() == 4 and _topology_sets.size() == 2
+		_topology_mip_views[index] = _create_topology_mip_views(_topology[index])
+		_topology_sets.append(_create_topology_set(_jacobian[index], _topology_mip_views[index][0]))
+		for mip in range(1, _topology_mip_views[index].size()):
+			_topology_downsample_sets[index].append(_create_topology_downsample_set(_topology_mip_views[index][mip - 1], _topology_mip_views[index][mip]))
+	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_sets[0].is_valid() and _assemble_sets[1].is_valid() and _foam_sets.size() == 4 and _topology_sets.size() == 2 and _topology_downsample_sets[0].size() == _topology_mip_count() - 1 and _topology_downsample_sets[1].size() == _topology_mip_count() - 1 and _all_topology_views_valid()
 	if not ready:
 		last_error = "No se pudieron crear los uniform sets de Surface Foam."
 		return
@@ -118,6 +134,8 @@ func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: floa
 	_lifetime_s = clampf(lifetime_s, 0.1, 5.0)
 	_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
 	_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
+	if _rd != null and _topology_params_buffer.is_valid():
+		_rd.buffer_update(_topology_params_buffer, 0, 16, PackedFloat32Array([_whitecap, _crest_whitecap, _config.domain_size_m, float(_topology_resolution)]).to_byte_array())
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:
@@ -152,6 +170,12 @@ func advance(frame_delta: float) -> void:
 	_pass_credit -= float(pass_budget)
 	var groups := ceili(float(_config.resolution) / 8.0)
 	var foam_groups := ceili(float(_field_resolution) / 8.0)
+	var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
+	_rd.buffer_update(_foam_params_buffer, 0, 48, PackedFloat32Array([
+		_whitecap, source_gain, _birth_selectivity, 1.0,
+		_job_delta, _birth_attack_s, _lifetime_s, 0.12,
+		_config.field_domain_m, _config.domain_size_m, 2.25, 0.0
+	]).to_byte_array())
 	var list := _rd.compute_list_begin()
 	for _unused in pass_budget:
 		if not _job_active:
@@ -161,9 +185,6 @@ func advance(frame_delta: float) -> void:
 		_passes_window += 1
 		_rd.compute_list_add_barrier(list)
 	_rd.compute_list_end()
-	if _topology_dirty and not _job_active and topology_rid.is_valid():
-		_rd.texture_generate_mipmaps(topology_rid, true)
-		_topology_dirty = false
 	if _diagnostic_window_s >= 1.0:
 		_jobs_per_second = float(_jobs_window) / _diagnostic_window_s
 		_passes_per_second = float(_passes_window) / _diagnostic_window_s
@@ -175,7 +196,7 @@ func advance(frame_delta: float) -> void:
 func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 	var fft_count := 2 * _config.fft_stage_count()
 	if _job_pass == 0:
-		_rd.compute_list_bind_compute_pipeline(list, _pipelines[0])
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_EVOLVE])
 		_rd.compute_list_bind_uniform_set(list, _evolve_set, 0)
 		_rd.compute_list_set_push_constant(list, PackedFloat32Array([_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m]).to_byte_array(), 16)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
@@ -183,39 +204,37 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		var fft_index := _job_pass - 1
 		var axis := floori(float(fft_index) / float(_config.fft_stage_count()))
 		var stage := fft_index % _config.fft_stage_count()
-		_rd.compute_list_bind_compute_pipeline(list, _pipelines[1])
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_FFT])
 		_rd.compute_list_bind_uniform_set(list, _fft_sets[fft_index % 2], 0)
 		_rd.compute_list_set_push_constant(list, PackedInt32Array([2 << stage, axis, _config.resolution, 1]).to_byte_array(), 16)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
 	elif _job_pass == fft_count + 1:
 		var write_jacobian := 1 - _jacobian_read_index
-		_rd.compute_list_bind_compute_pipeline(list, _pipelines[2])
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_ASSEMBLE])
 		_rd.compute_list_bind_uniform_set(list, _assemble_sets[write_jacobian], 0)
 		_rd.compute_list_set_push_constant(list, PackedFloat32Array([1.0, 0.0, 0.0, 0.0]).to_byte_array(), 16)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
 	else:
 		var target_jacobian := 1 - _jacobian_read_index
-		_rd.compute_list_bind_compute_pipeline(list, _pipelines[3])
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_UPDATE])
 		_rd.compute_list_bind_uniform_set(list, _foam_sets[target_jacobian * 2 + _foam_read_index], 0)
-		var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
-		_rd.compute_list_set_push_constant(list, PackedFloat32Array([
-			_whitecap, source_gain, _birth_selectivity, 1.0,
-			_job_delta, _birth_attack_s, _lifetime_s, 0.12,
-			# spatial.w is padding/reserved by the vec4 push-constant layout.
-			_config.field_domain_m, _config.domain_size_m, 2.25, 0.0
-		]).to_byte_array(), 48)
 		_rd.compute_list_dispatch(list, foam_groups, foam_groups, 1)
 		if _job_pass == fft_count + 2:
-			_rd.compute_list_bind_compute_pipeline(list, _pipelines[4])
+			_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_TOPOLOGY])
 			_rd.compute_list_bind_uniform_set(list, _topology_sets[target_jacobian], 0)
-			_rd.compute_list_set_push_constant(list, PackedFloat32Array([_whitecap, _crest_whitecap, _config.domain_size_m, float(_topology_resolution)]).to_byte_array(), 16)
 			_rd.compute_list_dispatch(list, ceili(float(_topology_resolution) / 8.0), ceili(float(_topology_resolution) / 8.0), 1)
+			_rd.compute_list_add_barrier(list)
+			for mip in _topology_downsample_sets[target_jacobian].size():
+				_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_DOWNSAMPLE])
+				_rd.compute_list_bind_uniform_set(list, _topology_downsample_sets[target_jacobian][mip], 0)
+				var mip_resolution := maxi(_topology_resolution >> (mip + 1), 1)
+				_rd.compute_list_dispatch(list, ceili(float(mip_resolution) / 8.0), ceili(float(mip_resolution) / 8.0), 1)
+				_rd.compute_list_add_barrier(list)
 	_job_pass += 1
 	if _job_pass >= total_job_passes():
 		_jacobian_read_index = 1 - _jacobian_read_index
 		_foam_read_index = 1 - _foam_read_index
 		topology_rid = _topology[_jacobian_read_index]
-		_topology_dirty = true
 		jacobian_rid = _jacobian[_jacobian_read_index]
 		surface_foam_rid = _foam[_foam_read_index]
 		_job_active = false
@@ -226,7 +245,7 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 func diagnostic_state() -> Dictionary:
 	var topology_mip_count := floori(log(float(_topology_resolution)) / log(2.0)) + 1
 	var topology_bytes := _topology_resolution * _topology_resolution * 4 * 4.0 / 3.0 * 2.0
-	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "topology_resolution": _topology_resolution, "topology_format": "RG16F", "topology_channels": "R=Surface raw, G=Crest raw", "topology_mip_levels": topology_mip_count, "h0_upload_bytes": h0_upload_byte_count, "completed_jobs_total": _completed_jobs_total, "passes_dispatched_total": _passes_dispatched_total, "jobs_per_second": _jobs_per_second, "passes_per_second": _passes_per_second, "simulation_time_s": _simulation_time, "update_hz": _update_hz, "birth_attack_s": _birth_attack_s, "lifetime_s": _lifetime_s, "birth_selectivity": _birth_selectivity, "evolution_speed": _evolution_speed, "topology_gpu_bytes": int(topology_bytes), "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2 + int(topology_bytes) * 2}
+	return {"ready": ready, "total_job_passes": total_job_passes(), "field_resolution": _field_resolution, "topology_resolution": _topology_resolution, "topology_format": "RG16F", "topology_channels": "R=Surface raw, G=Crest raw", "topology_mip_levels": topology_mip_count, "topology_mip_generation": "compute", "h0_upload_bytes": h0_upload_byte_count, "completed_jobs_total": _completed_jobs_total, "passes_dispatched_total": _passes_dispatched_total, "jobs_per_second": _jobs_per_second, "passes_per_second": _passes_per_second, "simulation_time_s": _simulation_time, "update_hz": _update_hz, "birth_attack_s": _birth_attack_s, "lifetime_s": _lifetime_s, "birth_selectivity": _birth_selectivity, "evolution_speed": _evolution_speed, "topology_gpu_bytes": int(topology_bytes), "gpu_bytes": _config.resolution * _config.resolution * (16 * 5 + 2 * 2) + _field_resolution * _field_resolution * 2 * 2 + int(topology_bytes) * 2}
 
 
 func free_resources() -> void:
@@ -238,13 +257,15 @@ func free_resources() -> void:
 	for texture in [_h0, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], _jacobian[0], _jacobian[1], _foam[0], _foam[1], _topology[0], _topology[1]]:
 		if texture.is_valid(): _rd.free_rid(texture)
 	if _sampler.is_valid(): _rd.free_rid(_sampler)
+	if _topology_params_buffer.is_valid(): _rd.free_rid(_topology_params_buffer)
+	if _foam_params_buffer.is_valid(): _rd.free_rid(_foam_params_buffer)
 	for pipeline in _pipelines:
 		if pipeline.is_valid(): _rd.free_rid(pipeline)
 	for shader in _shaders:
 		if shader.is_valid(): _rd.free_rid(shader)
-	_sets.clear(); _pipelines.clear(); _shaders.clear(); _topology_sets.clear()
+	_sets.clear(); _pipelines.clear(); _shaders.clear(); _topology_sets.clear(); _topology_downsample_sets = [[], []]; _topology_mip_views = [[], []]
 	_h0 = RID(); _ping_a = [RID(), RID()]; _ping_b = [RID(), RID()]; _jacobian = [RID(), RID()]; _foam = [RID(), RID()]; _topology = [RID(), RID()]
-	_sampler = RID(); surface_foam_rid = RID(); jacobian_rid = RID(); topology_rid = RID()
+	_sampler = RID(); _topology_params_buffer = RID(); _foam_params_buffer = RID(); surface_foam_rid = RID(); jacobian_rid = RID(); topology_rid = RID()
 
 
 func _create_pipeline(path: String, prefix: String) -> RID:
@@ -274,10 +295,12 @@ func _create_texture(format: int, name: String, resolution: int, data := PackedB
 	return rid
 
 
-func _create_image_set(shader: RID, textures: Array[RID]) -> RID:
+func _create_image_set(shader: RID, textures: Array[RID], params_buffer := RID()) -> RID:
 	var uniforms: Array[RDUniform] = []
 	for binding in textures.size():
 		var uniform := RDUniform.new(); uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE; uniform.binding = binding; uniform.add_id(textures[binding]); uniforms.append(uniform)
+	if params_buffer.is_valid():
+		var params := RDUniform.new(); params.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER; params.binding = textures.size(); params.add_id(params_buffer); uniforms.append(params)
 	var set_rid := _rd.uniform_set_create(uniforms, shader, 0)
 	_sets.append(set_rid)
 	return set_rid
@@ -293,7 +316,8 @@ func _create_foam_set(jacobian: RID, previous: RID, next: RID) -> RID:
 	var j := RDUniform.new(); j.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE; j.binding = 0; j.add_id(_sampler); j.add_id(jacobian)
 	var p := RDUniform.new(); p.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE; p.binding = 1; p.add_id(_sampler); p.add_id(previous)
 	var n := RDUniform.new(); n.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE; n.binding = 2; n.add_id(next)
-	var set_rid := _rd.uniform_set_create([j, p, n], _shaders[3], 0)
+	var params := RDUniform.new(); params.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER; params.binding = 3; params.add_id(_foam_params_buffer)
+	var set_rid := _rd.uniform_set_create([j, p, n, params], _shaders[PIPELINE_UPDATE], 0)
 	_sets.append(set_rid)
 	return set_rid
 
@@ -301,9 +325,40 @@ func _create_foam_set(jacobian: RID, previous: RID, next: RID) -> RID:
 func _create_topology_set(jacobian: RID, topology: RID) -> RID:
 	var j := RDUniform.new(); j.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE; j.binding = 0; j.add_id(_sampler); j.add_id(jacobian)
 	var t := RDUniform.new(); t.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE; t.binding = 1; t.add_id(topology)
-	var set_rid := _rd.uniform_set_create([j, t], _shaders[4], 0)
+	var p := RDUniform.new(); p.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER; p.binding = 2; p.add_id(_topology_params_buffer)
+	var set_rid := _rd.uniform_set_create([j, t, p], _shaders[4], 0)
 	_sets.append(set_rid)
 	return set_rid
+
+
+func _create_topology_mip_views(topology: RID) -> Array[RID]:
+	var views: Array[RID] = []
+	for mip in _topology_mip_count():
+		var view := _rd.texture_create_shared_from_slice(RDTextureView.new(), topology, 0, mip, 1)
+		if not view.is_valid():
+			last_error = "No se pudo crear la view del mip %d de Surface Foam Topology." % mip
+		views.append(view)
+	return views
+
+
+func _create_topology_downsample_set(source_mip: RID, destination_mip: RID) -> RID:
+	var source := RDUniform.new(); source.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE; source.binding = 0; source.add_id(_sampler); source.add_id(source_mip)
+	var destination := RDUniform.new(); destination.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE; destination.binding = 1; destination.add_id(destination_mip)
+	var set_rid := _rd.uniform_set_create([source, destination], _shaders[5], 0)
+	_sets.append(set_rid)
+	return set_rid
+
+
+func _topology_mip_count() -> int:
+	return floori(log(float(_topology_resolution)) / log(2.0)) + 1
+
+
+func _all_topology_views_valid() -> bool:
+	for views in _topology_mip_views:
+		if views.size() != _topology_mip_count(): return false
+		for view in views:
+			if not view.is_valid(): return false
+	return true
 
 
 func _validated_resolution(value: int) -> int:

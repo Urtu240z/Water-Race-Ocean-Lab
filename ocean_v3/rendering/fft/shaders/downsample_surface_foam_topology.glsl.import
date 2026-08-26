@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bn4a0l1i7oyuh"
+path="res://.godot/imported/downsample_surface_foam_topology.glsl-c0dae973ade3059b94a29ae2e3907d80.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/fft/shaders/downsample_surface_foam_topology.glsl"
+dest_files=["res://.godot/imported/downsample_surface_foam_topology.glsl-c0dae973ade3059b94a29ae2e3907d80.res"]
+
+[params]
+
