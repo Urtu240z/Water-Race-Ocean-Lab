@@ -189,6 +189,7 @@ var _cascades: Array[Dictionary] = []
 var _query_reduced: RefCounted = null
 var _query_native: RefCounted = null
 var _query_golden: RefCounted = null
+var _sea_state_zone_descriptors: Array[Dictionary] = []
 var _current_h0_datas: Array[PackedByteArray] = []
 var _current_render_h0_datas: Array[PackedByteArray] = []
 var _wave_transition_active := false
@@ -941,10 +942,21 @@ func query_backend_name() -> String:
 	return "REDUCED_GDSCRIPT"
 
 
+func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
+	# Native OceanQuery has no spatial zone inputs. Keep it available for the
+	# global/open path, but route local-zone samples through the exact reduced
+	# evaluator that applies the same post-coastal scale and derivatives.
+	_sea_state_zone_descriptors = descriptors.duplicate()
+	if _query_reduced != null:
+		_query_reduced.set_sea_state_zones(_sea_state_zone_descriptors)
+
+
 func _native_query_can_sample_coastal() -> bool:
 	# The native backend currently receives one compact H0 set. During a global
 	# transition REDUCED evaluates the same dual-H0 alpha as the GPU instead.
 	if _wave_transition_active:
+		return false
+	if not _sea_state_zone_descriptors.is_empty():
 		return false
 	## Durante un hot reload con una DLL anterior, coastal conserva corrección
 	## GDScript en vez de declarar falsamente paridad native. Tras rebuild la

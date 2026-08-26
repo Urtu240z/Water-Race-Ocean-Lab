@@ -18,6 +18,7 @@ extends RefCounted
 
 const SampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
 const CoastalRuntimeScript := preload("res://ocean_v3/physics/ocean_query_coastal_runtime.gd")
+const SeaStateZoneMathScript := preload("res://ocean_v3/core/sea_state_zone_math.gd")
 
 const MODE_FULL_PAIRS := 0
 const MODE_REDUCED := 1
@@ -116,6 +117,25 @@ var _spectrum_transition_active := false
 var _spectrum_transition_alpha := 0.0
 var _spectrum_transition_target_cascades: Array[_CascadeData] = []
 var _spectrum_transition_target_wind_direction := Vector2.RIGHT
+var _sea_state_zone_descriptors: Array[Dictionary] = []
+
+# Reused local-zone state and gradients. Zone targets are absolute global
+# multipliers; gradients are required by the displaced-surface Jacobian.
+var _zone_long_amplitude := 1.0
+var _zone_mid_amplitude := 1.0
+var _zone_short_amplitude := 1.0
+var _zone_choppiness := 1.0
+var _zone_grad_long_x := 0.0
+var _zone_grad_long_z := 0.0
+var _zone_grad_mid_x := 0.0
+var _zone_grad_mid_z := 0.0
+var _zone_grad_short_x := 0.0
+var _zone_grad_short_z := 0.0
+var _zone_grad_chop_x := 0.0
+var _zone_grad_chop_z := 0.0
+
+# Per-band accumulators reused by _accumulate: LONG, MID, SHORT, stride 12.
+var _band_acc := PackedFloat64Array()
 
 # Diagnóstico (sin push_warning por query).
 var diagnostic_non_converged := 0
@@ -149,6 +169,63 @@ var _coastal_dzz := 0.0
 var _coastal_vh := 0.0
 var _coastal_vx := 0.0
 var _coastal_vz := 0.0
+
+
+func _init() -> void:
+	_band_acc.resize(36)
+
+
+func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
+	# Descriptors are rebuilt only when a zone changes; query evaluation only
+	# reads this stable compact list and allocates nothing per sample.
+	_sea_state_zone_descriptors = descriptors.duplicate()
+
+
+func _evaluate_sea_state_zones(qx: float, qz: float) -> void:
+	_zone_long_amplitude = 1.0
+	_zone_mid_amplitude = 1.0
+	_zone_short_amplitude = 1.0
+	_zone_choppiness = 1.0
+	_zone_grad_long_x = 0.0
+	_zone_grad_long_z = 0.0
+	_zone_grad_mid_x = 0.0
+	_zone_grad_mid_z = 0.0
+	_zone_grad_short_x = 0.0
+	_zone_grad_short_z = 0.0
+	_zone_grad_chop_x = 0.0
+	_zone_grad_chop_z = 0.0
+	if _sea_state_zone_descriptors.is_empty():
+		return
+	var point := Vector2(qx, qz)
+	for descriptor in _sea_state_zone_descriptors:
+		var center: Vector2 = descriptor["center"]
+		var axis: Vector2 = descriptor["axis"]
+		var half_extents: Vector2 = descriptor["half_extents"]
+		var feather: float = float(descriptor["feather"])
+		var zone_strength: float = clampf(float(descriptor["strength"]), 0.0, 1.0)
+		var sdf_weight := SeaStateZoneMathScript.weight_and_gradient(point, center, axis, half_extents, feather)
+		var blend_weight := clampf(sdf_weight.x * zone_strength, 0.0, 1.0)
+		if blend_weight <= 0.0:
+			continue
+		var grad_weight_x := sdf_weight.y * zone_strength
+		var grad_weight_z := sdf_weight.z * zone_strength
+		var target: Vector4 = descriptor["target"]
+		var old_long := _zone_long_amplitude
+		var old_mid := _zone_mid_amplitude
+		var old_short := _zone_short_amplitude
+		var old_chop := _zone_choppiness
+		_zone_long_amplitude = lerpf(old_long, target.x, blend_weight)
+		_zone_mid_amplitude = lerpf(old_mid, target.y, blend_weight)
+		_zone_short_amplitude = lerpf(old_short, target.z, blend_weight)
+		_zone_choppiness = lerpf(old_chop, target.w, blend_weight)
+		_zone_grad_long_x = _zone_grad_long_x * (1.0 - blend_weight) + (target.x - old_long) * grad_weight_x
+		_zone_grad_long_z = _zone_grad_long_z * (1.0 - blend_weight) + (target.x - old_long) * grad_weight_z
+		_zone_grad_mid_x = _zone_grad_mid_x * (1.0 - blend_weight) + (target.y - old_mid) * grad_weight_x
+		_zone_grad_mid_z = _zone_grad_mid_z * (1.0 - blend_weight) + (target.y - old_mid) * grad_weight_z
+		_zone_grad_short_x = _zone_grad_short_x * (1.0 - blend_weight) + (target.z - old_short) * grad_weight_x
+		_zone_grad_short_z = _zone_grad_short_z * (1.0 - blend_weight) + (target.z - old_short) * grad_weight_z
+		_zone_grad_chop_x = _zone_grad_chop_x * (1.0 - blend_weight) + (target.w - old_chop) * grad_weight_x
+		_zone_grad_chop_z = _zone_grad_chop_z * (1.0 - blend_weight) + (target.w - old_chop) * grad_weight_z
 
 
 func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByteArray]) -> void:
@@ -440,7 +517,12 @@ func _band_height(qx: float, qz: float, band_index: int) -> float:
 		var phi: float = kx_arr[idx] * qx + ky_arr[idx] * qz
 		var p_re: float = ev_hr[idx] * cos(phi) - ev_hi[idx] * sin(phi)
 		total += par_arr[idx] * w_arr[idx] * p_re
-	return total * cascade.inv_n2
+	var band_height := total * cascade.inv_n2
+	if band_index == 0:
+		return band_height * _zone_long_amplitude
+	if band_index == 1:
+		return band_height * _zone_mid_amplitude
+	return band_height * _zone_short_amplitude
 
 
 func _compute_sharpen(qx: float, qz: float) -> float:
@@ -572,6 +654,7 @@ func _build_sample(residual: float, iterations: int, converged: bool):
 func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: float) -> void:
 	# El sampler se evalúa sobre q, dentro de Newton. c=0 conserva el hot path
 	# open-ocean: no se evalúa C(q) ni C(F(q)).
+	_evaluate_sea_state_zones(qx, qz)
 	var coastal_confidence := 0.0
 	var coastal_shoaling := 1.0
 	var coastal_deep_x := qx
@@ -603,7 +686,8 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 	var total_vx := 0.0
 	var total_vz := 0.0
 
-	for cascade in _cascades:
+	for band_index in _cascades.size():
+		var cascade: _CascadeData = _cascades[band_index]
 		var inv_n2 := cascade.inv_n2
 		var count := cascade.count
 		var kx_arr := cascade.kx
@@ -686,18 +770,56 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 			lvh += sig * q_re
 			lvx += sig * a1 * q_im
 			lvz += sig * a2 * q_im
-		total_h += lh * inv_n2
-		total_dx += ldx * inv_n2
-		total_dz += ldz * inv_n2
-		total_dhx += ldhx * inv_n2
-		total_dhz += ldhz * inv_n2
-		total_dxx += ldxx * inv_n2
-		total_dxz += ldxz * inv_n2
-		total_dzx += ldzx * inv_n2
-		total_dzz += ldzz * inv_n2
-		total_vh += lvh * inv_n2
-		total_vx += lvx * inv_n2
-		total_vz += lvz * inv_n2
+		var base: int = band_index * 12
+		_band_acc[base] = lh * inv_n2
+		_band_acc[base + 1] = ldx * inv_n2
+		_band_acc[base + 2] = ldz * inv_n2
+		_band_acc[base + 3] = ldhx * inv_n2
+		_band_acc[base + 4] = ldhz * inv_n2
+		_band_acc[base + 5] = ldxx * inv_n2
+		_band_acc[base + 6] = ldxz * inv_n2
+		_band_acc[base + 7] = ldzx * inv_n2
+		_band_acc[base + 8] = ldzz * inv_n2
+		_band_acc[base + 9] = lvh * inv_n2
+		_band_acc[base + 10] = lvx * inv_n2
+		_band_acc[base + 11] = lvz * inv_n2
+
+	var long_h := _band_acc[0]
+	var long_dx := _band_acc[1]
+	var long_dz := _band_acc[2]
+	var long_dhx := _band_acc[3]
+	var long_dhz := _band_acc[4]
+	var long_dxx := _band_acc[5]
+	var long_dxz := _band_acc[6]
+	var long_dzx := _band_acc[7]
+	var long_dzz := _band_acc[8]
+	var long_vh := _band_acc[9]
+	var long_vx := _band_acc[10]
+	var long_vz := _band_acc[11]
+	var mid_h := _band_acc[12]
+	var mid_dx := _band_acc[13]
+	var mid_dz := _band_acc[14]
+	var mid_dhx := _band_acc[15]
+	var mid_dhz := _band_acc[16]
+	var mid_dxx := _band_acc[17]
+	var mid_dxz := _band_acc[18]
+	var mid_dzx := _band_acc[19]
+	var mid_dzz := _band_acc[20]
+	var mid_vh := _band_acc[21]
+	var mid_vx := _band_acc[22]
+	var mid_vz := _band_acc[23]
+	var short_h := _band_acc[24]
+	var short_dx := _band_acc[25]
+	var short_dz := _band_acc[26]
+	var short_dhx := _band_acc[27]
+	var short_dhz := _band_acc[28]
+	var short_dxx := _band_acc[29]
+	var short_dxz := _band_acc[30]
+	var short_dzx := _band_acc[31]
+	var short_dzz := _band_acc[32]
+	var short_vh := _band_acc[33]
+	var short_vx := _band_acc[34]
+	var short_vz := _band_acc[35]
 
 	if coastal_confidence > 0.0:
 		# LONG_eff = LONG + S_eff*((1-c) C(q) + c C(F(q))) - C(q).
@@ -721,19 +843,93 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		var blend_deep := coastal_confidence
 		var scaled_open := coastal_shoaling * blend_open
 		var scaled_deep := coastal_shoaling * blend_deep
-		total_h += scaled_open * cq_h + scaled_deep * _coastal_h - cq_h
-		total_dx += scaled_open * cq_dx + scaled_deep * _coastal_dx - cq_dx
-		total_dz += scaled_open * cq_dz + scaled_deep * _coastal_dz - cq_dz
-		total_vh += scaled_open * cq_vh + scaled_deep * _coastal_vh - cq_vh
-		total_vx += scaled_open * cq_vx + scaled_deep * _coastal_vx - cq_vx
-		total_vz += scaled_open * cq_vz + scaled_deep * _coastal_vz - cq_vz
+		long_h += scaled_open * cq_h + scaled_deep * _coastal_h - cq_h
+		long_dx += scaled_open * cq_dx + scaled_deep * _coastal_dx - cq_dx
+		long_dz += scaled_open * cq_dz + scaled_deep * _coastal_dz - cq_dz
+		long_vh += scaled_open * cq_vh + scaled_deep * _coastal_vh - cq_vh
+		long_vx += scaled_open * cq_vx + scaled_deep * _coastal_vx - cq_vx
+		long_vz += scaled_open * cq_vz + scaled_deep * _coastal_vz - cq_vz
 		# grad h_world = J^T grad h_deep; derivative D_world = derivative D_deep * J.
-		total_dhx += scaled_open * cq_dhx + scaled_deep * (coastal_j00 * _coastal_dhx + coastal_j10 * _coastal_dhz) - cq_dhx
-		total_dhz += scaled_open * cq_dhz + scaled_deep * (coastal_j01 * _coastal_dhx + coastal_j11 * _coastal_dhz) - cq_dhz
-		total_dxx += scaled_open * cq_dxx + scaled_deep * (_coastal_dxx * coastal_j00 + _coastal_dxz * coastal_j10) - cq_dxx
-		total_dxz += scaled_open * cq_dxz + scaled_deep * (_coastal_dxx * coastal_j01 + _coastal_dxz * coastal_j11) - cq_dxz
-		total_dzx += scaled_open * cq_dzx + scaled_deep * (_coastal_dzx * coastal_j00 + _coastal_dzz * coastal_j10) - cq_dzx
-		total_dzz += scaled_open * cq_dzz + scaled_deep * (_coastal_dzx * coastal_j01 + _coastal_dzz * coastal_j11) - cq_dzz
+		long_dhx += scaled_open * cq_dhx + scaled_deep * (coastal_j00 * _coastal_dhx + coastal_j10 * _coastal_dhz) - cq_dhx
+		long_dhz += scaled_open * cq_dhz + scaled_deep * (coastal_j01 * _coastal_dhx + coastal_j11 * _coastal_dhz) - cq_dhz
+		long_dxx += scaled_open * cq_dxx + scaled_deep * (_coastal_dxx * coastal_j00 + _coastal_dxz * coastal_j10) - cq_dxx
+		long_dxz += scaled_open * cq_dxz + scaled_deep * (_coastal_dxx * coastal_j01 + _coastal_dxz * coastal_j11) - cq_dxz
+		long_dzx += scaled_open * cq_dzx + scaled_deep * (_coastal_dzx * coastal_j00 + _coastal_dzz * coastal_j10) - cq_dzx
+		long_dzz += scaled_open * cq_dzz + scaled_deep * (_coastal_dzx * coastal_j01 + _coastal_dzz * coastal_j11) - cq_dzz
+
+	# Apply local state after coastal LONG composition. The same amplitude scale
+	# affects vertical displacement and the horizontal scale is amplitude*chop.
+	# Product-rule terms keep the query Jacobian exact at zone boundaries.
+	var long_hscale := _zone_long_amplitude * _zone_choppiness
+	var mid_hscale := _zone_mid_amplitude * _zone_choppiness
+	var short_hscale := _zone_short_amplitude * _zone_choppiness
+	var grad_long_hscale_x := _zone_grad_long_x * _zone_choppiness + _zone_long_amplitude * _zone_grad_chop_x
+	var grad_long_hscale_z := _zone_grad_long_z * _zone_choppiness + _zone_long_amplitude * _zone_grad_chop_z
+	var grad_mid_hscale_x := _zone_grad_mid_x * _zone_choppiness + _zone_mid_amplitude * _zone_grad_chop_x
+	var grad_mid_hscale_z := _zone_grad_mid_z * _zone_choppiness + _zone_mid_amplitude * _zone_grad_chop_z
+	var grad_short_hscale_x := _zone_grad_short_x * _zone_choppiness + _zone_short_amplitude * _zone_grad_chop_x
+	var grad_short_hscale_z := _zone_grad_short_z * _zone_choppiness + _zone_short_amplitude * _zone_grad_chop_z
+	var base_long_h := long_h
+	var base_long_dx := long_dx
+	var base_long_dz := long_dz
+	var base_mid_h := mid_h
+	var base_mid_dx := mid_dx
+	var base_mid_dz := mid_dz
+	var base_short_h := short_h
+	var base_short_dx := short_dx
+	var base_short_dz := short_dz
+
+	long_h *= _zone_long_amplitude
+	long_dx = base_long_dx * long_hscale
+	long_dz = base_long_dz * long_hscale
+	long_dhx = _zone_long_amplitude * long_dhx + base_long_h * _zone_grad_long_x
+	long_dhz = _zone_long_amplitude * long_dhz + base_long_h * _zone_grad_long_z
+	long_dxx = long_hscale * long_dxx + base_long_dx * grad_long_hscale_x
+	long_dxz = long_hscale * long_dxz + base_long_dx * grad_long_hscale_z
+	long_dzx = long_hscale * long_dzx + base_long_dz * grad_long_hscale_x
+	long_dzz = long_hscale * long_dzz + base_long_dz * grad_long_hscale_z
+	long_vh *= _zone_long_amplitude
+	long_vx *= long_hscale
+	long_vz *= long_hscale
+
+	mid_h *= _zone_mid_amplitude
+	mid_dx = base_mid_dx * mid_hscale
+	mid_dz = base_mid_dz * mid_hscale
+	mid_dhx = _zone_mid_amplitude * mid_dhx + base_mid_h * _zone_grad_mid_x
+	mid_dhz = _zone_mid_amplitude * mid_dhz + base_mid_h * _zone_grad_mid_z
+	mid_dxx = mid_hscale * mid_dxx + base_mid_dx * grad_mid_hscale_x
+	mid_dxz = mid_hscale * mid_dxz + base_mid_dx * grad_mid_hscale_z
+	mid_dzx = mid_hscale * mid_dzx + base_mid_dz * grad_mid_hscale_x
+	mid_dzz = mid_hscale * mid_dzz + base_mid_dz * grad_mid_hscale_z
+	mid_vh *= _zone_mid_amplitude
+	mid_vx *= mid_hscale
+	mid_vz *= mid_hscale
+
+	short_h *= _zone_short_amplitude
+	short_dx = base_short_dx * short_hscale
+	short_dz = base_short_dz * short_hscale
+	short_dhx = _zone_short_amplitude * short_dhx + base_short_h * _zone_grad_short_x
+	short_dhz = _zone_short_amplitude * short_dhz + base_short_h * _zone_grad_short_z
+	short_dxx = short_hscale * short_dxx + base_short_dx * grad_short_hscale_x
+	short_dxz = short_hscale * short_dxz + base_short_dx * grad_short_hscale_z
+	short_dzx = short_hscale * short_dzx + base_short_dz * grad_short_hscale_x
+	short_dzz = short_hscale * short_dzz + base_short_dz * grad_short_hscale_z
+	short_vh *= _zone_short_amplitude
+	short_vx *= short_hscale
+	short_vz *= short_hscale
+
+	total_h = long_h + mid_h + short_h
+	total_dx = long_dx + mid_dx + short_dx
+	total_dz = long_dz + mid_dz + short_dz
+	total_dhx = long_dhx + mid_dhx + short_dhx
+	total_dhz = long_dhz + mid_dhz + short_dhz
+	total_dxx = long_dxx + mid_dxx + short_dxx
+	total_dxz = long_dxz + mid_dxz + short_dxz
+	total_dzx = long_dzx + mid_dzx + short_dzx
+	total_dzz = long_dzz + mid_dzz + short_dzz
+	total_vh = long_vh + mid_vh + short_vh
+	total_vx = long_vx + mid_vx + short_vx
+	total_vz = long_vz + mid_vz + short_vz
 
 	_acc_h = total_h
 	_acc_dx = total_dx

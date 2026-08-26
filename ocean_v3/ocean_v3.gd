@@ -744,13 +744,98 @@ var _wave_transition_start_short_geometry := 0.25
 
 
 var _visual_sync_pending := true
+var _sea_state_zones: Array[OceanSeaStateZone3D] = []
+var _sea_state_zone_descriptors: Array[Dictionary] = []
+var _sea_state_zone_uniform_data0 := PackedVector4Array()
+var _sea_state_zone_uniform_data1 := PackedVector4Array()
+var _sea_state_zone_uniform_data2 := PackedVector4Array()
+var _sea_state_zones_dirty := true
+var _sea_state_zone_debug := false
 
 
 func _ready() -> void:
+	add_to_group(&"ocean_v3_root")
+	for node in get_tree().get_nodes_in_group(&"ocean_sea_state_zone"):
+		if node is OceanSeaStateZone3D:
+			register_sea_state_zone(node)
+	_refresh_sea_state_zones()
 	_visual_sync_pending = true
 	if wave_preset != null:
 		apply_selected_wave_preset()
 	call_deferred(&"_flush_visual_sync")
+
+
+func register_sea_state_zone(zone: OceanSeaStateZone3D) -> void:
+	if zone == null or _sea_state_zones.has(zone):
+		return
+	_sea_state_zones.append(zone)
+	mark_sea_state_zones_dirty()
+
+
+func unregister_sea_state_zone(zone: OceanSeaStateZone3D) -> void:
+	var index := _sea_state_zones.find(zone)
+	if index >= 0:
+		_sea_state_zones.remove_at(index)
+		mark_sea_state_zones_dirty()
+
+
+func mark_sea_state_zones_dirty() -> void:
+	_sea_state_zones_dirty = true
+	if is_inside_tree():
+		call_deferred(&"_refresh_sea_state_zones")
+
+
+func toggle_sea_state_zone_debug() -> void:
+	_sea_state_zone_debug = not _sea_state_zone_debug
+	_request_visual_sync()
+
+
+func sea_state_zone_debug_enabled() -> bool:
+	return _sea_state_zone_debug
+
+
+func _refresh_sea_state_zones() -> void:
+	if not _sea_state_zones_dirty:
+		return
+	_sea_state_zones_dirty = false
+	var live_zones: Array[OceanSeaStateZone3D] = []
+	for zone in _sea_state_zones:
+		if is_instance_valid(zone):
+			live_zones.append(zone)
+	live_zones.sort_custom(_compare_sea_state_zones)
+	_sea_state_zone_descriptors.clear()
+	_sea_state_zone_uniform_data0.resize(8)
+	_sea_state_zone_uniform_data1.resize(8)
+	_sea_state_zone_uniform_data2.resize(8)
+	for index in 8:
+		_sea_state_zone_uniform_data0[index] = Vector4.ZERO
+		_sea_state_zone_uniform_data1[index] = Vector4.ZERO
+		_sea_state_zone_uniform_data2[index] = Vector4.ZERO
+	var active_index := 0
+	for zone in live_zones:
+		if not zone.enabled or active_index >= 8:
+			continue
+		var descriptor := zone.descriptor()
+		_sea_state_zone_descriptors.append(descriptor)
+		var center: Vector2 = descriptor["center"]
+		var axis: Vector2 = descriptor["axis"]
+		var half_extents: Vector2 = descriptor["half_extents"]
+		var target: Vector4 = descriptor["target"]
+		_sea_state_zone_uniform_data0[active_index] = Vector4(center.x, center.y, axis.x, axis.y)
+		_sea_state_zone_uniform_data1[active_index] = Vector4(half_extents.x, half_extents.y, float(descriptor["feather"]), float(descriptor["strength"]))
+		_sea_state_zone_uniform_data2[active_index] = target
+		active_index += 1
+	_sea_state_zones = live_zones
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module != null:
+		fft_module.set_sea_state_zones(_sea_state_zone_descriptors)
+	_request_visual_sync()
+
+
+func _compare_sea_state_zones(a: OceanSeaStateZone3D, b: OceanSeaStateZone3D) -> bool:
+	if a.priority != b.priority:
+		return a.priority < b.priority
+	return str(a.get_path()) < str(b.get_path())
 
 
 func _process(_delta: float) -> void:
@@ -1094,6 +1179,11 @@ func _sync_water_visual_parameters() -> void:
 		return
 	var effective_foam_debug_mode := foam_debug_mode
 
+	material.set_shader_parameter(&"sea_state_zone_count", _sea_state_zone_descriptors.size())
+	material.set_shader_parameter(&"sea_state_zone_data0", _sea_state_zone_uniform_data0)
+	material.set_shader_parameter(&"sea_state_zone_data1", _sea_state_zone_uniform_data1)
+	material.set_shader_parameter(&"sea_state_zone_data2", _sea_state_zone_uniform_data2)
+	material.set_shader_parameter(&"sea_state_zone_debug", _sea_state_zone_debug)
 	material.set_shader_parameter(&"short_geometry_strength", short_geometry_strength)
 
 	var detail_ready := surface_detail_enabled \

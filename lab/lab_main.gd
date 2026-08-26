@@ -3,6 +3,7 @@ extends Node3D
 const CALM_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/calm.tres")
 const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/race.tres")
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
+const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
 
 @onready var free_camera: Camera3D = %FreeCamera
@@ -14,6 +15,7 @@ const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
 
 var _using_race_camera := false
 var _query_probe_tool: Node3D
+var _demo_sea_state_zone: OceanSeaStateZone3D
 var _foam_debug_index := 0
 
 
@@ -21,8 +23,9 @@ func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
+	_create_demo_sea_state_zone()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F1: HUD\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F1: HUD\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -86,6 +89,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F3:
 			_foam_debug_index = (_foam_debug_index + 1) % FOAM_DEBUG_MODES.size()
 			ocean_v3.foam_debug_mode = FOAM_DEBUG_MODES[_foam_debug_index]
+		KEY_F4:
+			ocean_v3.toggle_sea_state_zone_debug()
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET
@@ -113,6 +118,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			SimulationClock.time_scale = minf(SimulationClock.time_scale * 2.0, 8.0)
 		KEY_F1:
 			benchmark_hud.visible = not benchmark_hud.visible
+
+
+func _create_demo_sea_state_zone() -> void:
+	if _demo_sea_state_zone != null:
+		return
+	_demo_sea_state_zone = SEA_STATE_ZONE_SCRIPT.new() as OceanSeaStateZone3D
+	_demo_sea_state_zone.name = "DemoSeaStateZone"
+	_demo_sea_state_zone.position = Vector3(0.0, 0.0, 30.0)
+	_demo_sea_state_zone.box_size_m = Vector2(120.0, 160.0)
+	_demo_sea_state_zone.feather_distance_m = 20.0
+	_demo_sea_state_zone.long_amplitude_multiplier = 1.35
+	_demo_sea_state_zone.mid_amplitude_multiplier = 1.15
+	_demo_sea_state_zone.short_amplitude_multiplier = 0.90
+	_demo_sea_state_zone.choppiness_multiplier = 1.10
+	add_child(_demo_sea_state_zone)
+	ocean_v3.register_sea_state_zone(_demo_sea_state_zone)
 
 
 func _set_active_camera(use_race_camera: bool) -> void:

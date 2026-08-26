@@ -1,4 +1,4 @@
-﻿extends SceneTree
+extends SceneTree
 ## MÃ­nimo: Â¿el SceneTree con ventana y D3D12 funciona en --script?
 
 
@@ -21,4 +21,3 @@ func _process(_delta: float) -> bool:
 		f.close()
 		quit(0)
 	return false
-

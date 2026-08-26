@@ -35,6 +35,13 @@ uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
 uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
 uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
 uniform vec3 band_mask = vec3(1.0);
+// Local sea-state zones: data0=center.xy, axis.xz; data1=half-size.xy,
+// feather, strength; data2=absolute LONG/MID/SHORT/choppiness targets.
+uniform int sea_state_zone_count = 0;
+uniform vec4 sea_state_zone_data0[8];
+uniform vec4 sea_state_zone_data1[8];
+uniform vec4 sea_state_zone_data2[8];
+uniform bool sea_state_zone_debug = false;
 uniform int debug_mode = 0;
 uniform bool module_enabled = true;
 uniform bool clipmap_lod_debug = false;
@@ -277,6 +284,80 @@ float periodic_grid(vec2 world_xz, float domain_size_m) {
 	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
 }
 
+void sea_state_zone_sdf(vec2 point, vec2 center, vec2 axis, vec2 half_extents,
+		out float sdf, out vec2 sdf_gradient) {
+	vec2 safe_axis = normalize(axis);
+	if (dot(safe_axis, safe_axis) < 0.000001) safe_axis = vec2(1.0, 0.0);
+	vec2 tangent = vec2(-safe_axis.y, safe_axis.x);
+	vec2 local_point = vec2(dot(point - center, safe_axis), dot(point - center, tangent));
+	vec2 q = abs(local_point) - half_extents;
+	vec2 outside = max(q, vec2(0.0));
+	float outside_length = length(outside);
+	sdf = outside_length + min(max(q.x, q.y), 0.0);
+	vec2 gradient_local = vec2(0.0);
+	if (outside_length > 0.000001) {
+		gradient_local = normalize(vec2(sign(local_point.x) * outside.x, sign(local_point.y) * outside.y));
+	} else if (q.x > q.y) {
+		gradient_local = vec2(sign(local_point.x), 0.0);
+	} else {
+		gradient_local = vec2(0.0, sign(local_point.y));
+	}
+	sdf_gradient = safe_axis * gradient_local.x + tangent * gradient_local.y;
+}
+
+void sea_state_zone_state(vec2 point, out float long_amplitude, out float mid_amplitude,
+		out float short_amplitude, out float choppiness, out vec2 grad_long,
+		out vec2 grad_mid, out vec2 grad_short, out vec2 grad_chop) {
+	long_amplitude = 1.0;
+	mid_amplitude = 1.0;
+	short_amplitude = 1.0;
+	choppiness = 1.0;
+	grad_long = vec2(0.0);
+	grad_mid = vec2(0.0);
+	grad_short = vec2(0.0);
+	grad_chop = vec2(0.0);
+	for (int index = 0; index < 8; index++) {
+		if (index >= sea_state_zone_count) break;
+		vec4 zone0 = sea_state_zone_data0[index];
+		vec4 zone1 = sea_state_zone_data1[index];
+		vec4 target = sea_state_zone_data2[index];
+		float sdf;
+		vec2 sdf_gradient;
+		sea_state_zone_sdf(point, zone0.xy, zone0.zw, zone1.xy, sdf, sdf_gradient);
+		float feather = max(zone1.z, 0.0);
+		float local_weight = 0.0;
+		vec2 grad_weight = vec2(0.0);
+		if (feather <= 0.000001 || sdf <= 0.0) {
+			local_weight = 1.0;
+		} else if (sdf < feather) {
+			float t = clamp(sdf / feather, 0.0, 1.0);
+			local_weight = 1.0 - smoothstep(0.0, 1.0, t);
+			grad_weight = sdf_gradient * (-6.0 * t * (1.0 - t) / feather);
+		}
+		float weight = clamp(local_weight * clamp(zone1.w, 0.0, 1.0), 0.0, 1.0);
+		if (weight <= 0.0) continue;
+		grad_weight *= clamp(zone1.w, 0.0, 1.0);
+		float old_long = long_amplitude;
+		float old_mid = mid_amplitude;
+		float old_short = short_amplitude;
+		float old_chop = choppiness;
+		long_amplitude = mix(old_long, target.x, weight);
+		mid_amplitude = mix(old_mid, target.y, weight);
+		short_amplitude = mix(old_short, target.z, weight);
+		choppiness = mix(old_chop, target.w, weight);
+		grad_long = grad_long * (1.0 - weight) + (target.x - old_long) * grad_weight;
+		grad_mid = grad_mid * (1.0 - weight) + (target.y - old_mid) * grad_weight;
+		grad_short = grad_short * (1.0 - weight) + (target.z - old_short) * grad_weight;
+		grad_chop = grad_chop * (1.0 - weight) + (target.w - old_chop) * grad_weight;
+	}
+}
+
+vec3 sea_state_zone_displacement(vec3 value, float amplitude, float choppiness) {
+	value.y *= amplitude;
+	value.xz *= amplitude * choppiness;
+	return value;
+}
+
 // 4C-S3.2: seam suppression estrecha. La ventana exterior S3.1 se conserva como
 // bounding window (ya no define un core de ocultación); la ocultación real es una
 // banda longitudinal simétrica alrededor de seam_center en q_profile. El lateral
@@ -365,6 +446,25 @@ void vertex() {
 	vec3 long_displacement = long_coastal + long_remainder;
 	vec3 mid_displacement = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb;
 	vec3 short_displacement = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb;
+	float zone_long_amplitude;
+	float zone_mid_amplitude;
+	float zone_short_amplitude;
+	float zone_choppiness;
+	vec2 zone_grad_long;
+	vec2 zone_grad_mid;
+	vec2 zone_grad_short;
+	vec2 zone_grad_chop;
+	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
+		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
+		zone_grad_short, zone_grad_chop);
+	float long_coastal_height = long_coastal.y;
+	float long_remainder_height = long_remainder.y;
+	float mid_height = mid_displacement.y;
+	float short_height = short_displacement.y;
+	long_coastal = sea_state_zone_displacement(long_coastal, zone_long_amplitude, zone_choppiness);
+	long_remainder = sea_state_zone_displacement(long_remainder, zone_long_amplitude, zone_choppiness);
+	mid_displacement = sea_state_zone_displacement(mid_displacement, zone_mid_amplitude, zone_choppiness);
+	short_displacement = sea_state_zone_displacement(short_displacement, zone_short_amplitude, zone_choppiness);
 	float coastal_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 2) ? long_weight : 0.0;
 	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
 	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
@@ -388,12 +488,13 @@ void vertex() {
 		warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y
 	);
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
-	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
+	vec2 slope = (slope_coastal * zone_long_amplitude * effective_shoaling + long_coastal_height * zone_grad_long)
+		* coastal_weight * coastal_gain;
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
-	slope += slope_from_normal(long_remainder_normal) * remainder_weight;
-	slope += slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * mid_weight * mid_short_weight;
+	slope += (slope_from_normal(long_remainder_normal) * zone_long_amplitude + long_remainder_height * zone_grad_long) * remainder_weight;
+	slope += (slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * zone_mid_amplitude + mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
 	// SHORT no debe grabar los anillos del clipmap en la normal VERTEX.
-	slope += slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb))
+	slope += (slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * zone_short_amplitude + short_height * zone_grad_short)
 		* short_weight * mid_short_weight * short_vertex_normal_strength;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
@@ -415,7 +516,11 @@ void vertex() {
 		}
 		long_displacement = vec3(0.0, coastal_monochromatic_amplitude_m * mono_shoaling * cos(phase), 0.0);
 		displacement = long_displacement * long_weight;
-		vec2 mono_gradient = -mono_direction * coastal_monochromatic_amplitude_m * mono_shoaling * mono_k * sin(phase);
+		float mono_height = long_displacement.y;
+		long_displacement = sea_state_zone_displacement(long_displacement, zone_long_amplitude, zone_choppiness);
+		displacement = long_displacement * long_weight;
+		vec2 mono_gradient = -mono_direction * coastal_monochromatic_amplitude_m * mono_shoaling * mono_k * sin(phase) * zone_long_amplitude
+			+ mono_height * zone_grad_long;
 		ocean_normal = normalize(vec3(-mono_gradient.x, 1.0, -mono_gradient.y));
 		coastal_mono_phase = phase;
 		coastal_mono_active = 1.0;
@@ -468,8 +573,8 @@ void vertex() {
 			* compression * band_mask.x * ocean_crest_sharpen_strength; // 5R.1D: band_mask (world-space), no camera distance.
 		float gain = ocean_crest_sharpen_max_gain;
 		// Elevación vertical acotada + compresión horizontal suave (narrow crest).
-		displacement.y += sharpen * gain * local_hs;
-		displacement.xz *= 1.0 + sharpen * gain * 0.35;
+		displacement.y += sharpen * gain * local_hs * zone_long_amplitude;
+		displacement.xz *= 1.0 + sharpen * gain * 0.35 * zone_long_amplitude * zone_choppiness;
 		crest_sharpen_mask = sharpen;
 	}
 
@@ -527,6 +632,25 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	float remainder_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 1 || coastal_composition_debug == 3) ? long_weight : 0.0;
 	float mid_short_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
 	float coastal_gain = coastal_composition_debug == 2 ? coastal_debug_gain : 1.0;
+	float zone_long_amplitude;
+	float zone_mid_amplitude;
+	float zone_short_amplitude;
+	float zone_choppiness;
+	vec2 zone_grad_long;
+	vec2 zone_grad_mid;
+	vec2 zone_grad_short;
+	vec2 zone_grad_chop;
+	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
+		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
+		zone_grad_short, zone_grad_chop);
+	float pixel_long_coastal_height = mix(
+		textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).y,
+		textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).y,
+		warp_confidence
+	) * effective_shoaling;
+	float pixel_long_remainder_height = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).y;
+	float pixel_mid_height = textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).y;
+	float pixel_short_height = textureLod(displacement_short, spectrum_uv(world_xz, domain_short_m), 0.0).y;
 
 	vec3 long_coastal_normal_warped = normalize(textureLod(normal_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb);
 	vec3 long_coastal_normal_open = normalize(textureLod(normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb);
@@ -534,8 +658,9 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec2 slope_deep = slope_from_normal(long_coastal_normal_warped);
 	vec2 slope_warped_world = vec2(warp_jacobian.r * slope_deep.x + warp_jacobian.b * slope_deep.y, warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y);
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
-	vec2 slope = slope_coastal * coastal_weight * effective_shoaling * coastal_gain;
-	slope += slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * remainder_weight;
+	vec2 slope = (slope_coastal * zone_long_amplitude * effective_shoaling + pixel_long_coastal_height * zone_grad_long)
+		* coastal_weight * coastal_gain;
+	slope += (slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * zone_long_amplitude + pixel_long_remainder_height * zone_grad_long) * remainder_weight;
 
 	// 5R.2B: MID con filtro espacial progresivo 4-tap en SLOPE space (no promediar
 	// normales). La muestra central siempre se hace; los 4 taps extra sólo cuando
@@ -552,7 +677,7 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 		) * 0.25;
 		mid_center_slope = mix(mid_center_slope, mid_filtered, mid_filter_amount);
 	}
-	slope += mid_center_slope * mid_weight * mid_short_weight;
+	slope += (mid_center_slope * zone_mid_amplitude + pixel_mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
 
 	// 5R.2B: SHORT idéntico a MID con su propio texel size (microdetalle en
 	// media distancia se funde suavemente en vez de tiritar como líneas).
@@ -568,7 +693,7 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 		) * 0.25;
 		short_center_slope = mix(short_center_slope, short_filtered, short_filter_amount);
 	}
-	slope += short_center_slope * short_weight * mid_short_weight;
+	slope += (short_center_slope * zone_short_amplitude + pixel_short_height * zone_grad_short) * short_weight * mid_short_weight;
 
 	// 5R.2: la cresta afilada 5R.1C es más empinada que la normal FFT base.
 	slope *= 1.0 + crest_sharpen_mask * ocean_crest_sharpen_max_gain * 0.5;
@@ -1186,6 +1311,22 @@ void fragment() {
 		// 5R.1C: azul = sin sharpening, rojo = sharpening máximo.
 		color = mix(vec3(0.01, 0.04, 0.10), vec3(1.0, 0.18, 0.04), clamp(crest_sharpen_mask, 0.0, 1.0));
 	}
+	if (sea_state_zone_debug) {
+		float zone_long_amplitude;
+		float zone_mid_amplitude;
+		float zone_short_amplitude;
+		float zone_choppiness;
+		vec2 zone_grad_long;
+		vec2 zone_grad_mid;
+		vec2 zone_grad_short;
+		vec2 zone_grad_chop;
+		sea_state_zone_state(ocean_base_xz, zone_long_amplitude, zone_mid_amplitude,
+			zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
+			zone_grad_short, zone_grad_chop);
+		float value = clamp(zone_long_amplitude / 2.0, 0.0, 1.0);
+		color = mix(vec3(0.02, 0.04, 0.16), vec3(0.08, 0.85, 0.95), smoothstep(0.0, 0.5, value));
+		color = mix(color, vec3(1.0, 0.25, 0.05), smoothstep(0.5, 1.0, value));
+	}
 
 	if (foam_debug_mode == 1) {
 		color = vec3(crest_foam_mask);
@@ -1220,7 +1361,7 @@ void fragment() {
 		color = vec3(raw_foam_channels.r);
 	}
 
-	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
