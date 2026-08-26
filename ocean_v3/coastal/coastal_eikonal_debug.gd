@@ -10,6 +10,10 @@ enum Mode { REACHED, LOCAL_DIRECTION, SHADOW_SCALE }
 	set(value):
 		data = value
 		rebuild()
+@export var base_y := 0.0:
+	set(value):
+		base_y = value
+		rebuild()
 @export var mode: Mode = Mode.REACHED:
 	set(value):
 		mode = value
@@ -47,7 +51,7 @@ func rebuild() -> void:
 
 func _point(x: int, z: int) -> Vector3:
 	var world_xz: Vector2 = data.world_origin_xz + Vector2(float(x), float(z)) * data.cell_size_m
-	return Vector3(world_xz.x, y_offset_m, world_xz.y)
+	return Vector3(world_xz.x, base_y + y_offset_m, world_xz.y)
 
 
 func _color_at(x: int, z: int) -> Color:

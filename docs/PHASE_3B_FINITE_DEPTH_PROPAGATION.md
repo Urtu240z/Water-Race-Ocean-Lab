@@ -97,6 +97,11 @@ LAND; samples de recursos legacy sin el array aplican el mismo fallback.
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
 - `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
   `LOCAL_DIRECTION` y `SHADOW_SCALE`; no toca shaders ni el render final.
+- `CoastalEikonalPreviewBaker` es tooling `@tool` reutilizable: se asigna el
+  `BathymetryBaker` existente, `BAKE COASTAL PREVIEW` ejecuta el bake real de
+  bathymetry y el solve Eikonal en memoria, y `CLEAR PREVIEW` elimina sólo su
+  overlay temporal. Cambiar `Preview Mode` reconstruye únicamente el debug.
+  El overlay usa `BathymetryData.sea_level_y + preview_vertical_offset_m`.
 
 En modo normal LONG conserva el FFT y se desplaza/multiplica de forma
 coherente. Las normales LONG se escalan con el desplazamiento de muestra; la
