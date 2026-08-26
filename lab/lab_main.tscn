@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
-[ext_resource type="Resource" path="res://ocean_v3/presets/waves/rough.tres" id="7_73jaq"]
+[ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="7_73jaq"]
 [ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
@@ -91,6 +91,7 @@ short_target_hs_m = 0.12
 short_choppiness = 0.4
 short_wind_direction = Vector2(1, 0.62)
 short_directional_spread = 3.0
+surface_detail_wave_follow = 1.0
 surface_normal_world_size_a = 34.15
 surface_normal_world_size_b = 2.4
 surface_normal_strength = 0.66
