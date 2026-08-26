@@ -3,13 +3,15 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D h0_texture;
-layout(rgba32f, set = 0, binding = 1) uniform restrict writeonly image2D spectrum_a;
-layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D spectrum_b;
-layout(rgba32f, set = 0, binding = 3) uniform restrict writeonly image2D spectrum_c;
+layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D h0_current_texture;
+layout(rgba32f, set = 0, binding = 1) uniform restrict readonly image2D h0_target_texture;
+layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D spectrum_a;
+layout(rgba32f, set = 0, binding = 3) uniform restrict writeonly image2D spectrum_b;
+layout(rgba32f, set = 0, binding = 4) uniform restrict writeonly image2D spectrum_c;
 
 layout(push_constant, std430) uniform Params {
 	vec4 values; // time, gravity, choppiness, domain size
+	float transition_alpha;
 } params;
 
 vec2 complex_multiply(vec2 a, vec2 b) {
@@ -18,7 +20,7 @@ vec2 complex_multiply(vec2 a, vec2 b) {
 
 void main() {
 	ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = imageSize(h0_texture);
+	ivec2 size = imageSize(h0_current_texture);
 	if (any(greaterThanEqual(coord, size))) {
 		return;
 	}
@@ -26,7 +28,11 @@ void main() {
 	vec2 centered = vec2(coord - size / 2);
 	vec2 k = centered * (6.283185307179586 / params.values.w);
 	float k_length = length(k);
-	vec4 h0 = imageLoad(h0_texture, coord);
+	vec4 h0 = mix(
+		imageLoad(h0_current_texture, coord),
+		imageLoad(h0_target_texture, coord),
+		clamp(params.transition_alpha, 0.0, 1.0)
+	);
 	float omega = sqrt(params.values.y * k_length);
 	float phase = omega * params.values.x;
 	vec2 positive_phase = vec2(cos(phase), sin(phase));

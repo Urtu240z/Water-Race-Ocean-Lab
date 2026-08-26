@@ -39,6 +39,7 @@ const KEY_SCALE := 1 << 32
 
 class _CascadeData:
 	var lambda := 0.0
+	var transition_lambda := 0.0
 	var inv_n2 := 0.0
 	# Pares canónicos completos (para selección y modo FULL_PAIRS).
 	var f_kx := PackedFloat64Array()
@@ -73,8 +74,15 @@ class _CascadeData:
 	var h0_im := PackedFloat64Array()
 	var h0n_re := PackedFloat64Array()
 	var h0n_im := PackedFloat64Array()
+	# Endpoint B, allocated only while a global spectrum transition is active.
+	var transition_h0_re := PackedFloat64Array()
+	var transition_h0_im := PackedFloat64Array()
+	var transition_h0n_re := PackedFloat64Array()
+	var transition_h0n_im := PackedFloat64Array()
 	var coastal_weight_pos := PackedFloat64Array()
 	var coastal_weight_neg := PackedFloat64Array()
+	var transition_coastal_weight_pos := PackedFloat64Array()
+	var transition_coastal_weight_neg := PackedFloat64Array()
 	# Tiempo preparado (ev_h/ev_v por modo).
 	var ev_h_re := PackedFloat64Array()
 	var ev_h_im := PackedFloat64Array()
@@ -104,6 +112,8 @@ var _coastal_runtime = null
 var _coastal_wind_direction := Vector2.RIGHT
 var _coastal_inner_deg := 20.0
 var _coastal_outer_deg := 35.0
+var _spectrum_transition_active := false
+var _spectrum_transition_alpha := 0.0
 
 # Diagnóstico (sin push_warning por query).
 var diagnostic_non_converged := 0
@@ -141,6 +151,8 @@ var _coastal_vz := 0.0
 
 func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByteArray]) -> void:
 	assert(configs.size() == h0_datas.size())
+	_spectrum_transition_active = false
+	_spectrum_transition_alpha = 0.0
 	_cascades.clear()
 	for index in configs.size():
 		_cascades.append(_decode_cascade(configs[index], h0_datas[index]))
@@ -148,6 +160,40 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 		_coastal_wind_direction = configs[0].wind_direction.normalized()
 		_refresh_coastal_long_weights()
 	_rebuild_selection()
+
+
+func begin_spectrum_transition(target_configs: Array[OpenOceanFFTConfig], target_h0_datas: Array[PackedByteArray], initial_alpha := 0.0) -> void:
+	if _cascades.size() != target_configs.size() or target_configs.size() != target_h0_datas.size():
+		push_error("OceanQuery transition endpoints are incompatible.")
+		return
+	var targets: Array[_CascadeData] = []
+	for index in target_configs.size():
+		var source := _cascades[index]
+		var target_config := target_configs[index]
+		var target := _decode_cascade(target_config, target_h0_datas[index])
+		if source.f_kx.size() != target.f_kx.size() \
+			or not is_equal_approx(source.inv_n2, target.inv_n2):
+			push_error("OceanQuery transition topology differs.")
+			return
+		targets.append(target)
+	if not targets.is_empty():
+		_fill_coastal_weights(targets[0], target_configs[0].wind_direction)
+	for index in _cascades.size():
+		_compact_transition_cascade(_cascades[index], targets[index], _budgets[index])
+	_spectrum_transition_active = true
+	_spectrum_transition_alpha = clampf(initial_alpha, 0.0, 1.0)
+	_prepared_valid = false
+
+
+func set_spectrum_transition_alpha(alpha: float) -> void:
+	if not _spectrum_transition_active:
+		return
+	_spectrum_transition_alpha = clampf(alpha, 0.0, 1.0)
+	_prepared_valid = false
+
+
+func spectrum_transition_active() -> bool:
+	return _spectrum_transition_active
 
 
 func configure_coastal(warp_data, propagation_data, inner_deg: float, outer_deg: float,
@@ -505,6 +551,12 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		var h0i_arr := cascade.h0_im
 		var h0nr_arr := cascade.h0n_re
 		var h0ni_arr := cascade.h0n_im
+		var target_h0r_arr := cascade.transition_h0_re
+		var target_h0i_arr := cascade.transition_h0_im
+		var target_h0nr_arr := cascade.transition_h0n_re
+		var target_h0ni_arr := cascade.transition_h0n_im
+		var transition_alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
+		var effective_lambda := lerpf(cascade.lambda, cascade.transition_lambda, transition_alpha) if _spectrum_transition_active else cascade.lambda
 		var ev_hr_arr := cascade.ev_h_re
 		var ev_hi_arr := cascade.ev_h_im
 		var ev_vr_arr := cascade.ev_v_re
@@ -535,10 +587,14 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 				var wt := om_arr[idx] * simulation_time
 				var c := cos(wt)
 				var sn := sin(wt)
-				var a_re := h0r_arr[idx] * c - h0i_arr[idx] * sn
-				var a_im := h0r_arr[idx] * sn + h0i_arr[idx] * c
-				var b_re := h0nr_arr[idx] * c + h0ni_arr[idx] * sn
-				var b_im := -h0nr_arr[idx] * sn + h0ni_arr[idx] * c
+				var h0_re := lerpf(h0r_arr[idx], target_h0r_arr[idx], transition_alpha) if _spectrum_transition_active else h0r_arr[idx]
+				var h0_im := lerpf(h0i_arr[idx], target_h0i_arr[idx], transition_alpha) if _spectrum_transition_active else h0i_arr[idx]
+				var h0n_re := lerpf(h0nr_arr[idx], target_h0nr_arr[idx], transition_alpha) if _spectrum_transition_active else h0nr_arr[idx]
+				var h0n_im := lerpf(h0ni_arr[idx], target_h0ni_arr[idx], transition_alpha) if _spectrum_transition_active else h0ni_arr[idx]
+				var a_re := h0_re * c - h0_im * sn
+				var a_im := h0_re * sn + h0_im * c
+				var b_re := h0n_re * c + h0n_im * sn
+				var b_im := -h0n_re * sn + h0n_im * c
 				h_re = a_re + b_re
 				h_im = a_im + b_im
 				v_re = om_arr[idx] * (-a_im + b_im)
@@ -552,17 +608,20 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 			var q_im := v_re * sp + v_im * cp
 			var sig := par_arr[idx] * w_arr[idx]
 			lh += sig * p_re
-			ldx += sig * a1_arr[idx] * p_im
-			ldz += sig * a2_arr[idx] * p_im
+			var k_len := sqrt(kx_arr[idx] * kx_arr[idx] + ky_arr[idx] * ky_arr[idx])
+			var a1 := effective_lambda * kx_arr[idx] / k_len if k_len > 0.000001 else 0.0
+			var a2 := effective_lambda * ky_arr[idx] / k_len if k_len > 0.000001 else 0.0
+			ldx += sig * a1 * p_im
+			ldz += sig * a2 * p_im
 			ldhx += sig * -kx_arr[idx] * p_im
 			ldhz += sig * -ky_arr[idx] * p_im
-			ldxx += sig * c11_arr[idx] * p_re
-			ldxz += sig * c12_arr[idx] * p_re
-			ldzx += sig * c21_arr[idx] * p_re
-			ldzz += sig * c22_arr[idx] * p_re
+			ldxx += sig * a1 * kx_arr[idx] * p_re
+			ldxz += sig * a1 * ky_arr[idx] * p_re
+			ldzx += sig * a2 * kx_arr[idx] * p_re
+			ldzz += sig * a2 * ky_arr[idx] * p_re
 			lvh += sig * q_re
-			lvx += sig * a1_arr[idx] * q_im
-			lvz += sig * a2_arr[idx] * q_im
+			lvx += sig * a1 * q_im
+			lvz += sig * a2 * q_im
 		total_h += lh * inv_n2
 		total_dx += ldx * inv_n2
 		total_dz += ldz * inv_n2
@@ -644,6 +703,8 @@ func _accumulate_coastal_long(qx: float, qz: float, use_prepared: bool, simulati
 	if _cascades.is_empty():
 		return
 	var cascade: _CascadeData = _cascades[0]
+	var alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
+	var effective_lambda := lerpf(cascade.lambda, cascade.transition_lambda, alpha) if _spectrum_transition_active else cascade.lambda
 	var lh := 0.0
 	var ldx := 0.0
 	var ldz := 0.0
@@ -678,16 +739,20 @@ func _accumulate_coastal_long(qx: float, qz: float, use_prepared: bool, simulati
 			var wt := cascade.omega[idx] * simulation_time
 			var c := cos(wt)
 			var sn := sin(wt)
-			a_hr = cascade.h0_re[idx] * c - cascade.h0_im[idx] * sn
-			a_hi = cascade.h0_re[idx] * sn + cascade.h0_im[idx] * c
-			b_hr = cascade.h0n_re[idx] * c + cascade.h0n_im[idx] * sn
-			b_hi = -cascade.h0n_re[idx] * sn + cascade.h0n_im[idx] * c
+			var h0_re := lerpf(cascade.h0_re[idx], cascade.transition_h0_re[idx], alpha) if _spectrum_transition_active else cascade.h0_re[idx]
+			var h0_im := lerpf(cascade.h0_im[idx], cascade.transition_h0_im[idx], alpha) if _spectrum_transition_active else cascade.h0_im[idx]
+			var h0n_re := lerpf(cascade.h0n_re[idx], cascade.transition_h0n_re[idx], alpha) if _spectrum_transition_active else cascade.h0n_re[idx]
+			var h0n_im := lerpf(cascade.h0n_im[idx], cascade.transition_h0n_im[idx], alpha) if _spectrum_transition_active else cascade.h0n_im[idx]
+			a_hr = h0_re * c - h0_im * sn
+			a_hi = h0_re * sn + h0_im * c
+			b_hr = h0n_re * c + h0n_im * sn
+			b_hi = -h0n_re * sn + h0n_im * c
 			a_vr = -cascade.omega[idx] * a_hi
 			a_vi = cascade.omega[idx] * a_hr
 			b_vr = cascade.omega[idx] * b_hi
 			b_vi = -cascade.omega[idx] * b_hr
-		var wp := cascade.coastal_weight_pos[idx]
-		var wn := cascade.coastal_weight_neg[idx]
+		var wp := lerpf(cascade.coastal_weight_pos[idx], cascade.transition_coastal_weight_pos[idx], alpha) if _spectrum_transition_active else cascade.coastal_weight_pos[idx]
+		var wn := lerpf(cascade.coastal_weight_neg[idx], cascade.transition_coastal_weight_neg[idx], alpha) if _spectrum_transition_active else cascade.coastal_weight_neg[idx]
 		var h_re := wp * a_hr + wn * b_hr
 		var h_im := wp * a_hi + wn * b_hi
 		var v_re := wp * a_vr + wn * b_vr
@@ -701,17 +766,20 @@ func _accumulate_coastal_long(qx: float, qz: float, use_prepared: bool, simulati
 		var q_im := v_re * sp + v_im * cp
 		var sig := cascade.parity[idx] * cascade.weight[idx]
 		lh += sig * p_re
-		ldx += sig * cascade.a1[idx] * p_im
-		ldz += sig * cascade.a2[idx] * p_im
+		var k_len := sqrt(cascade.kx[idx] * cascade.kx[idx] + cascade.ky[idx] * cascade.ky[idx])
+		var a1 := effective_lambda * cascade.kx[idx] / k_len if k_len > 0.000001 else 0.0
+		var a2 := effective_lambda * cascade.ky[idx] / k_len if k_len > 0.000001 else 0.0
+		ldx += sig * a1 * p_im
+		ldz += sig * a2 * p_im
 		ldhx += sig * -cascade.kx[idx] * p_im
 		ldhz += sig * -cascade.ky[idx] * p_im
-		ldxx += sig * cascade.c11[idx] * p_re
-		ldxz += sig * cascade.c12[idx] * p_re
-		ldzx += sig * cascade.c21[idx] * p_re
-		ldzz += sig * cascade.c22[idx] * p_re
+		ldxx += sig * a1 * cascade.kx[idx] * p_re
+		ldxz += sig * a1 * cascade.ky[idx] * p_re
+		ldzx += sig * a2 * cascade.kx[idx] * p_re
+		ldzz += sig * a2 * cascade.ky[idx] * p_re
 		lvh += sig * q_re
-		lvx += sig * cascade.a1[idx] * q_im
-		lvz += sig * cascade.a2[idx] * q_im
+		lvx += sig * a1 * q_im
+		lvz += sig * a2 * q_im
 	_coastal_h = lh * cascade.inv_n2
 	_coastal_dx = ldx * cascade.inv_n2
 	_coastal_dz = ldz * cascade.inv_n2
@@ -736,6 +804,11 @@ func _prepare_time(simulation_time: float) -> void:
 		var h0i_arr := cascade.h0_im
 		var h0nr_arr := cascade.h0n_re
 		var h0ni_arr := cascade.h0n_im
+		var target_h0r_arr := cascade.transition_h0_re
+		var target_h0i_arr := cascade.transition_h0_im
+		var target_h0nr_arr := cascade.transition_h0n_re
+		var target_h0ni_arr := cascade.transition_h0n_im
+		var alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
 		var ev_hr_arr := cascade.ev_h_re
 		var ev_hi_arr := cascade.ev_h_im
 		var ev_vr_arr := cascade.ev_v_re
@@ -756,6 +829,15 @@ func _prepare_time(simulation_time: float) -> void:
 			var a_im := h0r_arr[idx] * sn + h0i_arr[idx] * c
 			var b_re := h0nr_arr[idx] * c + h0ni_arr[idx] * sn
 			var b_im := -h0nr_arr[idx] * sn + h0ni_arr[idx] * c
+			if _spectrum_transition_active:
+				var ta_re := target_h0r_arr[idx] * c - target_h0i_arr[idx] * sn
+				var ta_im := target_h0r_arr[idx] * sn + target_h0i_arr[idx] * c
+				var tb_re := target_h0nr_arr[idx] * c + target_h0ni_arr[idx] * sn
+				var tb_im := -target_h0nr_arr[idx] * sn + target_h0ni_arr[idx] * c
+				a_re = lerpf(a_re, ta_re, alpha)
+				a_im = lerpf(a_im, ta_im, alpha)
+				b_re = lerpf(b_re, tb_re, alpha)
+				b_im = lerpf(b_im, tb_im, alpha)
 			ev_hr_arr[idx] = a_re + b_re
 			ev_hi_arr[idx] = a_im + b_im
 			ev_vr_arr[idx] = om_arr[idx] * (-a_im + b_im)
@@ -775,22 +857,30 @@ func _prepare_time(simulation_time: float) -> void:
 func _refresh_coastal_long_weights() -> void:
 	if _cascades.is_empty():
 		return
-	var long_cascade: _CascadeData = _cascades[0]
+	_fill_coastal_weights(_cascades[0], _coastal_wind_direction)
+
+
+func _fill_coastal_weights(cascade: _CascadeData, direction: Vector2) -> void:
 	var active: bool = _coastal_runtime != null and _coastal_runtime.enabled
-	for index in long_cascade.f_kx.size():
+	var safe_direction := direction.normalized() if direction.length_squared() > 1.0e-8 else Vector2.RIGHT
+	for index in cascade.f_kx.size():
 		if active:
-			long_cascade.f_coastal_weight_pos[index] = _coastal_angular_weight(long_cascade.f_kx[index], long_cascade.f_ky[index])
-			long_cascade.f_coastal_weight_neg[index] = _coastal_angular_weight(-long_cascade.f_kx[index], -long_cascade.f_ky[index])
+			cascade.f_coastal_weight_pos[index] = _coastal_angular_weight_for_direction(cascade.f_kx[index], cascade.f_ky[index], safe_direction)
+			cascade.f_coastal_weight_neg[index] = _coastal_angular_weight_for_direction(-cascade.f_kx[index], -cascade.f_ky[index], safe_direction)
 		else:
-			long_cascade.f_coastal_weight_pos[index] = 0.0
-			long_cascade.f_coastal_weight_neg[index] = 0.0
+			cascade.f_coastal_weight_pos[index] = 0.0
+			cascade.f_coastal_weight_neg[index] = 0.0
 
 
 func _coastal_angular_weight(kx: float, ky: float) -> float:
+	return _coastal_angular_weight_for_direction(kx, ky, _coastal_wind_direction)
+
+
+func _coastal_angular_weight_for_direction(kx: float, ky: float, direction: Vector2) -> float:
 	var k_len := sqrt(kx * kx + ky * ky)
 	if k_len <= 1.0e-6:
 		return 1.0
-	var dot_wind := clampf((kx * _coastal_wind_direction.x + ky * _coastal_wind_direction.y) / k_len, -1.0, 1.0)
+	var dot_wind := clampf((kx * direction.x + ky * direction.y) / k_len, -1.0, 1.0)
 	var angle_deg := rad_to_deg(acos(dot_wind))
 	if angle_deg <= _coastal_inner_deg:
 		return 1.0
@@ -842,7 +932,7 @@ func get_cascades_compact() -> Array:
 
 
 func _sync_native() -> void:
-	if _native_backend == null:
+	if _native_backend == null or _spectrum_transition_active:
 		return
 	_native_backend.clear()
 	_native_backend.set_sea_level(_sea_level)
@@ -866,6 +956,63 @@ func _sync_native() -> void:
 	elif _native_backend.has_method(&"clear_coastal"):
 		_native_backend.clear_coastal()
 	_native_backend.finalize_spectrum()
+
+
+func _compact_transition_cascade(current: _CascadeData, target: _CascadeData, budget: int) -> void:
+	var current_keep: int = current.f_kx.size() if _mode == MODE_FULL_PAIRS else min(budget, current.f_kx.size())
+	var target_keep: int = target.f_kx.size() if _mode == MODE_FULL_PAIRS else min(budget, target.f_kx.size())
+	var current_selected := {}
+	var target_selected := {}
+	for position in current_keep:
+		current_selected[current.sorted_indices[position] if current_keep < current.f_kx.size() else position] = true
+	for position in target_keep:
+		target_selected[target.sorted_indices[position] if target_keep < target.f_kx.size() else position] = true
+	var selected: Array[int] = []
+	for index in current_selected:
+		selected.append(index)
+	for index in target_selected:
+		if not current_selected.has(index):
+			selected.append(index)
+	selected.sort()
+	var count := selected.size()
+	current.kx.resize(count); current.ky.resize(count); current.omega.resize(count)
+	current.a1.resize(count); current.a2.resize(count); current.c11.resize(count); current.c12.resize(count); current.c21.resize(count); current.c22.resize(count)
+	current.parity.resize(count); current.weight.resize(count)
+	current.h0_re.resize(count); current.h0_im.resize(count); current.h0n_re.resize(count); current.h0n_im.resize(count)
+	current.transition_h0_re.resize(count); current.transition_h0_im.resize(count); current.transition_h0n_re.resize(count); current.transition_h0n_im.resize(count)
+	current.coastal_weight_pos.resize(count); current.coastal_weight_neg.resize(count)
+	current.transition_coastal_weight_pos.resize(count); current.transition_coastal_weight_neg.resize(count)
+	current.ev_h_re.resize(count); current.ev_h_im.resize(count); current.ev_v_re.resize(count); current.ev_v_im.resize(count)
+	current.ev_a_h_re.resize(count); current.ev_a_h_im.resize(count); current.ev_b_h_re.resize(count); current.ev_b_h_im.resize(count)
+	current.ev_a_v_re.resize(count); current.ev_a_v_im.resize(count); current.ev_b_v_re.resize(count); current.ev_b_v_im.resize(count)
+	for slot in count:
+		var index: int = selected[slot]
+		var kx := current.f_kx[index]
+		var ky := current.f_ky[index]
+		var k_len := sqrt(kx * kx + ky * ky)
+		var kx_hat := kx / k_len if k_len > 0.000001 else 0.0
+		var ky_hat := ky / k_len if k_len > 0.000001 else 0.0
+		current.kx[slot] = kx; current.ky[slot] = ky; current.omega[slot] = current.f_omega[index]
+		current.a1[slot] = current.lambda * kx_hat; current.a2[slot] = current.lambda * ky_hat
+		current.c11[slot] = current.a1[slot] * kx; current.c12[slot] = current.a1[slot] * ky
+		current.c21[slot] = current.a2[slot] * kx; current.c22[slot] = current.a2[slot] * ky
+		current.parity[slot] = current.f_parity[index]; current.weight[slot] = current.f_weight[index]
+		if current_selected.has(index):
+			current.h0_re[slot] = current.f_h0_re[index]; current.h0_im[slot] = current.f_h0_im[index]
+			current.h0n_re[slot] = current.f_h0n_re[index]; current.h0n_im[slot] = current.f_h0n_im[index]
+			current.coastal_weight_pos[slot] = current.f_coastal_weight_pos[index]; current.coastal_weight_neg[slot] = current.f_coastal_weight_neg[index]
+		else:
+			current.h0_re[slot] = 0.0; current.h0_im[slot] = 0.0; current.h0n_re[slot] = 0.0; current.h0n_im[slot] = 0.0
+			current.coastal_weight_pos[slot] = 0.0; current.coastal_weight_neg[slot] = 0.0
+		if target_selected.has(index):
+			current.transition_h0_re[slot] = target.f_h0_re[index]; current.transition_h0_im[slot] = target.f_h0_im[index]
+			current.transition_h0n_re[slot] = target.f_h0n_re[index]; current.transition_h0n_im[slot] = target.f_h0n_im[index]
+			current.transition_coastal_weight_pos[slot] = target.f_coastal_weight_pos[index]; current.transition_coastal_weight_neg[slot] = target.f_coastal_weight_neg[index]
+		else:
+			current.transition_h0_re[slot] = 0.0; current.transition_h0_im[slot] = 0.0; current.transition_h0n_re[slot] = 0.0; current.transition_h0n_im[slot] = 0.0
+			current.transition_coastal_weight_pos[slot] = 0.0; current.transition_coastal_weight_neg[slot] = 0.0
+	current.transition_lambda = target.lambda
+	current.count = count
 
 
 func _compact_cascade(cascade: _CascadeData, budget: int) -> void:

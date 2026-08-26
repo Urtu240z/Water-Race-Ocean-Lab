@@ -14,12 +14,18 @@ const BASE_WAVE_PRESET_PATHS := [
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
 var _applying_wave_preset := false
+var _applying_wave_transition := false
+var _wave_transition_active := false
+var _wave_transition_start_configs: Array[OpenOceanFFTConfig] = []
+var _wave_transition_target_preset: OceanWavePreset = null
+var _wave_transition_target_configs: Array[OpenOceanFFTConfig] = []
+var _wave_transition_start_short_geometry := 0.25
 
 @export_category("Wave Spectrum")
 @export var wave_preset: OceanWavePreset:
 	set(value):
 		wave_preset = value
-		if wave_preset != null and is_inside_tree():
+		if wave_preset != null and is_inside_tree() and not _applying_wave_transition:
 			apply_selected_wave_preset()
 
 @export_range(0.0, 60.0, 0.1) var global_wind_speed_mps := 12.0:
@@ -28,8 +34,10 @@ var _applying_wave_preset := false
 		_mark_wave_spectrum_dirty()
 
 @export var auto_apply_wave_changes := true
+@export_range(0.0, 60.0, 0.1) var wave_transition_duration_s := 10.0
 @export_file("*.tres") var preset_save_path := "res://ocean_v3/presets/waves/custom_wave.tres"
 @export_tool_button("Apply Selected Preset", "Reload") var apply_selected_wave_preset_button = apply_selected_wave_preset
+@export_tool_button("Transition To Selected Preset", "CurvePath") var transition_to_selected_wave_preset_button = transition_to_selected_wave_preset
 @export_tool_button("Apply Wave Changes", "Play") var apply_wave_changes_button = apply_wave_changes
 @export_tool_button("Save Current Wave Preset", "Save") var save_current_wave_preset_button = save_current_wave_preset
 
@@ -752,10 +760,11 @@ func _process(_delta: float) -> void:
 		_sync_water_visual_parameters()
 	if _wave_spectrum_dirty and auto_apply_wave_changes and Time.get_ticks_msec() >= _wave_spectrum_apply_at_ms:
 		apply_wave_changes()
+	_update_wave_transition_exports()
 
 
 func _mark_wave_spectrum_dirty() -> void:
-	if _applying_wave_preset:
+	if _applying_wave_preset or _applying_wave_transition:
 		return
 	_wave_spectrum_dirty = true
 	_wave_spectrum_apply_at_ms = Time.get_ticks_msec() + WAVE_REBUILD_DEBOUNCE_MS
@@ -774,6 +783,112 @@ func apply_selected_wave_preset() -> void:
 	_applying_wave_preset = false
 	_request_visual_sync()
 	apply_wave_changes()
+
+
+func transition_to_selected_wave_preset() -> void:
+	transition_to_wave_preset(wave_preset, wave_transition_duration_s)
+
+
+func transition_to_wave_preset(target_preset: OceanWavePreset, duration_seconds: float) -> void:
+	if target_preset == null:
+		push_warning("Select an OceanWavePreset before starting a transition.")
+		return
+	if Engine.is_editor_hint():
+		push_warning("Wave preset transitions run in the game; Apply Selected Preset remains available for editor authoring.")
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT")
+	if fft_module == null or not fft_module.has_method(&"transition_to_wave_spectrum_settings"):
+		push_error("OpenOceanFFT does not support wave preset transitions.")
+		return
+	# Capture the exact visible endpoint before retargeting, rather than a stale
+	# Inspector snapshot from the previous frame.
+	if _wave_transition_active:
+		_update_wave_transition_exports()
+	_wave_transition_start_configs = _build_active_wave_configs()
+	_wave_transition_start_short_geometry = short_geometry_strength
+	_wave_transition_target_preset = target_preset
+	_wave_transition_target_configs = target_preset.build_cascades()
+	_wave_spectrum_dirty = false
+	if not bool(fft_module.call(&"transition_to_wave_spectrum_settings", _wave_transition_target_configs, duration_seconds)):
+		return
+	if duration_seconds <= 0.0:
+		_apply_transition_target_exports()
+		return
+	_wave_transition_active = true
+
+
+func _update_wave_transition_exports() -> void:
+	if not _wave_transition_active:
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT")
+	if fft_module == null or not fft_module.has_method(&"wave_transition_state"):
+		return
+	var state: Dictionary = fft_module.call(&"wave_transition_state")
+	if bool(state.get("active", false)):
+		_apply_transition_exports(float(state.get("alpha", 0.0)))
+		return
+	if bool(state.get("cancelled", false)):
+		_wave_transition_active = false
+		_wave_transition_start_configs = []
+		_wave_transition_target_preset = null
+		_wave_transition_target_configs = []
+		return
+	_apply_transition_target_exports()
+
+
+func _apply_transition_exports(alpha: float) -> void:
+	if _wave_transition_target_preset == null or _wave_transition_start_configs.size() != 3:
+		return
+	_applying_wave_transition = true
+	global_wind_speed_mps = lerpf(_wave_transition_start_configs[0].wind_speed_mps, _wave_transition_target_configs[0].wind_speed_mps, alpha)
+	for index in 3:
+		_copy_band_from_config(_interpolate_wave_config(_wave_transition_start_configs[index], _wave_transition_target_configs[index], alpha), index)
+	short_geometry_strength = lerpf(_wave_transition_start_short_geometry, _wave_transition_target_preset.short_geometry_strength, alpha)
+	_applying_wave_transition = false
+	_request_visual_sync()
+
+
+func _apply_transition_target_exports() -> void:
+	if _wave_transition_target_preset == null:
+		return
+	_applying_wave_transition = true
+	global_wind_speed_mps = _wave_transition_target_preset.global_wind_speed_mps
+	_copy_band_from_settings(_wave_transition_target_preset.long_band, 0)
+	_copy_band_from_settings(_wave_transition_target_preset.mid_band, 1)
+	_copy_band_from_settings(_wave_transition_target_preset.short_band, 2)
+	short_geometry_strength = _wave_transition_target_preset.short_geometry_strength
+	wave_preset = _wave_transition_target_preset
+	_applying_wave_transition = false
+	_wave_spectrum_dirty = false
+	_wave_transition_active = false
+	_wave_transition_start_configs = []
+	_wave_transition_target_preset = null
+	_wave_transition_target_configs = []
+	_request_visual_sync()
+
+
+func _interpolate_wave_config(current: OpenOceanFFTConfig, target: OpenOceanFFTConfig, alpha: float) -> OpenOceanFFTConfig:
+	var result := current.duplicate() as OpenOceanFFTConfig
+	result.target_hs_m = lerpf(current.target_hs_m, target.target_hs_m, alpha)
+	result.choppiness = lerpf(current.choppiness, target.choppiness, alpha)
+	var direction := current.wind_direction.normalized().lerp(target.wind_direction.normalized(), alpha)
+	result.wind_direction = direction.normalized() if direction.length_squared() > 1.0e-8 else Vector2.RIGHT
+	result.directional_spread = lerpf(current.directional_spread, target.directional_spread, alpha)
+	result.fetch_length_m = lerpf(current.fetch_length_m, target.fetch_length_m, alpha)
+	result.swell = lerpf(current.swell, target.swell, alpha)
+	result.detail = lerpf(current.detail, target.detail, alpha)
+	result.jonswap_spread = lerpf(current.jonswap_spread, target.jonswap_spread, alpha)
+	result.min_wavelength_m = lerpf(current.min_wavelength_m, target.min_wavelength_m, alpha)
+	result.max_wavelength_m = lerpf(current.max_wavelength_m, target.max_wavelength_m, alpha)
+	result.transition_width_m = lerpf(current.transition_width_m, target.transition_width_m, alpha)
+	result.short_wave_damping_m = lerpf(current.short_wave_damping_m, target.short_wave_damping_m, alpha)
+	return result
+
+
+func _copy_band_from_config(config: OpenOceanFFTConfig, index: int) -> void:
+	var band := OceanWaveBandSettings.new()
+	band.copy_from(config)
+	_copy_band_from_settings(band, index)
 
 
 func apply_wave_changes() -> void:

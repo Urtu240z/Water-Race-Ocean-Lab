@@ -26,7 +26,23 @@ static func build_h0_rgba32f(config: Resource, simulation_seed: int) -> PackedBy
 
 static func build_h0_split_rgba32f(config: OpenOceanFFTConfig, simulation_seed: int,
 		inner_deg: float, outer_deg: float) -> Dictionary:
-	var h0 := _build_h0_vector(config, simulation_seed)
+	return split_h0_rgba32f(config, build_h0_rgba32f(config, simulation_seed), inner_deg, outer_deg)
+
+
+static func split_h0_rgba32f(config: OpenOceanFFTConfig, h0_data: PackedByteArray,
+		inner_deg: float, outer_deg: float) -> Dictionary:
+	var packed := h0_data.to_float32_array()
+	var n: int = config.resolution
+	var h0 := PackedVector2Array()
+	h0.resize(n * n)
+	for index in h0.size():
+		var base := index * 4
+		h0[index] = Vector2(packed[base], packed[base + 1])
+	return _split_h0_vector_rgba32f(config, h0, inner_deg, outer_deg)
+
+
+static func _split_h0_vector_rgba32f(config: OpenOceanFFTConfig, h0: PackedVector2Array,
+		inner_deg: float, outer_deg: float) -> Dictionary:
 	var wind: Vector2 = config.wind_direction.normalized()
 	var delta_k: float = TAU / config.domain_size_m
 	var half := float(config.resolution) * 0.5

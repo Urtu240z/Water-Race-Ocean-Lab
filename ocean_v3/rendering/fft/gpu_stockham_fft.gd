@@ -20,6 +20,8 @@ var h0_upload_byte_count := 0
 var _rd: RenderingDevice
 var _config: Resource
 var _h0 := RID()
+var _h0_target := RID()
+var _transition_target_config: Resource = null
 var _ping_a: Array[RID] = [RID(), RID()]
 var _ping_b: Array[RID] = [RID(), RID()]
 var _ping_c: Array[RID] = [RID(), RID()]
@@ -81,7 +83,7 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 	normal_initial_data.resize(_config.resolution * _config.resolution * 8)
 	normal_rid = _create_texture(RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT, resource_prefix + ".Normal", normal_initial_data)
 
-	_evolve_set = _create_image_set(_shaders[0], [_h0, _ping_a[0], _ping_b[0], _ping_c[0]])
+	_rebuild_evolve_set()
 	_fft_sets[0] = _create_image_set(_shaders[1], [_ping_a[0], _ping_b[0], _ping_c[0], _ping_a[1], _ping_b[1], _ping_c[1]])
 	_fft_sets[1] = _create_image_set(_shaders[1], [_ping_a[1], _ping_b[1], _ping_c[1], _ping_a[0], _ping_b[0], _ping_c[0]])
 	_assemble_set = _create_image_set(_shaders[2], [_ping_a[0], _ping_b[0], _ping_c[0], displacement_rid, normal_rid])
@@ -93,8 +95,48 @@ func initialize(config: Resource, h0_data: PackedByteArray, resource_prefix := "
 
 func upload_h0(h0_data: PackedByteArray) -> void:
 	if ready and _h0.is_valid():
+		_clear_h0_transition()
 		_rd.texture_update(_h0, 0, h0_data)
 		h0_upload_byte_count = h0_data.size()
+
+
+func begin_h0_transition(target_h0_data: PackedByteArray, target_config: Resource) -> void:
+	if not ready or target_config == null:
+		return
+	_clear_h0_transition()
+	_h0_target = _create_texture(
+		RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT,
+		_resource_prefix + ".H0Target",
+		target_h0_data,
+		true
+	)
+	_transition_target_config = target_config
+	_rebuild_evolve_set()
+
+
+func replace_current_h0(current_h0_data: PackedByteArray, current_config: Resource) -> void:
+	if not ready or current_config == null:
+		return
+	_clear_h0_transition()
+	_rd.texture_update(_h0, 0, current_h0_data)
+	h0_upload_byte_count = current_h0_data.size()
+	_config = current_config
+
+
+func complete_h0_transition() -> void:
+	if not ready or not _h0_target.is_valid():
+		return
+	if _evolve_set.is_valid():
+		_rd.free_rid(_evolve_set)
+		_evolve_set = RID()
+	if _h0.is_valid():
+		_rd.free_rid(_h0)
+	_h0 = _h0_target
+	_h0_target = RID()
+	if _transition_target_config != null:
+		_config = _transition_target_config
+	_transition_target_config = null
+	_rebuild_evolve_set()
 
 
 func diagnostic_state() -> Dictionary:
@@ -102,6 +144,8 @@ func diagnostic_state() -> Dictionary:
 	return {
 		"ready": ready,
 		"h0_rid": _h0.get_id() if _h0.is_valid() else -1,
+		"h0_target_rid": _h0_target.get_id() if _h0_target.is_valid() else -1,
+		"h0_transition_active": _h0_target.is_valid(),
 		"h0_upload_bytes": h0_upload_byte_count,
 		"displacement_rid": displacement_rid.get_id() if displacement_rid.is_valid() else -1,
 		"normal_rid": normal_rid.get_id() if normal_rid.is_valid() else -1,
@@ -159,7 +203,7 @@ func set_foam_resolution(foam_resolution: int) -> void:
 	ready = _evolve_set.is_valid() and _fft_sets[0].is_valid() and _fft_sets[1].is_valid() and _assemble_set.is_valid() and _foam_resources_ready()
 
 
-func dispatch(render_time: float, delta_s: float = 0.0) -> void:
+func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0) -> void:
 	if not ready:
 		return
 	var groups = ceili(float(_config.resolution) / 8.0)
@@ -167,9 +211,11 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 
 	_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[0])
 	_rd.compute_list_bind_uniform_set(compute_list, _evolve_set, 0)
-	var evolution_depth_or_choppiness: float = _config.choppiness
-	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, evolution_depth_or_choppiness, _config.domain_size_m])
-	_rd.compute_list_set_push_constant(compute_list, evolve_push.to_byte_array(), 16)
+	var alpha := transition_alpha if _h0_target.is_valid() else 0.0
+	var target_config := _transition_target_config if _transition_target_config != null else _config
+	var evolution_depth_or_choppiness := lerpf(_config.choppiness, target_config.choppiness, alpha)
+	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, evolution_depth_or_choppiness, _config.domain_size_m, alpha])
+	_rd.compute_list_set_push_constant(compute_list, evolve_push.to_byte_array(), 20)
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
 	_rd.compute_list_add_barrier(compute_list)
 
@@ -197,10 +243,10 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		spatial_normalization,
 		_config.domain_size_m / float(_config.resolution),
 		7.5,
-		_config.foam_whitecap,
-		maxf(delta_s, 0.0) * _config.foam_amount * 7.5,
-		maxf(delta_s, 0.0) * maxf(_config.foam_decay, 0.5) * 1.15,
-		_config.foam_cascade_weight if _config.foam_enabled else 0.0,
+		lerpf(_config.foam_whitecap, target_config.foam_whitecap, alpha),
+		maxf(delta_s, 0.0) * lerpf(_config.foam_amount, target_config.foam_amount, alpha) * 7.5,
+		maxf(delta_s, 0.0) * maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5) * 1.15,
+		lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
 	])
 	_rd.compute_list_set_push_constant(compute_list, assemble_push.to_byte_array(), 32)
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
@@ -209,7 +255,7 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
 	var crest_update_due := false
 	var crest_delta := 0.0
-	if _config.foam_enabled and _crest_foam_compute_enabled:
+	if (_config.foam_enabled or target_config.foam_enabled) and _crest_foam_compute_enabled:
 		_crest_foam_accumulator += maxf(delta_s, 0.0)
 		var crest_period := 1.0 / _crest_foam_update_hz
 		if _crest_foam_accumulator >= crest_period:
@@ -223,11 +269,11 @@ func dispatch(render_time: float, delta_s: float = 0.0) -> void:
 		# update_foam receives rates per second and accumulated simulation delta; the shader
 		# applies the exponential attack/release and residual decay internally.
 		var foam_push := PackedFloat32Array([
-			_config.foam_whitecap,
-			maxf(_config.foam_amount, 0.0) * 7.5,
-			_config.foam_cascade_weight if _config.foam_enabled else 0.0,
+			lerpf(_config.foam_whitecap, target_config.foam_whitecap, alpha),
+			maxf(lerpf(_config.foam_amount, target_config.foam_amount, alpha), 0.0) * 7.5,
+			lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
 			_foam_deposit_strength,
-			maxf(_config.foam_decay, 0.5) * 1.15 * _foam_residual_decay_multiplier,
+			maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5) * 1.15 * _foam_residual_decay_multiplier,
 			crest_delta,
 			1.0 if _foam_advection_enabled else 0.0,
 			_foam_advection_strength,
@@ -275,7 +321,9 @@ func free_resources() -> void:
 		if uniform_set.is_valid():
 			_rd.free_rid(uniform_set)
 	_uniform_sets.clear()
-	for texture in [_h0, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], _ping_c[0], _ping_c[1], displacement_rid, normal_rid]:
+	if _evolve_set.is_valid():
+		_rd.free_rid(_evolve_set)
+	for texture in [_h0, _h0_target, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], _ping_c[0], _ping_c[1], displacement_rid, normal_rid]:
 		if texture.is_valid():
 			_rd.free_rid(texture)
 	for pipeline in _pipelines:
@@ -287,6 +335,8 @@ func free_resources() -> void:
 	_pipelines.clear()
 	_shaders.clear()
 	_h0 = RID()
+	_h0_target = RID()
+	_transition_target_config = null
 	displacement_rid = RID()
 	normal_rid = RID()
 	foam_rid = RID()
@@ -347,6 +397,32 @@ func _create_image_set(shader: RID, textures: Array[RID]) -> RID:
 	var uniform_set := _rd.uniform_set_create(uniforms, shader, 0)
 	_uniform_sets.append(uniform_set)
 	return uniform_set
+
+
+func _rebuild_evolve_set() -> void:
+	if _evolve_set.is_valid():
+		_rd.free_rid(_evolve_set)
+	var h0_target := _h0_target if _h0_target.is_valid() else _h0
+	var uniforms: Array[RDUniform] = []
+	for binding in 5:
+		var uniform := RDUniform.new()
+		uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+		uniform.binding = binding
+		uniform.add_id([_h0, h0_target, _ping_a[0], _ping_b[0], _ping_c[0]][binding])
+		uniforms.append(uniform)
+	_evolve_set = _rd.uniform_set_create(uniforms, _shaders[0], 0)
+
+
+func _clear_h0_transition() -> void:
+	if _h0_target.is_valid() and _evolve_set.is_valid():
+		_rd.free_rid(_evolve_set)
+		_evolve_set = RID()
+	if _h0_target.is_valid():
+		_rd.free_rid(_h0_target)
+	_h0_target = RID()
+	_transition_target_config = null
+	if _rd != null and _h0.is_valid() and _shaders.size() > 0:
+		_rebuild_evolve_set()
 
 
 func _create_foam_resources(resource_prefix: String) -> void:
