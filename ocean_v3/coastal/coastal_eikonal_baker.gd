@@ -36,6 +36,7 @@ var last_shadow_recovery_ms := 0.0
 var last_direction_smoothing_ms := 0.0
 var last_cut_locus_detection_ms := 0.0
 var last_cut_locus_band_ms := 0.0
+var last_cut_locus_core_bridge_ms := 0.0
 var last_cut_locus_blend_ms := 0.0
 var last_cut_locus_core_count := 0
 var last_cut_locus_band_count := 0
@@ -412,6 +413,7 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 		output.cut_locus_mask.fill(0)
 		last_cut_locus_detection_ms = 0.0
 		last_cut_locus_band_ms = 0.0
+		last_cut_locus_core_bridge_ms = 0.0
 		last_cut_locus_blend_ms = 0.0
 		last_cut_locus_core_count = 0
 		last_cut_locus_band_count = 0
@@ -433,6 +435,11 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 		queue.append(index)
 		core_count += 1
 	last_cut_locus_core_count = core_count
+	var core_bridge_start := Time.get_ticks_usec()
+	var core_bridge_fields: Array = _build_core_bridge_fields(output, core_mask, incoming_direction)
+	last_cut_locus_core_bridge_ms = float(Time.get_ticks_usec() - core_bridge_start) / 1000.0
+	var core_bridge_x: PackedFloat32Array = core_bridge_fields[0]
+	var core_bridge_z: PackedFloat32Array = core_bridge_fields[1]
 	var radius_cells: int = maxi(0, ceili(cut_locus_blend_radius_m / maxf(output.cell_size_m, 1.0e-6)))
 	var head := 0
 	while head < queue.size():
@@ -458,7 +465,7 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 	var band_count := 0
 	var modified_count := 0
 	for index in count:
-		if distance_cells[index] < 0:
+		if distance_cells[index] < 0 or (cut_locus_blend_radius_m > 0.0 and float(distance_cells[index]) * output.cell_size_m >= cut_locus_blend_radius_m):
 			continue
 		cut_mask[index] = 2 if core_mask[index] != 0 else 1
 		band_indices.append(index)
@@ -470,7 +477,7 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 	last_cut_locus_modified_count = modified_count
 	output.cut_locus_mask = cut_mask
 	var blend_start := Time.get_ticks_usec()
-	_apply_cut_locus_blend(output, distance_cells, band_indices, incoming_direction)
+	_apply_cut_locus_blend(output, distance_cells, band_indices, incoming_direction, core_bridge_x, core_bridge_z)
 	last_cut_locus_blend_ms = float(Time.get_ticks_usec() - blend_start) / 1000.0
 
 
@@ -514,15 +521,102 @@ func _direction_angle(first: Vector2, second: Vector2) -> float:
 	return acos(clampf(first.dot(second), -1.0, 1.0))
 
 
-func _apply_cut_locus_blend(output, distance_cells: PackedInt32Array, band_indices: PackedInt32Array, incoming_direction: Vector2) -> void:
-	var current_x: PackedFloat32Array = output.render_direction_x
-	var current_z: PackedFloat32Array = output.render_direction_z
+func _resolve_core_bridge_direction(samples: PackedVector2Array, incoming_direction: Vector2) -> Vector2:
+	var sum := Vector2.ZERO
+	for direction in samples:
+		var normalized := direction.normalized()
+		if normalized.length_squared() <= 1.0e-8:
+			continue
+		if normalized.dot(incoming_direction) >= -0.25:
+			sum += normalized
+	if sum.length_squared() <= 1.0e-8:
+		return incoming_direction
+	var bridge := sum.normalized()
+	return incoming_direction if bridge.dot(incoming_direction) < -0.25 else bridge
+
+
+func _build_core_bridge_fields(output, core_mask: PackedByteArray, incoming_direction: Vector2) -> Array:
+	## Resolve one stable bridge direction per connected CORE component.
+	## Samples are PRE-CUT render directions from the non-core boundary.
+	var count: int = output.width * output.height
+	var bridge_x := PackedFloat32Array()
+	var bridge_z := PackedFloat32Array()
+	bridge_x.resize(count)
+	bridge_z.resize(count)
+	bridge_x.fill(0.0)
+	bridge_z.fill(0.0)
+	var seen := PackedByteArray()
+	seen.resize(count)
+	seen.fill(0)
+	var queue := PackedInt32Array()
+	var component := PackedInt32Array()
+	for seed in count:
+		if core_mask[seed] == 0 or seen[seed] != 0:
+			continue
+		queue.clear()
+		component.clear()
+		queue.append(seed)
+		seen[seed] = 1
+		var head := 0
+		while head < queue.size():
+			var index: int = queue[head]
+			head += 1
+			component.append(index)
+			var x: int = index % output.width
+			var z: int = index / output.width
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dz == 0:
+						continue
+					var neighbor_x := x + dx
+					var neighbor_z := z + dz
+					if neighbor_x < 0 or neighbor_z < 0 or neighbor_x >= output.width or neighbor_z >= output.height:
+						continue
+					var neighbor_index: int = neighbor_z * output.width + neighbor_x
+					if core_mask[neighbor_index] != 0 and seen[neighbor_index] == 0:
+						seen[neighbor_index] = 1
+						queue.append(neighbor_index)
+		var samples := PackedVector2Array()
+		for index in component:
+			var x: int = index % output.width
+			var z: int = index / output.width
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dz == 0:
+						continue
+					var neighbor_x := x + dx
+					var neighbor_z := z + dz
+					if neighbor_x < 0 or neighbor_z < 0 or neighbor_x >= output.width or neighbor_z >= output.height:
+						continue
+					var neighbor_index: int = neighbor_z * output.width + neighbor_x
+					if core_mask[neighbor_index] != 0 or output.valid_mask[neighbor_index] == 0 or output.reached_mask[neighbor_index] == 0:
+						continue
+					samples.append(Vector2(output.render_direction_x[neighbor_index], output.render_direction_z[neighbor_index]))
+		var bridge := _resolve_core_bridge_direction(samples, incoming_direction)
+		for index in component:
+			bridge_x[index] = bridge.x
+			bridge_z[index] = bridge.y
+	return [bridge_x, bridge_z]
+
+
+func _apply_cut_locus_blend(output, distance_cells: PackedInt32Array, band_indices: PackedInt32Array, incoming_direction: Vector2, core_bridge_x: PackedFloat32Array, core_bridge_z: PackedFloat32Array) -> void:
+	# Explicit copies keep each pass previous->next and prevent in-place aliasing.
+	var current_x: PackedFloat32Array = output.render_direction_x.duplicate()
+	var current_z: PackedFloat32Array = output.render_direction_z.duplicate()
+	for index in band_indices:
+		if output.cut_locus_mask[index] >= 2:
+			current_x[index] = core_bridge_x[index]
+			current_z[index] = core_bridge_z[index]
 	var radius_m := maxf(cut_locus_blend_radius_m, 0.0)
 	var strength := clampf(cut_locus_blend_strength, 0.0, 1.0)
 	for _pass in maxi(cut_locus_blend_passes, 0):
-		var next_x: PackedFloat32Array = current_x
-		var next_z: PackedFloat32Array = current_z
+		var next_x: PackedFloat32Array = current_x.duplicate()
+		var next_z: PackedFloat32Array = current_z.duplicate()
 		for index in band_indices:
+			if output.cut_locus_mask[index] >= 2:
+				next_x[index] = core_bridge_x[index]
+				next_z[index] = core_bridge_z[index]
+				continue
 			var current := Vector2(current_x[index], current_z[index]).normalized()
 			var sum := Vector2.ZERO
 			var samples := 0
@@ -560,8 +654,11 @@ func _apply_cut_locus_blend(output, distance_cells: PackedInt32Array, band_indic
 			if blended.length_squared() <= 1.0e-8:
 				continue
 			if blended.dot(incoming_direction) < -0.25:
-				blended = current if current.dot(incoming_direction) >= -0.25 else average
-				if blended.dot(incoming_direction) < -0.25:
+				if current.dot(incoming_direction) >= -0.25:
+					blended = current
+				elif average.dot(incoming_direction) >= -0.25:
+					blended = average
+				else:
 					blended = incoming_direction
 			next_x[index] = blended.x
 			next_z[index] = blended.y

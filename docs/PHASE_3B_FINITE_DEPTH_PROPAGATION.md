@@ -95,16 +95,23 @@ campo a 1 en agua y 0 en LAND; samples de recursos legacy sin el array aplican
 el mismo fallback.
 
 La dirección de presentación sigue la cadena `RAW EIKONAL → adaptive smoothing
-→ cut locus detection → localized vector blend → render_direction`. La detección
+→ cut locus detection → core bridge/anchor → localized vector blend →
+render_direction`. La detección
 usa `local_direction` raw como señal conservadora: exige un salto vecino mayor
 que `cut_locus_detect_angle_deg`, una diferencia clara entre lados opuestos y un
 vecindario 3×3 completamente water/reached. Así una refracción suave no basta
 por sí sola. Una BFS multi-source crea la banda en agua reached, con LAND como
-barrera; dentro de ella sólo se actualiza `render_direction` en
-`cut_locus_blend_passes` iteraciones usando promedio vectorial y las celdas fuera
-de la banda como condiciones de contorno. No es un solver multi-arrival ni
-reconstruye el Eikonal: es una corrección de presentación para fusionar ramas
-equivalentes del first-arrival.
+barrera. Antes del blend, el CORE se separa en componentes conectadas 8-neighbor;
+cada componente recibe un único `bridge_direction` calculado con muestras de
+`render_direction` PRE-CUT en su frontera no-core. Las muestras fuertemente
+backwards (dot con la dirección entrante menor que -0.25) se descartan. Si la
+suma vectorial se cancela o no queda ninguna muestra estable, el fallback es la
+dirección entrante; el mismo filtro evita producir una dirección final hacia
+atrás. El CORE queda fijo con ese ancla durante todos los pases, mientras que
+el resto de la banda se actualiza desde copias explícitas previous→next de los
+arrays y las celdas fuera de la banda permanecen fijas. No es un solver
+multi-arrival ni reconstruye el Eikonal: es una corrección de presentación para
+fusionar ramas equivalentes del first-arrival.
 
 ## Visualización y debug
 
@@ -140,9 +147,11 @@ ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
 `sort_custom` del grid. La recuperación energética y el suavizado de dirección
 son también O(N) por pasada, sin cambiar `travel_time`, `phase`, `reached` ni
 `local_direction`. Cut-locus detection y construcción de banda son O(N); el
-blend es O(B × passes), donde B es el número de celdas de la banda. El preview
-imprime esos tres tiempos junto a bathymetry, metrics, sweep Eikonal, fase,
-shadow, debug mesh y total.
+core bridge tiene un coste O(N) de almacenamiento/recorrido de sus campos y
+O(C) de componentes con una vecindad constante por celda CORE, donde N es el
+grid y C el número de celdas CORE; el blend es O(B × passes), donde B es el
+número de celdas de la banda. El preview imprime detección, banda, core bridge y blend junto a
+bathymetry, metrics, sweep Eikonal, fase, shadow, debug mesh y total.
 
 Los parámetros de recuperación parten de `shadow_recovery_enabled = true`,
 `shadow_diffraction_angle_deg = 12`, `shadow_recovery_strength = 1`. El campo
@@ -155,7 +164,10 @@ La etapa cut locus parte de `cut_locus_enabled = true`,
 `cut_locus_blend_passes = 12` y `cut_locus_blend_strength = 0.55`. Para evitar
 confundir una curvatura refractiva con dos ramas reconvergentes, además del
 umbral configurable de 35° exige una separación fuerte de 60° entre lados
-opuestos; ese filtro no se expone como otro parámetro.
+opuestos; ese filtro no se expone como otro parámetro. El bridge no modifica
+`travel_time`, `phase_rad`, `phase_offset_rad`, gradientes de fase,
+`local_direction`, `reached_mask` ni `shadow_scale`; sólo escribe
+`render_direction_x/z`.
 
 Además de `eikonal_max_residual`, el bake registra
 `eikonal_interior_residual_rad_m`: el máximo residual sólo en agua interior

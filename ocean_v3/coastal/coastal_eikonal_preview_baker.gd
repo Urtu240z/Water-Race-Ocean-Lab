@@ -72,6 +72,7 @@ class EikonalWorker extends RefCounted:
 			"direction_smoothing_ms": baker.last_direction_smoothing_ms,
 			"cut_locus_detection_ms": baker.last_cut_locus_detection_ms,
 			"cut_locus_band_ms": baker.last_cut_locus_band_ms,
+			"cut_locus_core_bridge_ms": baker.last_cut_locus_core_bridge_ms,
 			"cut_locus_blend_ms": baker.last_cut_locus_blend_ms,
 			"cut_locus_core_count": baker.last_cut_locus_core_count,
 			"cut_locus_band_count": baker.last_cut_locus_band_count,
@@ -136,6 +137,7 @@ var last_shadow_recovery_ms := 0.0
 var last_direction_smoothing_ms := 0.0
 var last_cut_locus_detection_ms := 0.0
 var last_cut_locus_band_ms := 0.0
+var last_cut_locus_core_bridge_ms := 0.0
 var last_cut_locus_blend_ms := 0.0
 var last_cut_locus_core_count := 0
 var last_cut_locus_band_count := 0
@@ -159,6 +161,7 @@ var _pending_shadow_recovery_ms := 0.0
 var _pending_direction_smoothing_ms := 0.0
 var _pending_cut_locus_detection_ms := 0.0
 var _pending_cut_locus_band_ms := 0.0
+var _pending_cut_locus_core_bridge_ms := 0.0
 var _pending_cut_locus_blend_ms := 0.0
 var _pending_cut_locus_core_count := 0
 var _pending_cut_locus_band_count := 0
@@ -269,6 +272,7 @@ func _process(_delta: float) -> void:
 	_pending_direction_smoothing_ms = float(result.get("direction_smoothing_ms", 0.0))
 	_pending_cut_locus_detection_ms = float(result.get("cut_locus_detection_ms", 0.0))
 	_pending_cut_locus_band_ms = float(result.get("cut_locus_band_ms", 0.0))
+	_pending_cut_locus_core_bridge_ms = float(result.get("cut_locus_core_bridge_ms", 0.0))
 	_pending_cut_locus_blend_ms = float(result.get("cut_locus_blend_ms", 0.0))
 	_pending_cut_locus_core_count = int(result.get("cut_locus_core_count", 0))
 	_pending_cut_locus_band_count = int(result.get("cut_locus_band_count", 0))
@@ -278,6 +282,7 @@ func _process(_delta: float) -> void:
 	last_direction_smoothing_ms = _pending_direction_smoothing_ms
 	last_cut_locus_detection_ms = _pending_cut_locus_detection_ms
 	last_cut_locus_band_ms = _pending_cut_locus_band_ms
+	last_cut_locus_core_bridge_ms = _pending_cut_locus_core_bridge_ms
 	last_cut_locus_blend_ms = _pending_cut_locus_blend_ms
 	last_cut_locus_core_count = _pending_cut_locus_core_count
 	last_cut_locus_band_count = _pending_cut_locus_band_count
@@ -324,6 +329,7 @@ func _install_preview(bathymetry_data: BathymetryData, coastal_data: CoastalProp
 	print("cut locus core = %d | band = %d | modified = %d" % [_pending_cut_locus_core_count, _pending_cut_locus_band_count, _pending_cut_locus_modified_count])
 	print("cut locus detection = %.3f ms" % _pending_cut_locus_detection_ms)
 	print("cut locus band = %.3f ms" % _pending_cut_locus_band_ms)
+	print("cut locus core bridge = %.3f ms" % _pending_cut_locus_core_bridge_ms)
 	print("cut locus blend = %.3f ms" % _pending_cut_locus_blend_ms)
 	print("eikonal total = %.3f ms" % last_eikonal_ms)
 	print("debug mesh = %.3f ms" % last_debug_mesh_ms)

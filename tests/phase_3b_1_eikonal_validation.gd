@@ -194,6 +194,26 @@ func _validate_render_field_data() -> void:
 
 
 func _validate_cut_locus() -> void:
+	var bridge_baker = EikonalBakerScript.new()
+	var symmetric_samples := PackedVector2Array()
+	symmetric_samples.append(Vector2(1.0, 1.0).normalized())
+	symmetric_samples.append(Vector2(1.0, -1.0).normalized())
+	var symmetric_bridge: Vector2 = bridge_baker._resolve_core_bridge_direction(symmetric_samples, Vector2.RIGHT)
+	var symmetric_angle := rad_to_deg(atan2(symmetric_bridge.y, symmetric_bridge.x))
+	var cancellation_samples := PackedVector2Array()
+	cancellation_samples.append(Vector2.UP)
+	cancellation_samples.append(Vector2.DOWN)
+	var cancellation_bridge: Vector2 = bridge_baker._resolve_core_bridge_direction(cancellation_samples, Vector2.RIGHT)
+	var asymmetric_samples := PackedVector2Array()
+	asymmetric_samples.append(Vector2(cos(deg_to_rad(20.0)), sin(deg_to_rad(20.0))))
+	asymmetric_samples.append(Vector2(cos(deg_to_rad(-50.0)), sin(deg_to_rad(-50.0))))
+	var asymmetric_bridge: Vector2 = bridge_baker._resolve_core_bridge_direction(asymmetric_samples, Vector2.RIGHT)
+	var asymmetric_angle := rad_to_deg(atan2(asymmetric_bridge.y, asymmetric_bridge.x))
+	print("3B.1 CUT_BRIDGE symmetric_angle=%.4f asymmetric_angle=%.4f" % [symmetric_angle, asymmetric_angle])
+	_check(absf(symmetric_angle) < 5.0 and symmetric_bridge.dot(Vector2.RIGHT) > -0.25, "cut locus: symmetric branches bridge toward incoming direction")
+	_check(cancellation_bridge == Vector2.RIGHT, "cut locus: vector cancellation falls back to incoming direction")
+	_check(asymmetric_angle > -50.0 and asymmetric_angle < 20.0 and asymmetric_bridge.dot(Vector2.RIGHT) > -0.25, "cut locus: asymmetric branches bridge to intermediate forward direction")
+
 	var flat = _bake(_make_data(81, 61, func(_x: int, _z: int) -> float: return 18.0), Vector2.RIGHT)
 	print("3B.1 CUT_FLAT core=%d band=%d" % [_cut_core_count(flat), _cut_band_count(flat)])
 	_check(_cut_core_count(flat) == 0, "cut locus: flat water has no core")
@@ -215,18 +235,59 @@ func _validate_cut_locus() -> void:
 		return -1.0 if dx * dx + dz * dz < 14.0 * 14.0 else 18.0)
 	var island_pre = _bake_with_cut_locus(island_data, Vector2.RIGHT, false)
 	var island_final = _bake(island_data, Vector2.RIGHT)
+	var island_bridge_core_mask: PackedByteArray = bridge_baker._detect_cut_locus_core(island_pre)
+	var island_bridge_fields: Array = bridge_baker._build_core_bridge_fields(island_pre, island_bridge_core_mask, Vector2.RIGHT)
+	var island_bridge_angle := 0.0
+	var island_bridge_samples := 0
+	var island_core_bridge_error := 0.0
+	for index in island_bridge_core_mask.size():
+		if island_bridge_core_mask[index] == 0:
+			continue
+		var bridge_direction := Vector2((island_bridge_fields[0] as PackedFloat32Array)[index], (island_bridge_fields[1] as PackedFloat32Array)[index]).normalized()
+		island_bridge_angle = rad_to_deg(atan2(bridge_direction.y, bridge_direction.x))
+		var final_core_direction := Vector2(island_final.render_direction_x[index], island_final.render_direction_z[index]).normalized()
+		island_core_bridge_error = rad_to_deg(acos(clampf(final_core_direction.dot(bridge_direction), -1.0, 1.0)))
+		island_bridge_samples += 1
+		break
 	var island_raw_jump := _max_neighbor_angle_deg(island_final, false, 60, island_final.width - 1, 0, island_final.height - 1)
 	var island_pre_jump := _max_neighbor_angle_deg(island_pre, true, 60, island_pre.width - 1, 0, island_pre.height - 1)
 	var island_final_jump := _max_neighbor_angle_deg(island_final, true, 60, island_final.width - 1, 0, island_final.height - 1)
 	var island_water := _water_count(island_final)
 	var island_modified_percent := 100.0 * float(_cut_band_count(island_final)) / float(maxi(island_water, 1))
 	var island_outside_error := _mean_render_delta_outside_cut(island_pre, island_final)
-	print("3B.1 CUT_ISLAND raw_jump=%.4f pre_cut=%.4f final=%.4f core=%d band=%d modified_percent=%.4f outside_error_deg=%.8f" % [island_raw_jump, island_pre_jump, island_final_jump, _cut_core_count(island_final), _cut_band_count(island_final), island_modified_percent, island_outside_error])
+	print("3B.1 CUT_ISLAND raw_jump=%.4f pre_cut=%.4f final=%.4f core=%d band=%d modified_percent=%.4f outside_error_deg=%.8f bridge_angle=%.4f bridge_core=%d core_bridge_error=%.8f" % [island_raw_jump, island_pre_jump, island_final_jump, _cut_core_count(island_final), _cut_band_count(island_final), island_modified_percent, island_outside_error, island_bridge_angle, island_bridge_samples, island_core_bridge_error])
 	_check(_cut_core_count(island_final) > 0, "cut locus: single island detects reconvergence")
 	_check(island_final_jump < island_pre_jump, "cut locus: localized blend reduces the pre-cut jump")
 	_check(island_final_jump < 45.0, "cut locus: single-island final jump is visually continuous")
 	_check(island_modified_percent < 25.0, "cut locus: single-island blend remains localized")
 	_check(island_outside_error < 0.01, "cut locus: outside band preserves adaptive direction")
+	_check(island_final.local_direction_x == island_pre.local_direction_x and island_final.local_direction_z == island_pre.local_direction_z, "cut locus: core bridge leaves RAW direction unchanged")
+	_check(island_final.phase_rad == island_pre.phase_rad and island_final.phase_offset_rad == island_pre.phase_offset_rad and island_final.phase_gradient_x == island_pre.phase_gradient_x and island_final.phase_gradient_z == island_pre.phase_gradient_z, "cut locus: core bridge leaves phase fields unchanged")
+	_check(island_final.reached_mask == island_pre.reached_mask, "cut locus: core bridge leaves reached unchanged")
+	_check(island_final.shadow_scale == island_pre.shadow_scale, "cut locus: core bridge leaves shadow unchanged")
+	_check(island_core_bridge_error < 0.001, "cut locus: CORE remains fixed to its component bridge")
+
+	var island_32 = _bake_with_cut_locus_settings(island_data, Vector2.RIGHT, 32.0, 24, 0.65)
+	var island_32_jump := _max_neighbor_angle_deg(island_32, true, 60, island_32.width - 1, 0, island_32.height - 1)
+	print("3B.1 CUT_ISLAND_32 final=%.4f core=%d band=%d modified_percent=%.4f" % [island_32_jump, _cut_core_count(island_32), _cut_band_count(island_32), 100.0 * float(_cut_band_count(island_32)) / float(maxi(_water_count(island_32), 1))])
+	_check(island_32_jump < island_pre_jump, "cut locus: radius 32 also reduces the single-island seam")
+
+	var profile_offsets := [-20, -15, -10, -5, 0, 5, 10, 15, 20]
+	var profile_text := ""
+	var profile_max_step := 0.0
+	var previous_angle := 0.0
+	var has_previous := false
+	for offset in profile_offsets:
+		var profile_index: int = (40 + offset) * island_final.width + 86
+		var profile_direction := Vector2(island_final.render_direction_x[profile_index], island_final.render_direction_z[profile_index]).normalized()
+		var profile_angle := rad_to_deg(atan2(profile_direction.y, profile_direction.x))
+		profile_text += "%d:%.3f " % [offset, profile_angle]
+		if has_previous:
+			profile_max_step = maxf(profile_max_step, absf(profile_angle - previous_angle))
+		previous_angle = profile_angle
+		has_previous = true
+	print("3B.1 CUT_PROFILE x=86 angles=%s max_step=%.4f" % [profile_text, profile_max_step])
+	_check(profile_max_step < 45.0, "cut locus: transverse profile has no brutal direction jump")
 
 	var channel_data = _make_data(121, 81, func(x: int, z: int) -> float:
 		var upper_dx := float(x - 50)
@@ -347,7 +408,7 @@ func _validate_large_grid_scaling() -> void:
 		debug.data = propagation
 		var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
 		var plane := debug.mesh as PlaneMesh
-		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f cut_detection=%.3f cut_band=%.3f cut_blend=%.3f cut_core=%d cut_band_cells=%d debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, baker.last_cut_locus_detection_ms, baker.last_cut_locus_band_ms, baker.last_cut_locus_blend_ms, baker.last_cut_locus_core_count, baker.last_cut_locus_band_count, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
+		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f cut_detection=%.3f cut_band=%.3f core_bridge=%.3f cut_blend=%.3f cut_core=%d cut_band_cells=%d debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, baker.last_cut_locus_detection_ms, baker.last_cut_locus_band_ms, baker.last_cut_locus_core_bridge_ms, baker.last_cut_locus_blend_ms, baker.last_cut_locus_core_count, baker.last_cut_locus_band_count, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
 		_check(propagation.is_valid(), "large: grid %dx%d completa con data válida" % [resolution, resolution])
 		_check(reached == resolution * resolution, "large: flat water %dx%d reached completo" % [resolution, resolution])
 		_check(plane != null and debug.last_debug_triangle_count == 2 and plane.size == Vector2(resolution - 1, resolution - 1), "large: debug %dx%d es un plano de dos triángulos" % [resolution, resolution])
@@ -356,7 +417,7 @@ func _validate_large_grid_scaling() -> void:
 
 func _validate_eikonal_path_complexity() -> void:
 	var source := FileAccess.get_file_as_string("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
-	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction") and source.contains("_detect_cut_locus_core") and source.contains("_apply_cut_locus_blend"), "complexity: campos derivados no conservan sort/raymarch patológicos")
+	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction") and source.contains("_detect_cut_locus_core") and source.contains("_build_core_bridge_fields") and source.contains("_resolve_core_bridge_direction") and source.contains("_apply_cut_locus_blend"), "complexity: campos derivados no conservan sort/raymarch patológicos")
 
 
 func _max_neighbor_angle_deg(data, use_render: bool, min_x: int, max_x: int, min_z: int, max_z: int) -> float:
@@ -484,6 +545,21 @@ func _bake_with_settings(data, direction: Vector2, max_cycles: int, tolerance: f
 
 func _bake_with_cut_locus(data, direction: Vector2, enabled: bool):
 	return _bake_with_options(data, direction, 16, 1.0e-4, enabled)
+
+
+func _bake_with_cut_locus_settings(data, direction: Vector2, radius_m: float, passes: int, strength: float):
+	var baker = EikonalBakerScript.new()
+	baker.bathymetry_data = data
+	baker.incoming_direction_xz = direction
+	baker.reference_wavelength_m = 16.0
+	baker.min_valid_depth_m = 0.25
+	baker.max_sweep_cycles = 16
+	baker.convergence_tolerance_s = 1.0e-4
+	baker.cut_locus_enabled = true
+	baker.cut_locus_blend_radius_m = radius_m
+	baker.cut_locus_blend_passes = passes
+	baker.cut_locus_blend_strength = strength
+	return baker.bake()
 
 
 func _bake_with_options(data, direction: Vector2, max_cycles: int, tolerance: float, cut_enabled: bool):
