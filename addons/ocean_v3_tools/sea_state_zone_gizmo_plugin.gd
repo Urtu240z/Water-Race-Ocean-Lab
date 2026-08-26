@@ -28,7 +28,7 @@ func _get_priority() -> int:
 
 
 func _has_gizmo(node: Node3D) -> bool:
-	return node is ZoneScript
+	return node is OceanSeaStateZone3D or node.get_script() == ZoneScript
 
 
 func _redraw(gizmo: EditorNode3DGizmo) -> void:
