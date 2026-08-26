@@ -550,13 +550,13 @@ func _build_core_bridge_fields(output, core_mask: PackedByteArray, incoming_dire
 	seen.fill(0)
 	var queue := PackedInt32Array()
 	var component := PackedInt32Array()
-	for seed in count:
-		if core_mask[seed] == 0 or seen[seed] != 0:
+	for cell_index in count:
+		if core_mask[cell_index] == 0 or seen[cell_index] != 0:
 			continue
 		queue.clear()
 		component.clear()
-		queue.append(seed)
-		seen[seed] = 1
+		queue.append(cell_index)
+		seen[cell_index] = 1
 		var head := 0
 		while head < queue.size():
 			var index: int = queue[head]
