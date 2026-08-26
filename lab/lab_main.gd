@@ -1,10 +1,15 @@
 extends Node3D
 
+const CALM_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/calm.tres")
+const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/race.tres")
+const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
+
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
 @onready var benchmark_hud: CanvasLayer = %BenchmarkHUD
 @onready var controls_label: Label = %Controls
 @onready var metric_references: Node3D = $MetricReferences
+@onready var ocean_v3: OceanV3 = $OceanV3Mount/OceanV3
 
 var _using_race_camera := false
 var _query_probe_tool: Node3D
@@ -14,7 +19,7 @@ func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes | 4/5/6: CALM/RACE/ROUGH | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -72,17 +77,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _query_probe_tool:
 				_query_probe_tool.call("toggle_snapshot")
 		KEY_4:
-			var fft_module_4 := get_tree().get_first_node_in_group(&"ocean_fft")
-			if fft_module_4:
-				fft_module_4.set_sea_state(0) # CALM
+			if event.shift_pressed:
+				ocean_v3.wave_preset = CALM_WAVE_PRESET
+			else:
+				ocean_v3.transition_to_wave_preset(CALM_WAVE_PRESET, ocean_v3.wave_transition_duration_s)
 		KEY_5:
-			var fft_module_5 := get_tree().get_first_node_in_group(&"ocean_fft")
-			if fft_module_5:
-				fft_module_5.set_sea_state(1) # RACE
+			if event.shift_pressed:
+				ocean_v3.wave_preset = RACE_WAVE_PRESET
+			else:
+				ocean_v3.transition_to_wave_preset(RACE_WAVE_PRESET, ocean_v3.wave_transition_duration_s)
 		KEY_6:
-			var fft_module_6 := get_tree().get_first_node_in_group(&"ocean_fft")
-			if fft_module_6:
-				fft_module_6.set_sea_state(2) # ROUGH
+			if event.shift_pressed:
+				ocean_v3.wave_preset = ROUGH_WAVE_PRESET
+			else:
+				ocean_v3.transition_to_wave_preset(ROUGH_WAVE_PRESET, ocean_v3.wave_transition_duration_s)
 		KEY_1:
 			OceanQualitySettings.set_profile(0) # DECK
 		KEY_2:
