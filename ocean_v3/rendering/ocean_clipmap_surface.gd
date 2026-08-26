@@ -112,6 +112,11 @@ func set_surface_foam_jacobian(jacobian: Texture2DRD, source_domain_m: float) ->
 	_surface_material.set_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
 
 
+func set_surface_foam_topology(topology: Texture2DRD, source_domain_m: float) -> void:
+	_surface_material.set_shader_parameter(&"surface_foam_topology", topology)
+	_surface_material.set_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
+
+
 func set_surface_foam_mid_fold_history(history: Texture2DRD) -> void:
 	_surface_material.set_shader_parameter(&"surface_foam_mid_fold_history", history)
 

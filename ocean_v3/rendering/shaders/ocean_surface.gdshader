@@ -16,6 +16,7 @@ uniform sampler2D foam_mid : repeat_enable, filter_linear;
 uniform sampler2D foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_short : repeat_enable, filter_linear;
 uniform sampler2D surface_foam_jacobian : repeat_enable, filter_linear;
+uniform sampler2D surface_foam_topology : repeat_enable, filter_linear_mipmap_anisotropic;
 uniform sampler2D surface_foam_mid_fold_history : repeat_enable, filter_linear;
 // Packed RGB tile: R=organic breakup, G=bubble distance-like field,
 // B=microheight for the derived foam normal.
@@ -659,6 +660,18 @@ float surface_foam_direct_j_raw_at(vec2 sample_position) {
 	return max(0.0, surface_foam_whitecap - surface_foam_direct_j_at(sample_position));
 }
 
+vec2 surface_foam_topology_at(vec2 sample_position, vec2 world_dx, vec2 world_dy) {
+	vec2 uv = spectrum_uv(sample_position, surface_foam_source_domain_m);
+	return textureGrad(surface_foam_topology, uv, world_dx / surface_foam_source_domain_m, world_dy / surface_foam_source_domain_m).rg;
+}
+
+vec2 surface_foam_stochastic_transform_delta(vec2 delta, vec2 lattice_vertex) {
+	delta *= surface_foam_stochastic_scale(lattice_vertex);
+	delta = surface_foam_stochastic_rotate(delta, surface_foam_stochastic_rotation_angle(lattice_vertex));
+	if (surface_foam_stochastic_hash12(lattice_vertex + vec2(47.0, 11.0)) > 0.5) delta.x *= -1.0;
+	return delta;
+}
+
 
 // Deterministic triangular world-space lattice. Each fragment blends the three
 // vertex-owned transforms of its triangle, so cells meet continuously without
@@ -755,21 +768,18 @@ void surface_foam_shared_direct_topologies(vec2 world_xz, out float surface_raw,
 	if (surface_foam_stochastic_deperiodization_enabled) {
 		vec2 v0; vec2 v1; vec2 v2; vec3 weights;
 		surface_foam_stochastic_triangle(world_xz, v0, v1, v2, weights);
-		float j0 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_source_domain_m));
-		float j1 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_source_domain_m));
-		float j2 = surface_foam_direct_j_at(surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_source_domain_m));
-		float surface_raw0 = max(0.0, surface_foam_whitecap - j0);
-		float surface_raw1 = max(0.0, surface_foam_whitecap - j1);
-		float surface_raw2 = max(0.0, surface_foam_whitecap - j2);
-		float crest_raw0 = max(0.0, crest_filigree_whitecap - j0);
-		float crest_raw1 = max(0.0, crest_filigree_whitecap - j1);
-		float crest_raw2 = max(0.0, crest_filigree_whitecap - j2);
-		surface_raw = surface_raw0 * weights.x + surface_raw1 * weights.y + surface_raw2 * weights.z;
-		crest_raw = crest_raw0 * weights.x + crest_raw1 * weights.y + crest_raw2 * weights.z;
+		vec2 dx = dFdx(world_xz); vec2 dy = dFdy(world_xz);
+		vec2 p0 = surface_foam_stochastic_sample_position(world_xz, v0, surface_foam_source_domain_m);
+		vec2 p1 = surface_foam_stochastic_sample_position(world_xz, v1, surface_foam_source_domain_m);
+		vec2 p2 = surface_foam_stochastic_sample_position(world_xz, v2, surface_foam_source_domain_m);
+		vec2 t0 = surface_foam_topology_at(p0, surface_foam_stochastic_transform_delta(dx, v0), surface_foam_stochastic_transform_delta(dy, v0));
+		vec2 t1 = surface_foam_topology_at(p1, surface_foam_stochastic_transform_delta(dx, v1), surface_foam_stochastic_transform_delta(dy, v1));
+		vec2 t2 = surface_foam_topology_at(p2, surface_foam_stochastic_transform_delta(dx, v2), surface_foam_stochastic_transform_delta(dy, v2));
+		vec2 topology = t0 * weights.x + t1 * weights.y + t2 * weights.z;
+		surface_raw = topology.r; crest_raw = topology.g;
 	} else {
-		float jacobian = surface_foam_direct_j_at(world_xz);
-		surface_raw = max(0.0, surface_foam_whitecap - jacobian);
-		crest_raw = max(0.0, crest_filigree_whitecap - jacobian);
+		vec2 topology = surface_foam_topology_at(world_xz, dFdx(world_xz), dFdy(world_xz));
+		surface_raw = topology.r; crest_raw = topology.g;
 	}
 }
 

@@ -510,6 +510,11 @@ var _applying_wave_preset := false
 		surface_foam_whitecap = value
 		_request_visual_sync()
 
+@export_enum("512:512", "1024:1024") var surface_foam_topology_resolution: int = 1024:
+	set(value):
+		surface_foam_topology_resolution = 512 if value <= 512 else 1024
+		_request_visual_sync()
+
 @export_range(0.0, 10.0, 0.001) var surface_foam_amount: float = 8.573:
 	set(value):
 		surface_foam_amount = value
@@ -1103,11 +1108,13 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_evolution_speed,
 				surface_foam_mid_fold_start,
 				surface_foam_mid_fold_end,
-				surface_foam_enabled or crest_filigree_enabled
+				surface_foam_enabled or crest_filigree_enabled,
+				crest_filigree_whitecap
 			)
 			fft_module.set_surface_foam_spectrum_settings(
-				surface_foam_fft_resolution,
+				 surface_foam_fft_resolution,
 				surface_foam_field_resolution,
+				surface_foam_topology_resolution,
 				surface_foam_source_domain_m,
 				surface_foam_field_domain_m,
 				surface_foam_depth_m,

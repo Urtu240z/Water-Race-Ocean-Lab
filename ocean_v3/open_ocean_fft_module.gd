@@ -108,6 +108,7 @@ var _surface_foam_enabled := true
 var _surface_foam_topology_required := true
 var _surface_foam_mid_history_required := true
 var _surface_foam_whitecap := 0.0
+var _surface_foam_crest_whitecap := 0.0
 var _surface_foam_amount := 8.573
 var _surface_foam_birth_attack_s := 0.16
 var _surface_foam_lifetime_s := 1.10
@@ -118,6 +119,7 @@ var _surface_foam_mid_fold_end := 0.24
 # Dedicated technical spectrum: never enters configs/_cascades, queries or Hs.
 var _surface_foam_fft_resolution := 512
 var _surface_foam_field_resolution := 1024
+var _surface_foam_topology_resolution := 1024
 var _surface_foam_update_hz := 30.0
 var _surface_foam_source_domain_m := 8.0
 var _surface_foam_field_domain_m := 88.0
@@ -133,6 +135,7 @@ var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_jacobian_texture := Texture2DRD.new()
+var _surface_foam_topology_texture := Texture2DRD.new()
 var _surface_foam_mid_fold_history_texture := Texture2DRD.new()
 var _surface_foam_mid_history_solver = null
 
@@ -223,6 +226,7 @@ func _ready() -> void:
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _surface_foam_texture, _surface_foam_field_domain_m)
 	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
+	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_source_domain_m)
 	surface.set_surface_foam_mid_fold_history(_surface_foam_mid_fold_history_texture)
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -283,6 +287,7 @@ func _exit_tree() -> void:
 	_cascades.clear()
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_jacobian_texture.texture_rd_rid = RID()
+	_surface_foam_topology_texture.texture_rd_rid = RID()
 	_surface_foam_mid_fold_history_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
@@ -1035,7 +1040,7 @@ func _initialize_surface_foam_solver() -> void:
 	# This H0 is TMA/JONSWAP reference-compatible and deliberately has no Hs
 	# normalization, band-pass, or physical-ocean amplitude coupling.
 	RenderingServer.call_on_render_thread(_surface_foam_solver.initialize.bind(
-		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", _surface_foam_field_resolution
+		_surface_foam_config, h0_data, "Ocean2B.SurfaceFoam", _surface_foam_field_resolution, _surface_foam_topology_resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
 		_surface_foam_topology_required, _surface_foam_whitecap, _surface_foam_amount,
@@ -1043,7 +1048,8 @@ func _initialize_surface_foam_solver() -> void:
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
 		_surface_foam_birth_selectivity,
-		_surface_foam_evolution_speed
+		_surface_foam_evolution_speed,
+		_surface_foam_crest_whitecap
 	))
 
 
@@ -1077,6 +1083,7 @@ func _rebuild_surface_foam_solver() -> void:
 	_initialize_surface_foam_solver()
 	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_field_domain_m)
 	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
+	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_source_domain_m)
 	_dispatch_requested = true
 
 
@@ -1106,6 +1113,7 @@ func _publish_ready_textures() -> void:
 	if _surface_foam_solver != null and _surface_foam_solver.ready:
 		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
 		_surface_foam_jacobian_texture.texture_rd_rid = _surface_foam_solver.jacobian_rid
+		_surface_foam_topology_texture.texture_rd_rid = _surface_foam_solver.topology_rid
 	_initialize_surface_foam_mid_history()
 	if _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready:
 		_surface_foam_mid_fold_history_texture.texture_rd_rid = _surface_foam_mid_history_solver.history_rid
@@ -1170,13 +1178,14 @@ func foam_render_diagnostics() -> Dictionary:
 func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, update_hz: float,
 		birth_attack_s: float = 0.16, lifetime_s: float = 1.10, birth_selectivity: float = 0.28,
 		evolution_speed: float = 0.35, mid_fold_start: float = 0.10, mid_fold_end: float = 0.24,
-		topology_required: bool = true) -> void:
+		topology_required: bool = true, crest_whitecap: float = 0.0) -> void:
 	_surface_foam_enabled = enabled
 	_surface_foam_topology_required = topology_required
 	# Crest Filigree consumes direct-J topology plus the Surface Foam temporal
 	# envelope, but never the MID fold visibility limiter.
 	_surface_foam_mid_history_required = enabled
 	_surface_foam_whitecap = clampf(whitecap, 0.0, 1.5)
+	_surface_foam_crest_whitecap = clampf(crest_whitecap, 0.0, 1.5)
 	_surface_foam_amount = clampf(amount, 0.0, 10.0)
 	_surface_foam_update_hz = clampf(update_hz, 30.0, 60.0)
 	_surface_foam_birth_attack_s = clampf(birth_attack_s, 0.02, 1.0)
@@ -1194,7 +1203,8 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 			birth_attack_s,
 			lifetime_s,
 			birth_selectivity,
-			evolution_speed
+			evolution_speed,
+			_surface_foam_crest_whitecap
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
@@ -1207,16 +1217,18 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 
 
-func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, source_domain_m: float, field_domain_m: float, depth_m: float,
+func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, topology_resolution: int, source_domain_m: float, field_domain_m: float, depth_m: float,
 		wind_speed_mps: float, wind_direction_deg: float, fetch_m: float, swell: float,
 		directional_spread: float, detail: float) -> void:
 	var effective_wind_speed := maxf(wind_speed_mps, 0.1)
 	var next_resolution := 256 if resolution <= 256 else 512 if resolution <= 512 else 1024
 	var next_field_resolution := 256 if field_resolution <= 256 else 512 if field_resolution <= 512 else 1024
+	var next_topology_resolution := 512 if topology_resolution <= 512 else 1024
 	var next_source_domain := clampf(source_domain_m, 4.0, 32.0)
 	var next_field_domain := maxf(field_domain_m, 8.0)
 	var changed := next_resolution != _surface_foam_fft_resolution \
 		or next_field_resolution != _surface_foam_field_resolution \
+		or next_topology_resolution != _surface_foam_topology_resolution \
 		or not is_equal_approx(next_source_domain, _surface_foam_source_domain_m) \
 		or not is_equal_approx(next_field_domain, _surface_foam_field_domain_m) \
 		or not is_equal_approx(depth_m, _surface_foam_depth_m) \
@@ -1230,6 +1242,7 @@ func set_surface_foam_spectrum_settings(resolution: int, field_resolution: int, 
 		return
 	_surface_foam_fft_resolution = next_resolution
 	_surface_foam_field_resolution = next_field_resolution
+	_surface_foam_topology_resolution = next_topology_resolution
 	_surface_foam_source_domain_m = next_source_domain
 	_surface_foam_field_domain_m = next_field_domain
 	_surface_foam_depth_m = maxf(depth_m, 0.1)
