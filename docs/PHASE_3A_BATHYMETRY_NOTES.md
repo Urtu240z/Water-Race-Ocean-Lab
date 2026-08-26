@@ -80,6 +80,9 @@ sus lados.
 
 - `BathymetryBaker.bake_to_resource()` permite guardar un `.tres` desde un
   componente dev/editor;
+- `BathymetryBaker` expone en el Inspector `BAKE PREVIEW`, `CLEAR PREVIEW` y
+  `preview_mode`; el preview se crea en memoria como hijo interno temporal del
+  root de la escena, con transform world-space identidad;
 - `BathymetryDebug` dibuja un overlay con DEPTH, GRADIENT/SLOPE, LAND_WATER,
   SHORE_DISTANCE o DEPTH_SOURCE;
 - `lab/bathymetry/bathymetry_cases.tscn` crea tres casos debug reales:

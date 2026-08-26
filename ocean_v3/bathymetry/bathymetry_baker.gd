@@ -17,6 +17,27 @@ extends Node
 @export_range(0.0, 10000.0, 0.1, "suffix:m") var synthetic_max_depth_m := 20.0
 @export_file("*.tres") var output_path := ""
 
+enum PreviewMode {
+	DEPTH = 0,
+	GRADIENT_SLOPE = 1,
+	LAND_WATER = 2,
+	SHORE_DISTANCE = 3,
+	DEPTH_SOURCE = 4,
+}
+
+@export_category("Bathymetry Preview")
+@export_tool_button("BAKE PREVIEW", "Play") var bake_preview_button = bake_preview
+@export_tool_button("CLEAR PREVIEW", "Remove") var clear_preview_button = clear_preview
+@export var preview_mode: PreviewMode = PreviewMode.LAND_WATER:
+	set(value):
+		preview_mode = value
+		_update_preview_mode()
+
+const PREVIEW_OWNER_META := "_bathymetry_preview_owner_id"
+const PreviewScript := preload("res://ocean_v3/bathymetry/bathymetry_debug.gd")
+
+var _preview: BathymetryDebug = null
+
 
 func bake():
 	var faces := _collect_world_faces()
@@ -37,6 +58,88 @@ func bake_to_resource():
 		if error != OK:
 			push_error("BathymetryBaker: no se pudo guardar %s (error %d)." % [output_path, error])
 	return data
+
+
+func bake_preview() -> void:
+	if source_root == null and source == null:
+		push_error("BathymetryBaker: asigna source_root o source antes de BAKE PREVIEW.")
+		return
+	clear_preview()
+	var data = bake()
+	if data == null:
+		return
+	var parent := _preview_parent()
+	if parent == null:
+		push_error("BathymetryBaker: no se encontró un parent válido para BathymetryPreview.")
+		return
+	var preview: BathymetryDebug = PreviewScript.new()
+	preview.name = "%s_Preview" % name if not name.is_empty() else "BathymetryPreview"
+	preview.set_meta(PREVIEW_OWNER_META, get_instance_id())
+	parent.add_child(preview, false, Node.INTERNAL_MODE_FRONT)
+	preview.owner = null
+	preview.set_as_top_level(true)
+	preview.global_transform = Transform3D.IDENTITY
+	preview.mode = _debug_mode_for_preview()
+	preview.data = data
+	_preview = preview
+
+
+func clear_preview() -> void:
+	var preview := _find_owned_preview()
+	_preview = null
+	if preview == null or not is_instance_valid(preview):
+		return
+	if preview.get_meta(PREVIEW_OWNER_META, -1) != get_instance_id():
+		return
+	var parent := preview.get_parent()
+	if parent != null:
+		parent.remove_child(preview)
+	preview.free()
+
+
+func _exit_tree() -> void:
+	clear_preview()
+
+
+func _update_preview_mode() -> void:
+	var preview := _find_owned_preview()
+	if preview != null and is_instance_valid(preview):
+		preview.mode = _debug_mode_for_preview()
+
+
+func _debug_mode_for_preview() -> int:
+	match preview_mode:
+		PreviewMode.DEPTH:
+			return BathymetryDebug.Mode.DEPTH
+		PreviewMode.GRADIENT_SLOPE:
+			return BathymetryDebug.Mode.GRADIENT_SLOPE
+		PreviewMode.LAND_WATER:
+			return BathymetryDebug.Mode.LAND_WATER
+		PreviewMode.SHORE_DISTANCE:
+			return BathymetryDebug.Mode.SHORE_DISTANCE
+		PreviewMode.DEPTH_SOURCE:
+			return BathymetryDebug.Mode.DEPTH_SOURCE
+	return BathymetryDebug.Mode.LAND_WATER
+
+
+func _preview_parent() -> Node:
+	if is_inside_tree():
+		var edited_root := get_tree().edited_scene_root
+		if edited_root != null:
+			return edited_root
+	return self
+
+
+func _find_owned_preview() -> BathymetryDebug:
+	if _preview != null and is_instance_valid(_preview):
+		return _preview
+	var parent := _preview_parent()
+	if parent == null:
+		return null
+	for child in parent.get_children(true):
+		if child is BathymetryDebug and child.get_meta(PREVIEW_OWNER_META, -1) == get_instance_id():
+			return child as BathymetryDebug
+	return null
 
 
 ## Entrada de test/dev: triángulos world-space (cada tres Vector3). Es la misma

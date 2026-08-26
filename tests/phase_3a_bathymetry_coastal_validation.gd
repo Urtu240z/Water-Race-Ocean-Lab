@@ -2,6 +2,7 @@ extends SceneTree
 ## Validación de la extensión multi-mesh/islas de BathymetryBaker.
 
 const BakerScript := preload("res://ocean_v3/bathymetry/bathymetry_baker.gd")
+const DebugScript := preload("res://ocean_v3/bathymetry/bathymetry_debug.gd")
 
 var _failures := 0
 
@@ -11,6 +12,7 @@ func _initialize() -> void:
 	_validate_two_islands_channel()
 	_validate_real_seabed_precedence()
 	_validate_bruteforce_equivalence()
+	_validate_preview_lifecycle()
 	if _failures == 0:
 		print("PHASE_3A_BATHYMETRY_COASTAL: PASS")
 		quit(0)
@@ -108,6 +110,40 @@ func _validate_bruteforce_equivalence() -> void:
 				equivalent = false
 	_check(equivalent, "equivalence: triangle-driven raster matches brute-force top surface")
 	baker.free()
+
+
+func _validate_preview_lifecycle() -> void:
+	var holder := Node3D.new()
+	get_root().add_child(holder)
+	var baker = BakerScript.new()
+	baker.name = "PreviewLifecycleBaker"
+	holder.add_child(baker)
+	var source := _make_plane(Vector2(-2.0, -2.0), Vector2(2.0, 2.0), 2.0)
+	baker.source = source
+	baker.bounds_padding_m = 2.0
+	baker.bake_preview()
+	var preview = baker._find_owned_preview()
+	_check(preview != null and preview.mode == DebugScript.Mode.LAND_WATER, "preview: bake creates default LAND_WATER")
+	baker.preview_mode = 4
+	_check(preview != null and preview.mode == DebugScript.Mode.DEPTH_SOURCE, "preview: mode changes without rebake")
+	baker.bake_preview()
+	var rebaked_preview = baker._find_owned_preview()
+	_check(rebaked_preview != null and _count_owned_previews(baker) == 1, "preview: rebake replaces without duplicates")
+	var user_debug = DebugScript.new()
+	holder.add_child(user_debug)
+	baker.clear_preview()
+	_check(baker._find_owned_preview() == null and is_instance_valid(user_debug), "preview: clear removes only owned preview")
+	source.free()
+	holder.free()
+
+
+func _count_owned_previews(baker) -> int:
+	var count := 0
+	var parent = baker._preview_parent()
+	for child in parent.get_children(true):
+		if child is DebugScript and child.get_meta("_bathymetry_preview_owner_id", -1) == baker.get_instance_id():
+			count += 1
+	return count
 
 
 func _make_plane(min_xz: Vector2, max_xz: Vector2, y: float) -> MeshInstance3D:
