@@ -1444,6 +1444,11 @@ func _initialize_surface_foam_mid_history() -> void:
 func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_texture.texture_rd_rid = RID()
 	_surface_foam_jacobian_texture.texture_rd_rid = RID()
+	# Detach every published RD texture before the solver releases its RIDs.
+	# Leaving topology attached makes Texture2DRD retain a view of a texture
+	# that free_resources() has already destroyed; the next publication then
+	# attempts to free that stale view.
+	_surface_foam_topology_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	_surface_foam_solver = null
