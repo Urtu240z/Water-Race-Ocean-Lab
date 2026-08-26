@@ -11,4 +11,3 @@ source_file="res://ocean_v3/rendering/fft/shaders/surface_foam_evolve_j.glsl"
 dest_files=["res://.godot/imported/surface_foam_evolve_j.glsl-632d4d253a65b06c03011b1327dd97bf.res"]
 
 [params]
-

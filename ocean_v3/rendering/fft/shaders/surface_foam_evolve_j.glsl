@@ -9,7 +9,7 @@ layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D h0_textu
 layout(rgba32f, set = 0, binding = 1) uniform restrict writeonly image2D payload_a;
 layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D payload_b;
 
-layout(push_constant, std430) uniform Params { vec4 values; } params; // time, gravity, depth, source domain
+layout(set = 0, binding = 3, std140) uniform Params { vec4 values; } params; // time, gravity, depth, source domain
 
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 

@@ -6,7 +6,7 @@ layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D input_a;
 layout(rgba32f, set = 0, binding = 1) uniform restrict readonly image2D input_b;
 layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D output_a;
 layout(rgba32f, set = 0, binding = 3) uniform restrict writeonly image2D output_b;
-layout(push_constant, std430) uniform Params { ivec4 values; } params; // subtransform, axis, resolution, inverse
+layout(set = 0, binding = 4, std140) uniform Params { ivec4 values; } params; // subtransform, axis, resolution, inverse
 
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 vec4 butterfly(vec4 even_value, vec4 odd_value, vec2 twiddle) {

@@ -11,4 +11,3 @@ source_file="res://ocean_v3/rendering/fft/shaders/surface_foam_stockham_ifft_2.g
 dest_files=["res://.godot/imported/surface_foam_stockham_ifft_2.glsl-307dad41f406284c6e60385e571a4822.res"]
 
 [params]
-
