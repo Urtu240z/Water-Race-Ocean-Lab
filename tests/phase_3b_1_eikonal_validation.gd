@@ -109,7 +109,7 @@ func _validate_island_shadow() -> void:
 	var open_index: int = 20 * propagation.width + 76
 	var side_index: int = 64 * propagation.width + 76
 	var shadow_direction := Vector2(propagation.local_direction_x[shadow_index], propagation.local_direction_z[shadow_index])
-	print("3B.1 ISLAND invalid=%d shadow_reached=%d shadow_scale=%.4f shadow_dir=(%.4f,%.4f) open_scale=%.4f side=%d" % [propagation.valid_mask[invalid_index], propagation.reached_mask[shadow_index], propagation.shadow_scale[shadow_index], shadow_direction.x, shadow_direction.y, propagation.shadow_scale[open_index], propagation.reached_mask[side_index]])
+	print("3B.1 ISLAND invalid=%d shadow_reached=%d shadow_scale=%.4f shadow_dir=(%.4f,%.4f) open_scale=%.4f side=%d cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.valid_mask[invalid_index], propagation.reached_mask[shadow_index], propagation.shadow_scale[shadow_index], shadow_direction.x, shadow_direction.y, propagation.shadow_scale[open_index], propagation.reached_mask[side_index], propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(propagation.valid_mask[invalid_index] == 0, "island: tierra inválida")
 	_check(propagation.reached_mask[shadow_index] != 0, "island: agua detrás permanece alcanzada")
 	_check(propagation.shadow_scale[shadow_index] >= 0.15 and propagation.shadow_scale[shadow_index] < 0.999, "island: sombra suave detrás")
