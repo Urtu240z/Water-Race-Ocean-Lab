@@ -10,6 +10,7 @@ func _initialize() -> void:
 	_validate_single_island_without_seabed()
 	_validate_two_islands_channel()
 	_validate_real_seabed_precedence()
+	_validate_bruteforce_equivalence()
 	if _failures == 0:
 		print("PHASE_3A_BATHYMETRY_COASTAL: PASS")
 		quit(0)
@@ -75,6 +76,40 @@ func _validate_real_seabed_precedence() -> void:
 	_check(not land.is_water, "real seabed: island top remains LAND")
 
 
+func _validate_bruteforce_equivalence() -> void:
+	var baker = BakerScript.new()
+	baker.cell_size_m = 1.0
+	var faces := PackedVector3Array()
+	_append_plane_faces(faces, Vector2(-4.0, -4.0), Vector2(4.0, 4.0), -8.0)
+	_append_plane_faces(faces, Vector2(-2.0, -2.0), Vector2(2.0, 2.0), 2.0)
+	var data = baker.bake_faces(faces, Vector2(-5.0, -5.0), Vector2(5.0, 5.0))
+	var equivalent := true
+	for z in data.height:
+		for x in data.width:
+			var index: int = z * data.width + x
+			var point: Vector2 = data.world_origin_xz + Vector2(float(x), float(z)) * data.cell_size_m
+			var top_y: float = baker._top_surface_y(faces, point)
+			var expected_depth: float
+			var expected_water: bool
+			var expected_measured: bool
+			if is_nan(top_y):
+				expected_water = true
+				expected_measured = false
+				expected_depth = minf(baker.synthetic_max_depth_m, maxf(0.0, data.shore_signed_distance_m[index] * baker.synthetic_slope))
+			elif top_y >= baker.sea_level_y:
+				expected_water = false
+				expected_measured = false
+				expected_depth = baker.sea_level_y - top_y
+			else:
+				expected_water = true
+				expected_measured = true
+				expected_depth = baker.sea_level_y - top_y
+			if (data.land_water_mask[index] != 0) != expected_water or (data.depth_source_mask[index] != 0) != expected_measured or absf(data.depth_m[index] - expected_depth) > 1.0e-5:
+				equivalent = false
+	_check(equivalent, "equivalence: triangle-driven raster matches brute-force top surface")
+	baker.free()
+
+
 func _make_plane(min_xz: Vector2, max_xz: Vector2, y: float) -> MeshInstance3D:
 	var tool := SurfaceTool.new()
 	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -87,6 +122,15 @@ func _make_plane(min_xz: Vector2, max_xz: Vector2, y: float) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
 	instance.mesh = tool.commit()
 	return instance
+
+
+func _append_plane_faces(faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector2, y: float) -> void:
+	var p00 := Vector3(min_xz.x, y, min_xz.y)
+	var p10 := Vector3(max_xz.x, y, min_xz.y)
+	var p01 := Vector3(min_xz.x, y, max_xz.y)
+	var p11 := Vector3(max_xz.x, y, max_xz.y)
+	faces.append(p00); faces.append(p10); faces.append(p11)
+	faces.append(p00); faces.append(p11); faces.append(p01)
 
 
 func _check(condition: bool, label: String) -> void:

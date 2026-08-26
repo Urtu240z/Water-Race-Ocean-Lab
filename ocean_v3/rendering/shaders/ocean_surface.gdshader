@@ -105,6 +105,7 @@ uniform bool surface_detail_enabled = false;
 uniform sampler2D surface_normal_texture_a : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
 uniform sampler2D surface_normal_texture_b : hint_normal, repeat_enable, filter_linear_mipmap_anisotropic;
 uniform sampler2D surface_warp_texture : repeat_enable, filter_linear_mipmap;
+uniform float surface_detail_wave_follow : hint_range(0.0, 1.0, 0.01) = 0.70;
 uniform float surface_normal_world_size_a : hint_range(0.25, 100.0, 0.05) = 7.5;
 uniform float surface_normal_world_size_b : hint_range(0.25, 100.0, 0.05) = 3.25;
 uniform float surface_normal_strength : hint_range(0.0, 2.0, 0.01) = 0.62;
@@ -901,22 +902,36 @@ vec2 surface_safe_direction(vec2 direction, vec2 fallback) {
 }
 
 
+// The detail carrier is blended between the final displaced position and the
+// undisplaced water/material coordinate. This keeps the control optical-only:
+// it follows the wave parametrization without changing FFT geometry or energy.
+vec2 surface_detail_carrier_xz() {
+	return mix(
+		ocean_world_xz,
+		ocean_base_xz,
+		clamp(surface_detail_wave_follow, 0.0, 1.0)
+	);
+}
+
+
 // 5R.3B: mismo concepto de micro-normal que Water Race.
 // Devuelve normal local donde XY se interpreta como slope world XZ.
-vec3 sample_surface_detail(vec2 world_xz, float camera_distance) {
+// carrier_xz is intentionally separate from the independent flow terms so a
+// future local coastal direction can be introduced without rewriting sampling.
+vec3 sample_surface_detail(vec2 carrier_xz, float camera_distance) {
 	vec2 warp = vec2(0.0);
 	if (ocean_surface_detail_quality >= 2) {
-		vec2 warp_uv = world_xz / max(surface_warp_world_size, 0.001)
+		vec2 warp_uv = carrier_xz / max(surface_warp_world_size, 0.001)
 			+ vec2(0.31, -0.95) * coastal_time_s * 0.035;
 		warp = (texture(surface_warp_texture, warp_uv).rg * 2.0 - 1.0)
 			* surface_warp_strength;
 	}
 
-	vec2 uv_a = (world_xz + warp) / max(surface_normal_world_size_a, 0.001)
+	vec2 uv_a = (carrier_xz + warp) / max(surface_normal_world_size_a, 0.001)
 		+ surface_safe_direction(surface_flow_direction_a, vec2(1.0, 0.0))
 			* coastal_time_s * surface_flow_speed_a
 			/ max(surface_normal_world_size_a, 0.001);
-	vec2 uv_b = (world_xz - warp * 0.57) / max(surface_normal_world_size_b, 0.001)
+	vec2 uv_b = (carrier_xz - warp * 0.57) / max(surface_normal_world_size_b, 0.001)
 		+ surface_safe_direction(surface_flow_direction_b, vec2(0.0, 1.0))
 			* coastal_time_s * surface_flow_speed_b
 			/ max(surface_normal_world_size_b, 0.001);
@@ -1262,7 +1277,7 @@ void fragment() {
 		// Dos normal maps + warp: detalle fino sin añadir geometría ni marcar
 		// los cuadrados del clipmap.
 		if (surface_detail_enabled) {
-			vec3 detail_normal = sample_surface_detail(ocean_world_xz, camera_distance);
+			vec3 detail_normal = sample_surface_detail(surface_detail_carrier_xz(), camera_distance);
 			vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
 			vec3 detail_offset_view = mat3(VIEW_MATRIX) * vec3(
 				detail_slope.x,

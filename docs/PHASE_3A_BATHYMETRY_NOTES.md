@@ -62,11 +62,13 @@ Esto está validado en X negativo, origen desplazado y bordes.
 
 ## Derivados
 
-El baker proyecta verticalmente sobre cada triángulo world-space y toma la
-superficie superior; es deliberadamente offline y robusto para un fondo
-simplificado. Después calcula diferencias finitas sobre `depth_m`: central en
-interior, one-sided en bordes. El convenio es **`gradient = ∇depth`**, apunta
-hacia agua más profunda; `slope_magnitude = length(gradient)`.
+El baker proyecta verticalmente cada triángulo world-space sólo sobre los
+nodos de su AABB XZ, manteniendo buffers temporales `top_surface_y` y
+`has_surface`. Si varias caras cubren un nodo, conserva la Y más alta; es
+deliberadamente offline y robusto para un fondo simplificado. Después calcula
+diferencias finitas sobre `depth_m`: central en interior, one-sided en bordes.
+El convenio es **`gradient = ∇depth`**, apunta hacia agua más profunda;
+`slope_magnitude = length(gradient)`.
 
 La distancia firmada se deriva de la transición global water/land mediante un
 Euclidean Distance Transform 2D separable y determinista. Agua es positiva,
@@ -100,6 +102,8 @@ sus lados.
 - isla única sin seabed: vacío como agua sintética;
 - dos islas: recolección recursiva y canal con costa global;
 - seabed real: profundidad medida conserva precedencia sobre synthetic.
+- equivalencia del raster triangle-driven frente a referencia brute-force
+  pequeña: PASS.
 
 La precisión interior es mucho menor que la celda de 1 m porque las rampas y
 las caras de prueba son lineales; shorelines discretas quedan naturalmente

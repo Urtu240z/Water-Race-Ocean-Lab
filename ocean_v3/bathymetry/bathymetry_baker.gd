@@ -61,25 +61,28 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 	data.shore_signed_distance_m.resize(count)
 	data.depth_source_mask.resize(count)
 	data.coast_metadata.resize(count)
+	var top_surface_y := PackedFloat32Array()
+	top_surface_y.resize(count)
+	var has_surface := PackedByteArray()
+	has_surface.resize(count)
+	_rasterize_triangles_to_top_surface(world_faces, data, top_surface_y, has_surface)
 	for z in data.height:
 		for x in data.width:
-			var world_xz := min_xz + Vector2(float(x), float(z)) * cell_size_m
-			var seabed_y := _top_surface_y(world_faces, world_xz)
-			var index = z * data.width + x
-			if is_nan(seabed_y):
+			var index: int = z * data.width + x
+			if has_surface[index] == 0:
 				# Un dominio con islas no necesita un seabed cerrado: el vacío es
 				# agua abierta y se rellena después de conocer todas las costas.
 				data.depth_m[index] = 0.0
 				data.land_water_mask[index] = 1
 				data.depth_source_mask[index] = 0
-			elif seabed_y >= sea_level_y:
+			elif top_surface_y[index] >= sea_level_y:
 				# Conservamos la profundidad firmada histórica para tierra; la
 				# máscara es la autoridad que consumen los sistemas costeros.
-				data.depth_m[index] = sea_level_y - seabed_y
+				data.depth_m[index] = sea_level_y - top_surface_y[index]
 				data.land_water_mask[index] = 0
 				data.depth_source_mask[index] = 0
 			else:
-				data.depth_m[index] = sea_level_y - seabed_y
+				data.depth_m[index] = sea_level_y - top_surface_y[index]
 				data.land_water_mask[index] = 1
 				data.depth_source_mask[index] = 1
 			data.coast_metadata[index] = 0
@@ -87,6 +90,53 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 	_apply_synthetic_depth(data)
 	_compute_gradients(data)
 	return data
+
+
+func _rasterize_triangles_to_top_surface(world_faces: PackedVector3Array, data, top_surface_y: PackedFloat32Array, has_surface: PackedByteArray) -> void:
+	for face_index in range(0, world_faces.size(), 3):
+		var a: Vector3 = world_faces[face_index]
+		var b: Vector3 = world_faces[face_index + 1]
+		var c: Vector3 = world_faces[face_index + 2]
+		var v0 := Vector2(b.x - a.x, b.z - a.z)
+		var v1 := Vector2(c.x - a.x, c.z - a.z)
+		var det := v0.x * v1.y - v1.x * v0.y
+		if absf(det) <= 1.0e-12:
+			# Vertical/degenerate XZ projections do not rasterize into the 2D field.
+			continue
+		var min_x := minf(a.x, minf(b.x, c.x))
+		var max_x := maxf(a.x, maxf(b.x, c.x))
+		var min_z := minf(a.z, minf(b.z, c.z))
+		var max_z := maxf(a.z, maxf(b.z, c.z))
+		var aabb_tolerance_m: float = maxf(max_x - min_x, max_z - min_z) * 1.0e-7 + data.cell_size_m * 1.0e-7
+		var x_min := _grid_min_for_world(min_x - aabb_tolerance_m, data.world_origin_xz.x, data.cell_size_m, data.width)
+		var x_max := _grid_max_for_world(max_x + aabb_tolerance_m, data.world_origin_xz.x, data.cell_size_m, data.width)
+		var z_min := _grid_min_for_world(min_z - aabb_tolerance_m, data.world_origin_xz.y, data.cell_size_m, data.height)
+		var z_max := _grid_max_for_world(max_z + aabb_tolerance_m, data.world_origin_xz.y, data.cell_size_m, data.height)
+		if x_min > x_max or z_min > z_max:
+			continue
+		for z in range(z_min, z_max + 1):
+			for x in range(x_min, x_max + 1):
+				var point_xz: Vector2 = data.world_origin_xz + Vector2(float(x), float(z)) * data.cell_size_m
+				var bary := _barycentric_xz(point_xz, a, b, c)
+				if bary.x < -1.0e-7 or bary.y < -1.0e-7 or bary.z < -1.0e-7:
+					continue
+				var index: int = z * data.width + x
+				var y := bary.x * a.y + bary.y * b.y + bary.z * c.y
+				if has_surface[index] == 0 or y > top_surface_y[index]:
+					top_surface_y[index] = y
+					has_surface[index] = 1
+
+
+func _grid_min_for_world(world_value: float, origin_value: float, cell_size: float, grid_size: int) -> int:
+	# The AABB is already expanded by the same order of tolerance used by the
+	# exact barycentric test; this conversion only clamps it to grid nodes.
+	var grid_value := (world_value - origin_value) / cell_size
+	return clampi(int(ceil(grid_value - 1.0e-7)), 0, grid_size - 1)
+
+
+func _grid_max_for_world(world_value: float, origin_value: float, cell_size: float, grid_size: int) -> int:
+	var grid_value := (world_value - origin_value) / cell_size
+	return clampi(int(floor(grid_value + 1.0e-7)), 0, grid_size - 1)
 
 
 func _collect_world_faces() -> PackedVector3Array:

@@ -123,6 +123,11 @@ var _applying_wave_preset := false
 		surface_detail_enabled = value
 		_request_visual_sync()
 
+@export_range(0.0, 1.0, 0.01) var surface_detail_wave_follow: float = 0.70:
+	set(value):
+		surface_detail_wave_follow = value
+		_request_visual_sync()
+
 @export var surface_normal_texture_a: Texture2D:
 	set(value):
 		surface_normal_texture_a = value
@@ -990,6 +995,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"surface_normal_world_size_a", surface_normal_world_size_a)
 	material.set_shader_parameter(&"surface_normal_world_size_b", surface_normal_world_size_b)
 	material.set_shader_parameter(&"surface_normal_strength", surface_normal_strength)
+	material.set_shader_parameter(&"surface_detail_wave_follow", surface_detail_wave_follow)
 	material.set_shader_parameter(&"surface_flow_direction_a", surface_flow_direction_a)
 	material.set_shader_parameter(&"surface_flow_direction_b", surface_flow_direction_b)
 	material.set_shader_parameter(&"surface_flow_speed_a", surface_flow_speed_a)
