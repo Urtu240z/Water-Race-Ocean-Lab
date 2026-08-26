@@ -658,7 +658,7 @@ float surface_foam_direct_j_raw_at(vec2 sample_position) {
 
 vec2 surface_foam_topology_at(vec2 sample_position, vec2 world_dx, vec2 world_dy) {
 	vec2 uv = spectrum_uv(sample_position, surface_foam_source_domain_m);
-	return textureGrad(surface_foam_topology, uv, world_dx / surface_foam_source_domain_m, world_dy / surface_foam_source_domain_m).rg;
+	return textureGrad(surface_foam_topology, uv, world_dx / surface_foam_source_domain_m * 0.5, (world_dy / surface_foam_source_domain_m) * 0.5).rg;
 }
 
 

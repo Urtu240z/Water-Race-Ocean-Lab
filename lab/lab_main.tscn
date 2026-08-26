@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://c2swf61455l5h" path="res://lab/lab_main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
-[ext_resource type="Texture2D" uid="uid://b3ceorvkc0lod" path="res://NightSkyHDRI003_4K_HDR.exr" id="2_mi5lw"]
+[ext_resource type="Texture2D" uid="uid://b1uckk3vaafyx" path="res://kloofendal_48d_partly_cloudy_puresky_4k.hdr" id="2_mi5lw"]
 [ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
@@ -75,7 +75,6 @@ script = ExtResource("4_metrics")
 [node name="OceanV3Mount" type="Node3D" parent="." unique_id=426342056]
 
 [node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
-short_choppiness = 2.11
 surface_normal_world_size_a = 34.15
 surface_normal_world_size_b = 2.4
 surface_normal_strength = 0.66
@@ -102,9 +101,13 @@ foam_residual_decay_multiplier = 0.2
 foam_distance_fade_start = 0.0
 foam_distance_fade_end = 5000.0
 foam_edge_softness = 0.32
-crest_filigree_whitecap = 1.5
+crest_filigree_whitecap = 0.4
+crest_fresh_filigree_strength = 0.5
+crest_residual_filigree_strength = 0.62
+crest_filigree_normal_influence = 0.4
 surface_foam_stochastic_cell_size_m = 55.0
 surface_foam_whitecap = 0.71
+surface_foam_topology_resolution = 512
 surface_foam_update_hz = 60
 surface_foam_evolution_speed = 0.59
 surface_foam_strength = 2.52
