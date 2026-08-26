@@ -47,6 +47,7 @@ func rebuild() -> void:
 	material.vertex_color_use_as_albedo = true
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.no_depth_test = mode == Mode.LAND_WATER or mode == Mode.DEPTH_SOURCE
 	material_override = material
 
 

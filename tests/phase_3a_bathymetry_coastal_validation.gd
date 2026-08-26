@@ -124,8 +124,15 @@ func _validate_preview_lifecycle() -> void:
 	baker.bake_preview()
 	var preview = baker._find_owned_preview()
 	_check(preview != null and preview.mode == DebugScript.Mode.LAND_WATER, "preview: bake creates default LAND_WATER")
+	var classification_material: StandardMaterial3D = preview.material_override as StandardMaterial3D
+	_check(classification_material != null and classification_material.no_depth_test, "preview: LAND_WATER uses x-ray material")
 	baker.preview_mode = 4
 	_check(preview != null and preview.mode == DebugScript.Mode.DEPTH_SOURCE, "preview: mode changes without rebake")
+	classification_material = preview.material_override as StandardMaterial3D
+	_check(classification_material != null and classification_material.no_depth_test, "preview: DEPTH_SOURCE uses x-ray material")
+	baker.preview_mode = 3
+	classification_material = preview.material_override as StandardMaterial3D
+	_check(preview.mode == DebugScript.Mode.SHORE_DISTANCE and classification_material != null and not classification_material.no_depth_test, "preview: SHORE_DISTANCE restores depth test")
 	baker.bake_preview()
 	var rebaked_preview = baker._find_owned_preview()
 	_check(rebaked_preview != null and _count_owned_previews(baker) == 1, "preview: rebake replaces without duplicates")
