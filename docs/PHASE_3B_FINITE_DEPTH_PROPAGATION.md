@@ -11,9 +11,10 @@ cambio de H0 ni una reconstrucción del espectro.
 
 3B.1 añade un solve Eikonal CPU offline para curvatura local alrededor de
 obstáculos y una escala de sombra suave derivada de línea de vista y detour de
-ruta. No hay breaking, runup, shoreline dinámica, foam ni cambios a
-OceanQuery. MID y SHORT permanecen de mar abierto. La física de vehículos
-continúa usando el backend de Fase 2C.
+ruta. 3B.2A construye el mapping world→deep y 3B.2B lo publica mediante el
+pipeline existente para que LONG_COASTAL lo consuma. No hay breaking, runup,
+shoreline dinámica, foam ni cambios a OceanQuery. MID y SHORT permanecen de mar
+abierto. La física de vehículos continúa usando el backend de Fase 2C.
 
 ## Arquitectura y fuente única
 
@@ -50,6 +51,14 @@ es campo `(phase_offset, shoaling, local_k, valid)` y métricas
 `(phase, dir_x, dir_z, reached)`, total 48 B/nodo de VRAM, sin mipmaps ni
 readbacks. `shadow_scale` permanece en CPU para no alterar el contrato GPU de
 esta fase.
+
+El flujo de render costeño es `CoastalPropagationData` → `CoastalWarpBaker` →
+`CoastalWarpData` → textura GPU de warp → `ocean_surface.gdshader`. El baker de
+warp consume `render_phase_rad` y `render_direction` cuando existen, con
+fallback a `phase_rad` y `local_direction` para recursos legacy. El shader sólo
+recibe el mapping resuelto: no conoce el cut locus ni regulariza la fase. El
+warp se aplica exclusivamente a LONG_COASTAL; LONG_REMAINDER, MID y SHORT
+mantienen su sampleo abierto.
 
 ## Modelo físico
 

@@ -22,6 +22,7 @@ var _failures := 0
 
 func _initialize() -> void:
 	_validate_flat()
+	_validate_presentation_authority()
 	_validate_oblique_beach()
 	_validate_gaussian_bank()
 	_validate_island()
@@ -73,6 +74,10 @@ func _bake_warp(propagation):
 	return baker.bake()
 
 
+func _presentation_phase(propagation, index: int) -> float:
+	return propagation.render_phase_rad[index] if propagation.has_render_phase() else propagation.phase_rad[index]
+
+
 ## --- A. FLAT ------------------------------------------------------------------
 
 func _validate_flat() -> void:
@@ -104,7 +109,7 @@ func _validate_flat() -> void:
 			max_pos_error = maxf(max_pos_error, deep.distance_to(world))
 			max_detj_error = maxf(max_detj_error, absf(warp.jacobian_det[index] - 1.0))
 			var phase_rebuilt: float = k0 * (deep - deep_origin).dot(direction)
-			max_phase_error = maxf(max_phase_error, absf(phase_rebuilt - propagation.phase_rad[index]))
+			max_phase_error = maxf(max_phase_error, absf(phase_rebuilt - _presentation_phase(propagation, index)))
 			max_r_linear_error = maxf(max_r_linear_error, absf(warp.r_deep[index] - world.dot(normal)))
 			if x < width - 5 and warp.valid_mask[z * width + x + 1] != 0:
 				var deep_e := Vector2(warp.deep_x[z * width + x + 1], warp.deep_z[z * width + x + 1])
@@ -117,6 +122,36 @@ func _validate_flat() -> void:
 	_check(valid_count > (width - 8) * (height - 8) * 0.9, "flat: interior mayoritariamente válido")
 	_check(max_mapping_jump < cell * 1.05, "flat: mapping continuo entre celdas")
 
+
+func _validate_presentation_authority() -> void:
+	var propagation = _bake_propagation(_make_data(81, 81, 1.0, func(_x: int, _z: int) -> float: return 100.0), Vector2.RIGHT)
+	var raw_warp = _bake_warp(propagation)
+	var center: int = 40 * propagation.width + 40
+	var raw_phase: float = propagation.phase_rad[center]
+	var phase_delta := 0.5
+	propagation.render_phase_rad[center] = raw_phase + phase_delta
+	var presentation_warp = _bake_warp(propagation)
+	var longitudinal_shift: float = presentation_warp.deep_x[center] - raw_warp.deep_x[center]
+	print("3B.2A PRESENTATION phase_shift=%.6f expected_deep_shift=%.6f actual_deep_shift=%.6f" % [phase_delta, phase_delta / propagation.k0_rad_m, longitudinal_shift])
+	_check(propagation.phase_rad[center] == raw_phase, "presentation: modificar render_phase no muta RAW phase")
+	_check(absf(longitudinal_shift - phase_delta / propagation.k0_rad_m) < 1.0e-3, "presentation: warp longitudinal usa render_phase")
+
+	var direction_baker = WarpBakerScript.new()
+	propagation.render_direction_x[center] = 0.0
+	propagation.render_direction_z[center] = 1.0
+	var sampled: Dictionary = direction_baker.debug_sample_direction(propagation, propagation.width, propagation.height, Vector2(40.0, 40.0))
+	_check(sampled["valid"] and (sampled["dir"] as Vector2).distance_to(Vector2.DOWN) < 1.0e-6, "presentation: backtrace interpola render_direction")
+	var presentation_direction_x: PackedFloat32Array = propagation.render_direction_x
+	var presentation_direction_z: PackedFloat32Array = propagation.render_direction_z
+	propagation.render_phase_rad = PackedFloat32Array()
+	propagation.render_direction_x = PackedFloat32Array()
+	propagation.render_direction_z = PackedFloat32Array()
+	var legacy_sample: Dictionary = direction_baker.debug_sample_direction(propagation, propagation.width, propagation.height, Vector2(40.0, 40.0))
+	var legacy_warp = _bake_warp(propagation)
+	_check(legacy_sample["valid"] and (legacy_sample["dir"] as Vector2).distance_to(Vector2.RIGHT) < 1.0e-6, "presentation: fallback RAW direction conserva backtrace legacy")
+	_check(legacy_warp.deep_x[center] == raw_warp.deep_x[center], "presentation: fallback RAW phase conserva warp legacy")
+	propagation.render_direction_x = presentation_direction_x
+	propagation.render_direction_z = presentation_direction_z
 
 ## --- B. OBLIQUE BEACH ----------------------------------------------------------
 
@@ -181,7 +216,7 @@ func _validate_gaussian_bank() -> void:
 		detj_values.append(warp.jacobian_det[index])
 		var deep := Vector2(warp.deep_x[index], warp.deep_z[index])
 		var phase_rebuilt: float = k0 * (deep - deep_origin).dot(Vector2.RIGHT)
-		max_phase_error = maxf(max_phase_error, absf(phase_rebuilt - propagation.phase_rad[index]))
+		max_phase_error = maxf(max_phase_error, absf(phase_rebuilt - _presentation_phase(propagation, index)))
 		var dir_change := rad_to_deg(acos(clampf(Vector2(propagation.local_direction_x[index], propagation.local_direction_z[index]).dot(Vector2.RIGHT), -1.0, 1.0)))
 		max_dir_change = maxf(max_dir_change, dir_change)
 	var stats := _stats(detj_values)

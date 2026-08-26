@@ -2,6 +2,17 @@
 
 ## Render-space warp and normals
 
+`CoastalWarpBaker` recibe `CoastalPropagationData` y usa los campos de
+presentación `render_phase_rad` y `render_direction` para construir el mapping
+final de `LONG_COASTAL`. Si un recurso legacy no los contiene, hace fallback a
+`phase_rad` y `local_direction`. La fase permanece desenrollada: la coordenada
+longitudinal es `s_deep = render_phase_rad / k0`. El cut locus y su regularización
+no existen en el shader; llegan resueltos dentro de `CoastalWarpData`.
+
+Los campos RAW (`phase_rad`, `phase_gradient_x/z` y `local_direction`) siguen
+siendo la verdad física/diagnóstica y no se sobrescriben. `build_gpu_textures()`
+de `CoastalPropagationData` mantiene su textura RAW compartida.
+
 `CoastalWarpData` stores the complete world-to-deep Jacobian
 
 ```text

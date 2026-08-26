@@ -9,17 +9,19 @@
 que permita después samplear el LONG FFT en coordenadas de mar profundo sin
 folds, discontinuidades ni una aproximación físicamente incoherente?
 
-3B.1 aporta T, phi, grad(phi) y local_direction (Eikonal/Fast Sweeping, Snell,
-shadow). 3B.2A construye las DOS coordenadas del mapping (longitudinal + la
-etiqueta transversal del characteristic) y valida el resultado. **NO integra el
-warp en el FFT real: es prototipo de validación.**
+3B.1 aporta T, phi, grad(phi), local_direction y sus campos de presentación
+`render_phase_rad`/`render_direction` (Eikonal/Fast Sweeping, Snell, shadow).
+3B.2A construye las DOS coordenadas del mapping (longitudinal + la etiqueta
+transversal del characteristic) y valida el resultado. El warp final consume la
+presentación cuando está disponible; los campos RAW siguen siendo diagnóstico y
+fallback de compatibilidad.
 
 ## Mapping elegido (convenio documentado)
 
 ```text
 d0 = incoming_direction (unitario)
 n0 = perpendicular(d0) = (-d0.y, d0.x)
-s_deep = phi / k0                    (coordenada longitudinal: fase Eikonal / k0)
+s_deep = render_phi / k0             (coordenada longitudinal: fase de presentación / k0)
 r_deep = dot(p_frontera_upstream, n0) (etiqueta transversal del characteristic)
 deep_xz = deep_origin + d0*s_deep + n0*r_deep
 deep_origin = d0 * min_s   (min_s = min dot(world, d0) en el grid)
@@ -27,21 +29,22 @@ deep_origin = d0 * min_s   (min_s = min dot(world, d0) en el grid)
 
 - Con `deep_origin = d0*min_s`, en fondo plano el mapping es **la identidad**
   (deep_xz ≈ world_xz), verificado.
-- `s_deep = phi/k0` por construcción reproduce la fase Eikonal de 3B.1:
-  `k0 * dot(deep_xz - deep_origin, d0) == phase_rad` exactamente (sólo
-  redondeo).
+- `s_deep = render_phi/k0` por construcción reproduce la fase que llega al
+  renderer: `k0 * dot(deep_xz - deep_origin, d0) == render_phase_rad`
+  (sólo redondeo). En una banda sin regularización coincide con `phase_rad`.
 - NO se usa `world + direction*phase_offset/k0` como mapping 2D: eso sólo
   fija la fase longitudinal y no preserva la identidad transversal del rayo.
 
 ## Backtrace de characteristics (RK2)
 
-`CoastalWarpBaker._backtrace` integra `p' = -local_direction(p)` desde cada
+`CoastalWarpBaker._backtrace` integra `p' = -render_direction(p)` desde cada
 nodo reached hacia aguas arriba:
 
 - paso inicial = `0.5 * cell_size` (celdas); RK2/Heun (k2 = dir en el punto
   medio; si el punto medio sale del grid se degrada a Euler para intersectar
   el borde correctamente).
-- `local_direction` interpolada **bilinealmente** en cada paso.
+- `render_direction` interpolada **bilinealmente** en cada paso, con fallback a
+  `local_direction` para recursos legacy sin el campo de presentación.
 - Termina al cruzar la frontera del grid; el cruce se clasifica:
   - `UPSTREAM` (el punto `cross - d0` queda fuera del grid): r_deep válido;
   - `LATERAL`: el characteristic salió por un borde lateral (no se puede
@@ -57,7 +60,7 @@ El primer prototipo tardaba ~50 s en 129×97 @1m porque `_sample_direction`
 usaba `sample_propagation()` (interpola 10 campos: depth, k, λ, c, Cg,
 shoaling, phase, gradiente, dirección). El backtrace sólo necesita dirección +
 reached/valid. Se reescribió como interpolación bilineal DIRECTA de
-`local_direction_x/z` + máscaras `reached_mask/valid_mask` (sin objetos
+`render_direction_x/z` + máscaras `reached_mask/valid_mask` (sin objetos
 temporales por paso salvo un Dictionary de retorno). Verificado contra el
 sampler antiguo: **0 mismatches de máscara y diferencia angular 0.00000000°**
 (bit-idéntico; un falso 0.028° inicial era artefacto de `Vector2.normalized()`
@@ -206,8 +209,10 @@ a medio plazo evaluar división por sectores direccionales (NO implementada).
   se porta: mandato).
 - El warp 0.5m completo NO se ejecutó (estimación >30 s; regla de parada).
   La estabilidad de resolución queda cubierta por el test de dirección 1m/0.5m.
-- NO se integra en el FFT real; NO se modifica H0; NO amplitud por detJ;
-  NO breaking/reflection/diffraction/whitewater; NO shoaling nuevo.
+- Esta nota valida el baker offline; la integración del warp en el FFT real se
+  realiza en 3B.2B mediante la textura existente y sólo para LONG_COASTAL.
+  No se modifica H0, no se añade amplitud por detJ, ni se integran
+  breaking/reflection/diffraction/whitewater o shoaling nuevo.
 
 ## Decisión / recomendación (3B.2B)
 

@@ -6,14 +6,14 @@ extends RefCounted
 ## Convenio:
 ##   d0 = incoming_direction (unitario)
 ##   n0 = perpendicular(d0)
-##   s_deep = phi / k0  (coordenada longitudinal: fase Eikonal / k0)
-##   r_deep = dot(p_frontera_upstream, n0)  (backtrace con -local_direction)
+##   s_deep = render_phi / k0  (coordenada longitudinal de presentación)
+##   r_deep = dot(p_frontera_upstream, n0)  (backtrace con -render_direction)
 ##   deep_xz = deep_origin + d0*s_deep + n0*r_deep
 ##   deep_origin = d0 * min_s  (con min_s = min dot(world, d0) en el grid)
 ##
 ## En fondo plano el mapping es la IDENTIDAD (deep_xz ~= world_xz).
 ##
-## Backtrace: RK2 (Heun) sobre -local_direction interpolada bilinealmente,
+## Backtrace: RK2 (Heun) sobre -render_direction interpolada bilinealmente,
 ## paso inicial = backtrace_step_cells * cell_size. Al cruzar la frontera
 ## upstream se guarda r_deep = dot(p_cruce, n0). Si el backtrace entra en
 ## tierra/shadow o agota pasos, el nodo queda INVALID (no se cruza tierra).
@@ -92,6 +92,8 @@ func bake():
 				warp.jacobian_det[index] = 0.0
 				continue
 			var phase: float = propagation.phase_rad[index]
+			if propagation.has_render_phase():
+				phase = propagation.render_phase_rad[index]
 			var s_deep := phase / propagation.k0_rad_m
 			var result: Dictionary = _backtrace(propagation, direction, normal, origin, cell, width, height,
 				Vector2(float(x), float(z)), step_h, max_steps)
@@ -139,7 +141,7 @@ func debug_backtrace(prop_data, direction: Vector2, origin: Vector2, cell: float
 
 func _backtrace(prop_data, direction: Vector2, _normal: Vector2, _origin: Vector2, _cell: float,
 		width: int, height: int, grid_local: Vector2, step_h: float, max_steps: int) -> Dictionary:
-	## Integra p' = -local_direction(p) desde grid_local (en celdas, local al
+	## Integra p' = -render_direction(p) desde grid_local (en celdas, local al
 	## grid) hacia aguas arriba hasta tocar la frontera upstream.
 	## Devuelve {steps:int, hit:BoundaryHit, cross_point:Vector2 (celdas)}.
 	var t_backtrace0 := Time.get_ticks_usec()
@@ -196,7 +198,7 @@ func _backtrace(prop_data, direction: Vector2, _normal: Vector2, _origin: Vector
 
 
 func _sample_direction(prop_data, width: int, height: int, grid_local: Vector2) -> Dictionary:
-	## Dirección local interpolada bilinealmente; devuelve {valid, dir}.
+	## Dirección de presentación interpolada bilinealmente; devuelve {valid, dir}.
 	## valid=false si el punto cae en tierra/shadow (no se atraviesa).
 	## Hot path del backtrace: interpola SÓLO dirección+reached (no los 10
 	## campos de sample_propagation), que es lo que necesita el RK2.
@@ -219,8 +221,14 @@ func _sample_direction(prop_data, width: int, height: int, grid_local: Vector2) 
 	var w10 := tx * (1.0 - tz)
 	var w01 := (1.0 - tx) * tz
 	var w11 := tx * tz
-	var dir_x: float = prop_data.local_direction_x[i00] * w00 + prop_data.local_direction_x[i10] * w10 + prop_data.local_direction_x[i01] * w01 + prop_data.local_direction_x[i11] * w11
-	var dir_z: float = prop_data.local_direction_z[i00] * w00 + prop_data.local_direction_z[i10] * w10 + prop_data.local_direction_z[i01] * w01 + prop_data.local_direction_z[i11] * w11
+	var dir_x: float
+	var dir_z: float
+	if prop_data.has_render_direction():
+		dir_x = prop_data.render_direction_x[i00] * w00 + prop_data.render_direction_x[i10] * w10 + prop_data.render_direction_x[i01] * w01 + prop_data.render_direction_x[i11] * w11
+		dir_z = prop_data.render_direction_z[i00] * w00 + prop_data.render_direction_z[i10] * w10 + prop_data.render_direction_z[i01] * w01 + prop_data.render_direction_z[i11] * w11
+	else:
+		dir_x = prop_data.local_direction_x[i00] * w00 + prop_data.local_direction_x[i10] * w10 + prop_data.local_direction_x[i01] * w01 + prop_data.local_direction_x[i11] * w11
+		dir_z = prop_data.local_direction_z[i00] * w00 + prop_data.local_direction_z[i10] * w10 + prop_data.local_direction_z[i01] * w01 + prop_data.local_direction_z[i11] * w11
 	var direction := Vector2(dir_x, dir_z).normalized()
 	if direction.length_squared() <= 1.0e-12:
 		return {"valid": false, "dir": Vector2.ZERO}
