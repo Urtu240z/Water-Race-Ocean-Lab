@@ -141,6 +141,7 @@ var _detector_cursor := 0
 var _detector_tick := 0
 var _detector_queried_slots_last_tick := 0
 var _detector_queried_points_last_tick := 0
+var _structural_energy_update_pending := false
 
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
@@ -186,15 +187,37 @@ func set_query_source(callable: Callable) -> void:
 
 func set_energy_model(long_hs_m: float, coastal_fraction: float) -> void:
 	## Recoloca los anchors con el modelo de energía vigente (Hs + fracción del
-	## split). Determinista: misma batimetría + mismo modelo => mismos anchors.
+	## split). Si hay breakers ACTIVE, difiere la operación destructiva hasta que
+	## terminen; nunca reinicia su lifecycle por un cambio de sea state.
+	set_runtime_energy_model(long_hs_m, coastal_fraction)
+	if _has_active_breakers():
+		_structural_energy_update_pending = true
+		return
+	_apply_structural_energy_model()
+
+
+func set_runtime_energy_model(long_hs_m: float, coastal_fraction: float) -> void:
+	## Ruta de transición por frame: sólo alimenta energía para detección/spawns
+	## futuros. No recoloca anchors, resetea scheduler ni recrea ribbons.
 	_long_hs_m = maxf(long_hs_m, 0.0)
 	_coastal_fraction = clampf(coastal_fraction, 0.0, 1.0)
+
+
+func _apply_structural_energy_model() -> void:
 	if _propagation != null and _propagation.is_valid():
 		_anchors = _place_anchors()
 	else:
 		_anchors.clear()
 	_reset_scheduler()
 	_rebuild_instances()
+	_structural_energy_update_pending = false
+
+
+func _has_active_breakers() -> bool:
+	for entry in _tracking:
+		if bool(entry.get("active", false)):
+			return true
+	return false
 
 
 func disable() -> void:
@@ -362,6 +385,8 @@ func _process(_delta: float) -> void:
 		return
 	_sync_uniforms()
 	_update_tracking()
+	if _structural_energy_update_pending and not _has_active_breakers():
+		_apply_structural_energy_model()
 
 
 # --- Internos. ---

@@ -827,6 +827,10 @@ func _update_wave_transition_exports() -> void:
 	if bool(state.get("active", false)):
 		_apply_transition_exports(float(state.get("alpha", 0.0)))
 		return
+	if bool(state.get("preparing", false)):
+		# El target aún se calcula fuera del hilo principal: los exports siguen
+		# representando el mar visible hasta que GPU y OceanQuery puedan arrancar juntos.
+		return
 	if bool(state.get("cancelled", false)):
 		_wave_transition_active = false
 		_wave_transition_start_configs = []

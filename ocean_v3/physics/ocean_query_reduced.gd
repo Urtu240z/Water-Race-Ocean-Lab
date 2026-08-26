@@ -114,6 +114,8 @@ var _coastal_inner_deg := 20.0
 var _coastal_outer_deg := 35.0
 var _spectrum_transition_active := false
 var _spectrum_transition_alpha := 0.0
+var _spectrum_transition_target_cascades: Array[_CascadeData] = []
+var _spectrum_transition_target_wind_direction := Vector2.RIGHT
 
 # Diagnóstico (sin push_warning por query).
 var diagnostic_non_converged := 0
@@ -153,6 +155,8 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 	assert(configs.size() == h0_datas.size())
 	_spectrum_transition_active = false
 	_spectrum_transition_alpha = 0.0
+	_spectrum_transition_target_cascades = []
+	_spectrum_transition_target_wind_direction = Vector2.RIGHT
 	_cascades.clear()
 	for index in configs.size():
 		_cascades.append(_decode_cascade(configs[index], h0_datas[index]))
@@ -163,26 +167,82 @@ func set_spectrum(configs: Array[OpenOceanFFTConfig], h0_datas: Array[PackedByte
 
 
 func begin_spectrum_transition(target_configs: Array[OpenOceanFFTConfig], target_h0_datas: Array[PackedByteArray], initial_alpha := 0.0) -> void:
-	if _cascades.size() != target_configs.size() or target_configs.size() != target_h0_datas.size():
-		push_error("OceanQuery transition endpoints are incompatible.")
-		return
+	var payload := prepare_spectrum_transition_target(
+		target_configs, target_h0_datas, _budgets, _mode,
+		_coastal_runtime != null and _coastal_runtime.enabled,
+		_coastal_inner_deg, _coastal_outer_deg
+	)
+	begin_prepared_spectrum_transition(payload, initial_alpha)
+
+
+static func prepare_spectrum_transition_target(target_configs: Array[OpenOceanFFTConfig], target_h0_datas: Array[PackedByteArray],
+		budgets: Array[int], mode: int, coastal_active: bool, coastal_inner_deg: float, coastal_outer_deg: float) -> Dictionary:
+	if target_configs.size() != target_h0_datas.size() or target_configs.size() != budgets.size():
+		return {}
 	var targets: Array[_CascadeData] = []
 	for index in target_configs.size():
-		var source := _cascades[index]
-		var target_config := target_configs[index]
-		var target := _decode_cascade(target_config, target_h0_datas[index])
+		var target := _decode_cascade(target_configs[index], target_h0_datas[index])
+		if index == 0:
+			_fill_coastal_weights_for_transition(target, target_configs[index].wind_direction, coastal_active, coastal_inner_deg, coastal_outer_deg)
+		_compact_cascade(target, budgets[index], mode)
+		targets.append(target)
+	return {
+		"cascades": targets,
+		"long_wind_direction": target_configs[0].wind_direction.normalized() if not target_configs.is_empty() else Vector2.RIGHT,
+	}
+
+
+func begin_prepared_spectrum_transition(payload: Dictionary, initial_alpha := 0.0) -> bool:
+	var targets: Array = payload.get("cascades", [])
+	if _cascades.size() != targets.size() or targets.is_empty():
+		push_error("OceanQuery prepared transition endpoints are incompatible.")
+		return false
+	for index in _cascades.size():
+		var source: _CascadeData = _cascades[index]
+		var target: _CascadeData = targets[index]
 		if source.f_kx.size() != target.f_kx.size() \
 			or not is_equal_approx(source.inv_n2, target.inv_n2):
-			push_error("OceanQuery transition topology differs.")
-			return
-		targets.append(target)
-	if not targets.is_empty():
-		_fill_coastal_weights(targets[0], target_configs[0].wind_direction)
-	for index in _cascades.size():
-		_compact_transition_cascade(_cascades[index], targets[index], _budgets[index])
+			push_error("OceanQuery prepared transition topology differs.")
+			return false
+		_compact_transition_cascade(source, target, _budgets[index])
+	_spectrum_transition_target_cascades = []
+	for target in targets:
+		_spectrum_transition_target_cascades.append(target as _CascadeData)
+	_spectrum_transition_target_wind_direction = Vector2(payload.get("long_wind_direction", Vector2.RIGHT)).normalized()
 	_spectrum_transition_active = true
 	_spectrum_transition_alpha = clampf(initial_alpha, 0.0, 1.0)
 	_prepared_valid = false
+	return true
+
+
+func install_prepared_spectrum(payload: Dictionary) -> bool:
+	var prepared: Array = payload.get("cascades", [])
+	if prepared.is_empty():
+		return false
+	_cascades = []
+	for cascade in prepared:
+		_cascades.append(cascade as _CascadeData)
+	_spectrum_transition_target_cascades = []
+	_spectrum_transition_target_wind_direction = Vector2.RIGHT
+	_spectrum_transition_active = false
+	_spectrum_transition_alpha = 0.0
+	_coastal_wind_direction = Vector2(payload.get("long_wind_direction", Vector2.RIGHT)).normalized()
+	_prepared_valid = false
+	_sync_native()
+	return true
+
+
+func complete_spectrum_transition() -> void:
+	if not _spectrum_transition_active or _spectrum_transition_target_cascades.is_empty():
+		return
+	_cascades = _spectrum_transition_target_cascades
+	_spectrum_transition_target_cascades = []
+	_coastal_wind_direction = _spectrum_transition_target_wind_direction
+	_spectrum_transition_target_wind_direction = Vector2.RIGHT
+	_spectrum_transition_active = false
+	_spectrum_transition_alpha = 0.0
+	_prepared_valid = false
+	_sync_native()
 
 
 func set_spectrum_transition_alpha(alpha: float) -> void:
@@ -194,6 +254,16 @@ func set_spectrum_transition_alpha(alpha: float) -> void:
 
 func spectrum_transition_active() -> bool:
 	return _spectrum_transition_active
+
+
+func spectrum_transition_preparation_settings() -> Dictionary:
+	return {
+		"budgets": _budgets.duplicate(),
+		"mode": _mode,
+		"coastal_active": _coastal_runtime != null and _coastal_runtime.enabled,
+		"coastal_inner_deg": _coastal_inner_deg,
+		"coastal_outer_deg": _coastal_outer_deg,
+	}
 
 
 func configure_coastal(warp_data, propagation_data, inner_deg: float, outer_deg: float,
@@ -856,11 +926,16 @@ func _refresh_coastal_long_weights() -> void:
 
 func _fill_coastal_weights(cascade: _CascadeData, direction: Vector2) -> void:
 	var active: bool = _coastal_runtime != null and _coastal_runtime.enabled
+	_fill_coastal_weights_for_transition(cascade, direction, active, _coastal_inner_deg, _coastal_outer_deg)
+
+
+static func _fill_coastal_weights_for_transition(cascade: _CascadeData, direction: Vector2,
+		active: bool, inner_deg: float, outer_deg: float) -> void:
 	var safe_direction := direction.normalized() if direction.length_squared() > 1.0e-8 else Vector2.RIGHT
 	for index in cascade.f_kx.size():
 		if active:
-			cascade.f_coastal_weight_pos[index] = _coastal_angular_weight_for_direction(cascade.f_kx[index], cascade.f_ky[index], safe_direction)
-			cascade.f_coastal_weight_neg[index] = _coastal_angular_weight_for_direction(-cascade.f_kx[index], -cascade.f_ky[index], safe_direction)
+			cascade.f_coastal_weight_pos[index] = _coastal_angular_weight_for_transition(cascade.f_kx[index], cascade.f_ky[index], safe_direction, inner_deg, outer_deg)
+			cascade.f_coastal_weight_neg[index] = _coastal_angular_weight_for_transition(-cascade.f_kx[index], -cascade.f_ky[index], safe_direction, inner_deg, outer_deg)
 		else:
 			cascade.f_coastal_weight_pos[index] = 0.0
 			cascade.f_coastal_weight_neg[index] = 0.0
@@ -871,21 +946,26 @@ func _coastal_angular_weight(kx: float, ky: float) -> float:
 
 
 func _coastal_angular_weight_for_direction(kx: float, ky: float, direction: Vector2) -> float:
+	return _coastal_angular_weight_for_transition(kx, ky, direction, _coastal_inner_deg, _coastal_outer_deg)
+
+
+static func _coastal_angular_weight_for_transition(kx: float, ky: float, direction: Vector2,
+		inner_deg: float, outer_deg: float) -> float:
 	var k_len := sqrt(kx * kx + ky * ky)
 	if k_len <= 1.0e-6:
 		return 1.0
 	var dot_wind := clampf((kx * direction.x + ky * direction.y) / k_len, -1.0, 1.0)
 	var angle_deg := rad_to_deg(acos(dot_wind))
-	if angle_deg <= _coastal_inner_deg:
+	if angle_deg <= inner_deg:
 		return 1.0
-	if angle_deg >= _coastal_outer_deg:
+	if angle_deg >= outer_deg:
 		return 0.0
-	var t := (angle_deg - _coastal_inner_deg) / maxf(_coastal_outer_deg - _coastal_inner_deg, 1.0e-6)
+	var t := (angle_deg - inner_deg) / maxf(outer_deg - inner_deg, 1.0e-6)
 	return 1.0 - smoothstep(0.0, 1.0, t)
 
 func _rebuild_selection() -> void:
 	for index in _cascades.size():
-		_compact_cascade(_cascades[index], _budgets[index])
+		_compact_cascade(_cascades[index], _budgets[index], _mode)
 	_prepared_valid = false
 	_sync_native()
 
@@ -1009,10 +1089,10 @@ func _compact_transition_cascade(current: _CascadeData, target: _CascadeData, bu
 	current.count = count
 
 
-func _compact_cascade(cascade: _CascadeData, budget: int) -> void:
+static func _compact_cascade(cascade: _CascadeData, budget: int, mode: int) -> void:
 	var full_count := cascade.f_kx.size()
 	var keep := budget
-	if _mode == MODE_FULL_PAIRS or keep >= full_count:
+	if mode == MODE_FULL_PAIRS or keep >= full_count:
 		keep = full_count
 	var selected: PackedInt32Array = []
 	if keep == full_count:
@@ -1084,7 +1164,7 @@ func _compact_cascade(cascade: _CascadeData, budget: int) -> void:
 
 ## --- Decodificación de H0 a pares canónicos ±k ---------------------------------
 
-func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _CascadeData:
+static func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _CascadeData:
 	var n := config.resolution
 	var delta_k := TAU / config.domain_size_m
 	var lambda := -config.choppiness
@@ -1142,7 +1222,7 @@ func _decode_cascade(config: OpenOceanFFTConfig, h0_bytes: PackedByteArray) -> _
 	return result
 
 
-func _compute_importance(cascade: _CascadeData) -> void:
+static func _compute_importance(cascade: _CascadeData) -> void:
 	# Energías totales por métrica dentro de la cascada (normalización unitaria).
 	var total_e := 0.0
 	var total_slope := 0.0
