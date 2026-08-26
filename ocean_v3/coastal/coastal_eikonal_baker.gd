@@ -16,10 +16,19 @@ var shadow_min_scale := 0.15
 var shadow_occlusion_entry_scale := 0.70
 var shadow_detour_length_m := 32.0
 var shadow_smoothing_passes := 2
+var shadow_recovery_enabled := true
+var shadow_diffraction_angle_deg := 12.0
+var shadow_recovery_strength := 1.0
+var direction_smoothing_passes := 3
+var direction_smoothing_strength := 0.35
+var direction_smoothing_threshold_deg := 6.0
 var last_base_metrics_ms := 0.0
 var last_eikonal_sweep_ms := 0.0
 var last_phase_populate_ms := 0.0
 var last_shadow_ms := 0.0
+var last_shadow_geometric_ms := 0.0
+var last_shadow_recovery_ms := 0.0
+var last_direction_smoothing_ms := 0.0
 var last_cycles_used := 0
 var last_directional_sweeps_used := 0
 var last_final_max_change := 0.0
@@ -54,6 +63,9 @@ func bake():
 	var phase_start := Time.get_ticks_usec()
 	_populate_phase_fields(output, travel_time, direction)
 	last_phase_populate_ms = float(Time.get_ticks_usec() - phase_start) / 1000.0
+	var direction_start := Time.get_ticks_usec()
+	_build_render_direction(output)
+	last_direction_smoothing_ms = float(Time.get_ticks_usec() - direction_start) / 1000.0
 	print("COASTAL PREVIEW: building shadow...")
 	var shadow_start := Time.get_ticks_usec()
 	_build_shadow_scale(output, fixed, direction)
@@ -157,6 +169,7 @@ func _travel_at(output, travel_time: PackedFloat32Array, x: int, z: int) -> floa
 func _populate_phase_fields(output, travel_time: PackedFloat32Array, direction: Vector2) -> void:
 	var minimum_s := _minimum_projection(output, direction)
 	var max_residual := 0.0
+	var interior_residual := 0.0
 	for z in output.height:
 		for x in output.width:
 			var index: int = z * output.width + x
@@ -180,6 +193,24 @@ func _populate_phase_fields(output, travel_time: PackedFloat32Array, direction: 
 			if x > 0 and z > 0 and x < output.width - 1 and z < output.height - 1:
 				max_residual = maxf(max_residual, absf(length_phase - output.local_k[index]))
 	output.eikonal_max_residual_rad_m = max_residual
+	for z in output.height:
+		for x in output.width:
+			var index: int = z * output.width + x
+			if output.valid_mask[index] == 0 or output.reached_mask[index] == 0 or not _has_reached_water_neighbors(output, x, z):
+				continue
+			var gradient_phase: Vector2 = _upwind_gradient_at(output, travel_time, x, z) * output.omega_ref_rad_s
+			interior_residual = maxf(interior_residual, absf(gradient_phase.length() - output.local_k[index]))
+	output.eikonal_interior_residual_rad_m = interior_residual
+
+
+func _has_reached_water_neighbors(output, x: int, z: int) -> bool:
+	if x <= 0 or z <= 0 or x >= output.width - 1 or z >= output.height - 1:
+		return false
+	for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
+		var index: int = neighbor.y * output.width + neighbor.x
+		if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+			return false
+	return true
 
 
 func _upwind_gradient_at(output, values: PackedFloat32Array, x: int, z: int) -> Vector2:
@@ -216,6 +247,7 @@ func _minimum_projection(output, direction: Vector2) -> float:
 
 
 func _build_shadow_scale(output, fixed: PackedByteArray, direction: Vector2) -> void:
+	var geometric_start := Time.get_ticks_usec()
 	var visibility := _build_incident_visibility_field(output, direction)
 	var occluded_distance := _build_occluded_distance_field(output, visibility, direction)
 	var raw_shadow := PackedFloat32Array()
@@ -230,7 +262,134 @@ func _build_shadow_scale(output, fixed: PackedByteArray, direction: Vector2) -> 
 			continue
 		var occluded_shadow: float = clampf(shadow_occlusion_entry_scale * exp(-occluded_distance[index] / decay_length), shadow_min_scale, 1.0)
 		raw_shadow[index] = clampf(lerpf(occluded_shadow, 1.0, visibility[index]), shadow_min_scale, 1.0)
-	_smooth_shadow_scale(output, raw_shadow, fixed)
+	last_shadow_geometric_ms = float(Time.get_ticks_usec() - geometric_start) / 1000.0
+	var recovery_start := Time.get_ticks_usec()
+	var energetic_shadow := raw_shadow
+	if shadow_recovery_enabled and shadow_recovery_strength > 0.0 and shadow_diffraction_angle_deg > 0.0:
+		energetic_shadow = _recover_shadow_energy(output, fixed, visibility, occluded_distance, raw_shadow, direction)
+	last_shadow_recovery_ms = float(Time.get_ticks_usec() - recovery_start) / 1000.0
+	_smooth_shadow_scale(output, energetic_shadow, fixed)
+
+
+func _recover_shadow_energy(output, fixed: PackedByteArray, visibility: PackedFloat32Array, occluded_distance: PackedFloat32Array, geometric_shadow: PackedFloat32Array, direction: Vector2) -> PackedFloat32Array:
+	## Advection/diffusion direccional barata: cada celda sólo recibe del slice
+	## inmediatamente upstream y de dos donantes laterales de esa misma slice.
+	## LAND y agua no alcanzada tienen energía cero y nunca son donantes.
+	var energy := PackedFloat32Array()
+	energy.resize(output.width * output.height)
+	energy.fill(0.0)
+	var axis_x := absf(direction.x) >= absf(direction.y)
+	var step_x: int = 0
+	var step_z: int = 0
+	var dominant_abs: float
+	if axis_x:
+		step_x = 1 if direction.x > 0.0 else -1
+		dominant_abs = absf(direction.x)
+	else:
+		step_z = 1 if direction.y > 0.0 else -1
+		dominant_abs = absf(direction.y)
+	var slice_step: float = 1.0 / maxf(dominant_abs, 1.0e-6)
+	var slice_length: int = output.width if axis_x else output.height
+	var slice_direction: int = step_x if axis_x else step_z
+	var slice_start: int = 0 if slice_direction > 0 else slice_length - 1
+	var slice_end: int = slice_length if slice_direction > 0 else -1
+	var perpendicular := Vector2(-direction.y, direction.x)
+	var diffraction_slope := tan(deg_to_rad(shadow_diffraction_angle_deg))
+	var lateral_mix := clampf(shadow_recovery_strength * diffraction_slope, 0.0, 1.0)
+	for slice_index in range(slice_start, slice_end, slice_direction):
+		if axis_x:
+			for z in output.height:
+				var index: int = z * output.width + slice_index
+				if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+					energy[index] = 0.0
+					continue
+				if fixed[index] != 0 or visibility[index] >= 0.999:
+					energy[index] = 1.0
+					continue
+				var upstream := Vector2(float(slice_index), float(z)) - direction * slice_step
+				var upstream_energy := _sample_scalar_slice(energy, output, upstream, true)
+				var lateral_offset := perpendicular * (diffraction_slope * maxf(occluded_distance[index] / maxf(output.cell_size_m, 1.0e-6), 1.0))
+				var lateral_left := _sample_scalar_slice(energy, output, upstream - lateral_offset, true)
+				var lateral_right := _sample_scalar_slice(energy, output, upstream + lateral_offset, true)
+				var recovered_energy := lerpf(upstream_energy, 0.5 * (lateral_left + lateral_right), lateral_mix)
+				energy[index] = maxf(geometric_shadow[index], clampf(recovered_energy, 0.0, 1.0))
+		else:
+			for x in output.width:
+				var index: int = slice_index * output.width + x
+				if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+					energy[index] = 0.0
+					continue
+				if fixed[index] != 0 or visibility[index] >= 0.999:
+					energy[index] = 1.0
+					continue
+				var upstream := Vector2(float(x), float(slice_index)) - direction * slice_step
+				var upstream_energy := _sample_scalar_slice(energy, output, upstream, false)
+				var lateral_offset := perpendicular * (diffraction_slope * maxf(occluded_distance[index] / maxf(output.cell_size_m, 1.0e-6), 1.0))
+				var lateral_left := _sample_scalar_slice(energy, output, upstream - lateral_offset, false)
+				var lateral_right := _sample_scalar_slice(energy, output, upstream + lateral_offset, false)
+				var recovered_energy := lerpf(upstream_energy, 0.5 * (lateral_left + lateral_right), lateral_mix)
+				energy[index] = maxf(geometric_shadow[index], clampf(recovered_energy, 0.0, 1.0))
+	return energy
+
+
+func _build_render_direction(output) -> void:
+	## Campo derivado para visualización/render futuro. local_direction permanece
+	## como la dirección raw de ∇T y nunca se sobrescribe.
+	var current_x: PackedFloat32Array = output.local_direction_x
+	var current_z: PackedFloat32Array = output.local_direction_z
+	var threshold_rad := deg_to_rad(direction_smoothing_threshold_deg)
+	var transition_rad := deg_to_rad(24.0)
+	for _pass in direction_smoothing_passes:
+		var next_x := PackedFloat32Array()
+		var next_z := PackedFloat32Array()
+		next_x.resize(output.width * output.height)
+		next_z.resize(output.width * output.height)
+		for z in output.height:
+			for x in output.width:
+				var index: int = z * output.width + x
+				var current := Vector2(current_x[index], current_z[index]).normalized()
+				if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+					next_x[index] = current.x
+					next_z[index] = current.y
+					continue
+				var sum := Vector2.ZERO
+				var samples := 0
+				if x > 0:
+					var neighbor: int = index - 1
+					if output.valid_mask[neighbor] != 0 and output.reached_mask[neighbor] != 0:
+						sum += Vector2(current_x[neighbor], current_z[neighbor]).normalized()
+						samples += 1
+				if x + 1 < output.width:
+					var neighbor: int = index + 1
+					if output.valid_mask[neighbor] != 0 and output.reached_mask[neighbor] != 0:
+						sum += Vector2(current_x[neighbor], current_z[neighbor]).normalized()
+						samples += 1
+				if z > 0:
+					var neighbor: int = index - output.width
+					if output.valid_mask[neighbor] != 0 and output.reached_mask[neighbor] != 0:
+						sum += Vector2(current_x[neighbor], current_z[neighbor]).normalized()
+						samples += 1
+				if z + 1 < output.height:
+					var neighbor: int = index + output.width
+					if output.valid_mask[neighbor] != 0 and output.reached_mask[neighbor] != 0:
+						sum += Vector2(current_x[neighbor], current_z[neighbor]).normalized()
+						samples += 1
+				if samples == 0 or sum.length_squared() <= 1.0e-8:
+					next_x[index] = current.x
+					next_z[index] = current.y
+					continue
+				var average := sum.normalized()
+				var angle := acos(clampf(current.dot(average), -1.0, 1.0))
+				var transition := clampf((angle - threshold_rad) / maxf(transition_rad, 1.0e-6), 0.0, 1.0)
+				transition = transition * transition * (3.0 - 2.0 * transition)
+				var weight := transition * clampf(direction_smoothing_strength, 0.0, 1.0)
+				var blended := current.lerp(average, weight).normalized()
+				next_x[index] = blended.x
+				next_z[index] = blended.y
+		current_x = next_x
+		current_z = next_z
+	output.render_direction_x = current_x
+	output.render_direction_z = current_z
 
 
 func _build_incident_visibility_field(output, direction: Vector2) -> PackedFloat32Array:

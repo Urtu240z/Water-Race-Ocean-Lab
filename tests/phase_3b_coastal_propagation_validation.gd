@@ -110,7 +110,7 @@ func _validate_mapping_and_gpu_payload() -> void:
 	var textures: Dictionary = propagation.build_gpu_textures()
 	_check(textures.has("field") and textures.has("metrics") and textures.has("phase") and textures["field"] != null and textures["phase"] != null, "gpu payload: tres texturas derivadas del mismo dato")
 	_check(propagation.approximate_gpu_memory_bytes() == propagation.width * propagation.height * 48, "gpu payload: 48 B/nodo con fase/dirección RGBA32F")
-	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 54, "cpu payload: shadow_scale añade 6 B/nodo")
+	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 54, "cpu payload: shadow_scale añade 6 B/nodo en Straight legacy")
 
 
 func _validate_determinism() -> void:

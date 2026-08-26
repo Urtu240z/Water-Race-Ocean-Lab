@@ -8,7 +8,8 @@ extends Node
 const DebugScript := preload("res://ocean_v3/coastal/coastal_eikonal_debug.gd")
 const EikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 
-enum PreviewMode { REACHED, LOCAL_DIRECTION, SHADOW_SCALE }
+enum PreviewMode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE }
+const LOCAL_DIRECTION: PreviewMode = PreviewMode.RAW_DIRECTION
 enum BakeState { IDLE, BAKING_BATHYMETRY, SOLVING_EIKONAL, BUILDING_DEBUG, DONE, ERROR }
 
 const PREVIEW_OWNER_META := "_coastal_eikonal_preview_owner_id"
@@ -25,6 +26,12 @@ class EikonalWorker extends RefCounted:
 	var shadow_occlusion_entry_scale := 0.70
 	var shadow_detour_length_m := 32.0
 	var shadow_smoothing_passes := 2
+	var shadow_recovery_enabled := true
+	var shadow_diffraction_angle_deg := 12.0
+	var shadow_recovery_strength := 1.0
+	var direction_smoothing_passes := 3
+	var direction_smoothing_strength := 0.35
+	var direction_smoothing_threshold_deg := 6.0
 
 	func run() -> Dictionary:
 		var baker = EikonalBakerScript.new()
@@ -39,6 +46,12 @@ class EikonalWorker extends RefCounted:
 		baker.shadow_occlusion_entry_scale = shadow_occlusion_entry_scale
 		baker.shadow_detour_length_m = shadow_detour_length_m
 		baker.shadow_smoothing_passes = shadow_smoothing_passes
+		baker.shadow_recovery_enabled = shadow_recovery_enabled
+		baker.shadow_diffraction_angle_deg = shadow_diffraction_angle_deg
+		baker.shadow_recovery_strength = shadow_recovery_strength
+		baker.direction_smoothing_passes = direction_smoothing_passes
+		baker.direction_smoothing_strength = direction_smoothing_strength
+		baker.direction_smoothing_threshold_deg = direction_smoothing_threshold_deg
 		var data = baker.bake()
 		return {
 			"data": data,
@@ -49,6 +62,9 @@ class EikonalWorker extends RefCounted:
 			"cycles_used": baker.last_cycles_used,
 			"directional_sweeps_used": baker.last_directional_sweeps_used,
 			"final_max_change": baker.last_final_max_change,
+			"shadow_geometric_ms": baker.last_shadow_geometric_ms,
+			"shadow_recovery_ms": baker.last_shadow_recovery_ms,
+			"direction_smoothing_ms": baker.last_direction_smoothing_ms,
 		}
 
 @export_category("Bathymetry")
@@ -67,6 +83,14 @@ class EikonalWorker extends RefCounted:
 @export_range(0.0, 1.0, 0.01) var shadow_occlusion_entry_scale := 0.70
 @export_range(0.1, 1000.0, 0.1, "suffix:m") var shadow_detour_length_m := 32.0
 @export_range(0, 8, 1) var shadow_smoothing_passes := 2
+@export var shadow_recovery_enabled := true
+@export_range(0.0, 45.0, 0.1, "suffix:deg") var shadow_diffraction_angle_deg := 12.0
+@export_range(0.0, 1.0, 0.01) var shadow_recovery_strength := 1.0
+
+@export_category("Direction Smoothing")
+@export_range(0, 8, 1) var direction_smoothing_passes := 3
+@export_range(0.0, 1.0, 0.01) var direction_smoothing_strength := 0.35
+@export_range(0.0, 90.0, 0.1, "suffix:deg") var direction_smoothing_threshold_deg := 6.0
 
 @export_category("Preview")
 @export var preview_mode: PreviewMode = PreviewMode.SHADOW_SCALE:
@@ -89,6 +113,9 @@ var last_total_ms := 0.0
 var last_cycles_used := 0
 var last_directional_sweeps_used := 0
 var last_final_max_change := 0.0
+var last_shadow_geometric_ms := 0.0
+var last_shadow_recovery_ms := 0.0
+var last_direction_smoothing_ms := 0.0
 
 var _preview: CoastalEikonalDebug = null
 var _bathymetry_data: BathymetryData = null
@@ -103,6 +130,9 @@ var _pending_base_metrics_ms := 0.0
 var _pending_eikonal_sweep_ms := 0.0
 var _pending_phase_populate_ms := 0.0
 var _pending_shadow_ms := 0.0
+var _pending_shadow_geometric_ms := 0.0
+var _pending_shadow_recovery_ms := 0.0
+var _pending_direction_smoothing_ms := 0.0
 var _discard_worker_result := false
 
 
@@ -193,6 +223,12 @@ func _process(_delta: float) -> void:
 	_pending_eikonal_sweep_ms = float(result.get("eikonal_sweep_ms", 0.0))
 	_pending_phase_populate_ms = float(result.get("phase_populate_ms", 0.0))
 	_pending_shadow_ms = float(result.get("shadow_ms", 0.0))
+	_pending_shadow_geometric_ms = float(result.get("shadow_geometric_ms", 0.0))
+	_pending_shadow_recovery_ms = float(result.get("shadow_recovery_ms", 0.0))
+	_pending_direction_smoothing_ms = float(result.get("direction_smoothing_ms", 0.0))
+	last_shadow_geometric_ms = _pending_shadow_geometric_ms
+	last_shadow_recovery_ms = _pending_shadow_recovery_ms
+	last_direction_smoothing_ms = _pending_direction_smoothing_ms
 	_set_bake_state(BakeState.BUILDING_DEBUG)
 	_install_preview(_pending_bathymetry_data, coastal_resource as CoastalPropagationData)
 	_pending_bathymetry_data = null
@@ -229,6 +265,9 @@ func _install_preview(bathymetry_data: BathymetryData, coastal_data: CoastalProp
 	print("eikonal sweep = %.3f ms" % _pending_eikonal_sweep_ms)
 	print("phase populate = %.3f ms" % _pending_phase_populate_ms)
 	print("shadow field = %.3f ms" % _pending_shadow_ms)
+	print("shadow geometric = %.3f ms" % _pending_shadow_geometric_ms)
+	print("shadow recovery = %.3f ms" % _pending_shadow_recovery_ms)
+	print("direction smoothing = %.3f ms" % _pending_direction_smoothing_ms)
 	print("eikonal total = %.3f ms" % last_eikonal_ms)
 	print("debug mesh = %.3f ms" % last_debug_mesh_ms)
 	print("total = %.3f ms" % last_total_ms)

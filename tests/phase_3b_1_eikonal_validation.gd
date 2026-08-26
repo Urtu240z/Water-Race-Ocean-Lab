@@ -13,7 +13,9 @@ func _initialize() -> void:
 	_validate_oblique_snell()
 	_validate_bank_and_determinism()
 	_validate_island_shadow()
+	_validate_small_rock_shadow()
 	_validate_two_island_channel()
+	_validate_render_field_data()
 	_validate_convergence_quality()
 	_validate_visibility_sweep()
 	_validate_large_grid_scaling()
@@ -30,6 +32,7 @@ func _validate_flat_plane() -> void:
 	var direction := Vector2(0.8, 0.6).normalized()
 	var propagation = _bake(_make_data(81, 81, func(_x: int, _z: int) -> float: return 100.0), direction)
 	var max_angle_deg := 0.0
+	var max_render_angle_deg := 0.0
 	var max_k_error := 0.0
 	var max_shadow_error := 0.0
 	for z in range(4, propagation.height - 4):
@@ -37,11 +40,14 @@ func _validate_flat_plane() -> void:
 			var index: int = z * propagation.width + x
 			var local_direction := Vector2(propagation.local_direction_x[index], propagation.local_direction_z[index])
 			max_angle_deg = maxf(max_angle_deg, rad_to_deg(acos(clampf(local_direction.dot(direction), -1.0, 1.0))))
+			var render_direction := Vector2(propagation.render_direction_x[index], propagation.render_direction_z[index])
+			max_render_angle_deg = maxf(max_render_angle_deg, rad_to_deg(acos(clampf(render_direction.dot(direction), -1.0, 1.0))))
 			var gradient_k := Vector2(propagation.phase_gradient_x[index], propagation.phase_gradient_z[index]).length()
 			max_k_error = maxf(max_k_error, absf(gradient_k - propagation.local_k[index]))
 			max_shadow_error = maxf(max_shadow_error, absf(propagation.shadow_scale[index] - 1.0))
-	print("3B.1 FLAT max_angle_deg=%.6f max_k_error=%.8f max_shadow_error=%.8f residual=%.8f cycles=%d directional_sweeps=%d final_change=%.8f" % [max_angle_deg, max_k_error, max_shadow_error, propagation.eikonal_max_residual_rad_m, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
+	print("3B.1 FLAT max_angle_deg=%.6f max_render_angle_deg=%.6f max_k_error=%.8f max_shadow_error=%.8f residual=%.8f interior_residual=%.8f cycles=%d directional_sweeps=%d final_change=%.8f" % [max_angle_deg, max_render_angle_deg, max_k_error, max_shadow_error, propagation.eikonal_max_residual_rad_m, propagation.eikonal_interior_residual_rad_m, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(max_angle_deg < 0.25, "flat: dirección local coincide con incoming")
+	_check(max_render_angle_deg < 0.25, "flat: render_direction coincide con incoming")
 	_check(max_k_error < 1.0e-4, "flat: |grad(phi)| coincide con k")
 	_check(max_shadow_error < 1.0e-6, "flat: shadow_scale neutral")
 	for flat_direction in [Vector2.RIGHT, Vector2.LEFT, Vector2(1.0, 1.0).normalized(), Vector2(-1.0, 0.4).normalized()]:
@@ -106,16 +112,25 @@ func _validate_island_shadow() -> void:
 	var propagation = _bake(data, Vector2.RIGHT)
 	var invalid_index: int = 40 * propagation.width + 50
 	var shadow_index: int = 40 * propagation.width + 76
+	var near_index: int = 40 * propagation.width + 66
+	var mid_index: int = 40 * propagation.width + 86
+	var far_index: int = 40 * propagation.width + 100
 	var open_index: int = 20 * propagation.width + 76
 	var side_index: int = 64 * propagation.width + 76
 	var shadow_direction := Vector2(propagation.local_direction_x[shadow_index], propagation.local_direction_z[shadow_index])
-	print("3B.1 ISLAND invalid=%d shadow_reached=%d shadow_scale=%.4f shadow_dir=(%.4f,%.4f) open_scale=%.4f side=%d cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.valid_mask[invalid_index], propagation.reached_mask[shadow_index], propagation.shadow_scale[shadow_index], shadow_direction.x, shadow_direction.y, propagation.shadow_scale[open_index], propagation.reached_mask[side_index], propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
+	var max_raw_jump := _max_neighbor_angle_deg(propagation, false, 60, propagation.width - 1, 0, propagation.height - 1)
+	var max_render_jump := _max_neighbor_angle_deg(propagation, true, 60, propagation.width - 1, 0, propagation.height - 1)
+	print("3B.1 ISLAND invalid=%d shadow_reached=%d shadow_near=%.4f shadow_mid=%.4f shadow_far=%.4f shadow_dir=(%.4f,%.4f) open_scale=%.4f side=%d raw_jump_deg=%.4f render_jump_deg=%.4f interior_residual=%.8f cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.valid_mask[invalid_index], propagation.reached_mask[shadow_index], propagation.shadow_scale[near_index], propagation.shadow_scale[mid_index], propagation.shadow_scale[far_index], shadow_direction.x, shadow_direction.y, propagation.shadow_scale[open_index], propagation.reached_mask[side_index], max_raw_jump, max_render_jump, propagation.eikonal_interior_residual_rad_m, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(propagation.valid_mask[invalid_index] == 0, "island: tierra inválida")
 	_check(propagation.reached_mask[shadow_index] != 0, "island: agua detrás permanece alcanzada")
 	_check(propagation.shadow_scale[shadow_index] >= 0.15 and propagation.shadow_scale[shadow_index] < 0.999, "island: sombra suave detrás")
+	_check(propagation.shadow_scale[near_index] < propagation.shadow_scale[mid_index] and propagation.shadow_scale[mid_index] < propagation.shadow_scale[far_index], "island: recuperación aumenta downstream")
+	_check(propagation.shadow_scale[far_index] > propagation.shadow_scale[near_index] + 0.10, "island: sombra no permanece extruida")
 	_check(propagation.shadow_scale[open_index] > 0.999, "island: agua abierta sin sombra")
 	_check(shadow_direction.dot(Vector2.RIGHT) < 0.999, "island: dirección gira alrededor del obstáculo")
 	_check(propagation.reached_mask[side_index] != 0, "island: agua lateral alcanzada")
+	_check(max_render_jump < max_raw_jump * 0.95, "island: render_direction reduce cut locus claramente")
+	_check(_raw_direction_matches_gradient(propagation), "island: local_direction raw no se modifica")
 
 
 func _validate_two_island_channel() -> void:
@@ -132,11 +147,49 @@ func _validate_two_island_channel() -> void:
 	var channel: int = 40 * propagation.width + 78
 	var lower_lee: int = 48 * propagation.width + 78
 	var open: int = 12 * propagation.width + 78
-	print("3B.1 CHANNEL upper_reached=%d upper_scale=%.4f channel_reached=%d channel_scale=%.4f lower_reached=%d lower_scale=%.4f open_scale=%.4f cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.reached_mask[upper_lee], propagation.shadow_scale[upper_lee], propagation.reached_mask[channel], propagation.shadow_scale[channel], propagation.reached_mask[lower_lee], propagation.shadow_scale[lower_lee], propagation.shadow_scale[open], propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
+	var upper_near: int = 32 * propagation.width + 62
+	var upper_far: int = 32 * propagation.width + 105
+	var lower_near: int = 48 * propagation.width + 62
+	var lower_far: int = 48 * propagation.width + 105
+	print("3B.1 CHANNEL upper_reached=%d upper_scale=%.4f upper_near=%.4f upper_far=%.4f channel_reached=%d channel_scale=%.4f lower_reached=%d lower_scale=%.4f lower_near=%.4f lower_far=%.4f open_scale=%.4f cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.reached_mask[upper_lee], propagation.shadow_scale[upper_lee], propagation.shadow_scale[upper_near], propagation.shadow_scale[upper_far], propagation.reached_mask[channel], propagation.shadow_scale[channel], propagation.reached_mask[lower_lee], propagation.shadow_scale[lower_lee], propagation.shadow_scale[lower_near], propagation.shadow_scale[lower_far], propagation.shadow_scale[open], propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(propagation.reached_mask[upper_lee] != 0 and propagation.reached_mask[lower_lee] != 0, "channel: ambos leewards alcanzados")
 	_check(propagation.reached_mask[channel] != 0, "channel: paso entre islas alcanzado")
 	_check(propagation.shadow_scale[channel] > propagation.shadow_scale[upper_lee] and propagation.shadow_scale[channel] > propagation.shadow_scale[lower_lee], "channel: canal conserva más luz que los leewards")
 	_check(propagation.shadow_scale[open] > 0.999, "channel: agua abierta sin sombra")
+	_check(propagation.shadow_scale[upper_near] < propagation.shadow_scale[upper_far] and propagation.shadow_scale[lower_near] < propagation.shadow_scale[lower_far], "channel: ambas sombras recuperan downstream")
+
+
+func _validate_small_rock_shadow() -> void:
+	var data = _make_data(121, 61, func(x: int, z: int) -> float:
+		var dx := float(x - 40)
+		var dz := float(z - 30)
+		return -1.0 if dx * dx + dz * dz < 2.5 * 2.5 else 18.0)
+	var propagation = _bake(data, Vector2.RIGHT)
+	var near_index: int = 30 * propagation.width + 44
+	var mid_index: int = 30 * propagation.width + 58
+	var far_index: int = 30 * propagation.width + 100
+	print("3B.1 SMALL_ROCK shadow_near=%.4f shadow_mid=%.4f shadow_far=%.4f" % [propagation.shadow_scale[near_index], propagation.shadow_scale[mid_index], propagation.shadow_scale[far_index]])
+	_check(propagation.shadow_scale[near_index] < propagation.shadow_scale[mid_index] and propagation.shadow_scale[mid_index] < propagation.shadow_scale[far_index], "small rock: sombra recupera progresivamente")
+	_check(propagation.shadow_scale[far_index] > 0.90, "small rock: estela cierra antes del borde")
+
+
+func _validate_render_field_data() -> void:
+	var propagation = _bake(_make_data(37, 29, func(_x: int, _z: int) -> float: return 18.0), Vector2(1.0, 0.4).normalized())
+	var sample = propagation.sample_propagation(Vector2(18.0, 14.0))
+	var open_water_mean_error := _mean_raw_render_angle_deg(propagation)
+	print("3B.1 RENDER_FIELD open_water_mean_error_deg=%.8f" % open_water_mean_error)
+	_check(propagation.has_render_direction() and propagation.render_direction_x.size() == propagation.width * propagation.height and propagation.render_direction_z.size() == propagation.width * propagation.height, "render data: arrays derivados asignados")
+	_check(open_water_mean_error < 0.001, "render data: agua abierta conserva dirección")
+	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 62, "render data: accounting incluye 8 B/nodo adicional")
+	_check(sample.render_direction_xz.length_squared() > 0.99, "render data: sample devuelve render_direction")
+	var legacy_x: PackedFloat32Array = propagation.render_direction_x
+	var legacy_z: PackedFloat32Array = propagation.render_direction_z
+	propagation.render_direction_x = PackedFloat32Array()
+	propagation.render_direction_z = PackedFloat32Array()
+	var legacy_sample = propagation.sample_propagation(Vector2(18.0, 14.0))
+	_check(legacy_sample.render_direction_xz == legacy_sample.local_direction_xz, "render data: recurso legacy hace fallback a raw")
+	propagation.render_direction_x = legacy_x
+	propagation.render_direction_z = legacy_z
 
 
 func _validate_visibility_sweep() -> void:
@@ -224,7 +277,7 @@ func _validate_large_grid_scaling() -> void:
 		debug.data = propagation
 		var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
 		var plane := debug.mesh as PlaneMesh
-		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
+		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
 		_check(propagation.is_valid(), "large: grid %dx%d completa con data válida" % [resolution, resolution])
 		_check(reached == resolution * resolution, "large: flat water %dx%d reached completo" % [resolution, resolution])
 		_check(plane != null and debug.last_debug_triangle_count == 2 and plane.size == Vector2(resolution - 1, resolution - 1), "large: debug %dx%d es un plano de dos triángulos" % [resolution, resolution])
@@ -233,7 +286,52 @@ func _validate_large_grid_scaling() -> void:
 
 func _validate_eikonal_path_complexity() -> void:
 	var source := FileAccess.get_file_as_string("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
-	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output"), "complexity: Eikonal no conserva sort/raymarch patológicos")
+	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction"), "complexity: campos derivados no conservan sort/raymarch patológicos")
+
+
+func _max_neighbor_angle_deg(data, use_render: bool, min_x: int, max_x: int, min_z: int, max_z: int) -> float:
+	var maximum := 0.0
+	for z in range(min_z, max_z + 1):
+		for x in range(min_x, max_x + 1):
+			var index: int = z * data.width + x
+			if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+				continue
+			var current := Vector2(data.render_direction_x[index], data.render_direction_z[index]) if use_render else Vector2(data.local_direction_x[index], data.local_direction_z[index])
+			if x < max_x:
+				var right_index: int = index + 1
+				if data.valid_mask[right_index] != 0 and data.reached_mask[right_index] != 0:
+					var right := Vector2(data.render_direction_x[right_index], data.render_direction_z[right_index]) if use_render else Vector2(data.local_direction_x[right_index], data.local_direction_z[right_index])
+					maximum = maxf(maximum, rad_to_deg(acos(clampf(current.dot(right), -1.0, 1.0))))
+			if z < max_z:
+				var down_index: int = index + data.width
+				if data.valid_mask[down_index] != 0 and data.reached_mask[down_index] != 0:
+					var down := Vector2(data.render_direction_x[down_index], data.render_direction_z[down_index]) if use_render else Vector2(data.local_direction_x[down_index], data.local_direction_z[down_index])
+					maximum = maxf(maximum, rad_to_deg(acos(clampf(current.dot(down), -1.0, 1.0))))
+	return maximum
+
+
+func _raw_direction_matches_gradient(data) -> bool:
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+			continue
+		var gradient := Vector2(data.phase_gradient_x[index], data.phase_gradient_z[index]).normalized()
+		var raw := Vector2(data.local_direction_x[index], data.local_direction_z[index])
+		if raw.distance_to(gradient) > 1.0e-6:
+			return false
+	return true
+
+
+func _mean_raw_render_angle_deg(data) -> float:
+	var total := 0.0
+	var count := 0
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+			continue
+		var raw := Vector2(data.local_direction_x[index], data.local_direction_z[index])
+		var render := Vector2(data.render_direction_x[index], data.render_direction_z[index])
+		total += rad_to_deg(acos(clampf(raw.dot(render), -1.0, 1.0)))
+		count += 1
+	return total / float(count) if count > 0 else 0.0
 
 
 func _make_data(width: int, height: int, depth_fn: Callable):

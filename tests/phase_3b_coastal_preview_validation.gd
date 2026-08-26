@@ -56,6 +56,9 @@ func _validate_lifecycle() -> void:
 	var data_before_mode_change = preview_baker._coastal_data
 	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.REACHED
 	_check(mock.bake_calls == 1 and preview_baker._coastal_data == data_before_mode_change and preview_baker._find_owned_preview().mode == DebugScript.Mode.REACHED and first_debug.mesh == first_mesh and first_debug._image_texture != first_texture, "lifecycle: cambiar modo sólo regenera textura")
+	var texture_before_render_mode = first_debug._image_texture
+	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.RENDER_DIRECTION
+	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.RENDER_DIRECTION and first_debug._image_texture != texture_before_render_mode, "lifecycle: modo RENDER_DIRECTION sin rebake")
 	preview_baker.bake_coastal_preview()
 	await _wait_for_bake(preview_baker)
 	var second_debug = preview_baker._find_owned_preview()

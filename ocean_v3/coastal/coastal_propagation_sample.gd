@@ -13,6 +13,7 @@ var phase_rad := 0.0
 var phase_gradient_x := 0.0
 var phase_gradient_z := 0.0
 var local_direction_xz := Vector2.RIGHT
+var render_direction_xz := Vector2.RIGHT
 var shadow_scale := 1.0
 var reached := false
 var valid := false
@@ -31,6 +32,7 @@ func set_invalid() -> CoastalPropagationSample:
 	phase_gradient_x = 0.0
 	phase_gradient_z = 0.0
 	local_direction_xz = Vector2.RIGHT
+	render_direction_xz = Vector2.RIGHT
 	shadow_scale = 0.0
 	reached = false
 	valid = false

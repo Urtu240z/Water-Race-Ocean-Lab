@@ -5,7 +5,8 @@ extends MeshInstance3D
 ## Una sola PlaneMesh horizontal y una textura RGBA con un píxel por celda.
 ## No modifica el campo ni participa en el render final del océano.
 
-enum Mode { REACHED, LOCAL_DIRECTION, SHADOW_SCALE }
+enum Mode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE }
+const LOCAL_DIRECTION: Mode = Mode.RAW_DIRECTION
 
 @export var data: Resource = null:
 	set(value):
@@ -101,11 +102,18 @@ func _color_at(x: int, z: int) -> Color:
 	match mode:
 		Mode.REACHED:
 			return Color(0.10, 0.88, 0.32, 0.86) if data.reached_mask[index] != 0 else Color(0.72, 0.20, 0.12, 0.86)
-		Mode.LOCAL_DIRECTION:
+		Mode.RAW_DIRECTION:
 			if data.reached_mask[index] == 0:
 				return Color(0.18, 0.12, 0.10, 0.82)
 			var direction := Vector2(data.local_direction_x[index], data.local_direction_z[index]).normalized()
 			return Color(0.5 + 0.5 * direction.x, 0.5 + 0.5 * direction.y, 0.18, 0.88)
+		Mode.RENDER_DIRECTION:
+			if data.reached_mask[index] == 0:
+				return Color(0.18, 0.12, 0.10, 0.82)
+			var render_direction: float = data.local_direction_x[index] if not data.has_render_direction() else data.render_direction_x[index]
+			var render_direction_z: float = data.local_direction_z[index] if not data.has_render_direction() else data.render_direction_z[index]
+			var direction := Vector2(render_direction, render_direction_z).normalized()
+			return Color(0.22 + 0.78 * direction.x, 0.22 + 0.78 * direction.y, 0.88, 0.88)
 		Mode.SHADOW_SCALE:
 			if data.reached_mask[index] == 0:
 				return Color(0.18, 0.12, 0.10, 0.82)

@@ -19,6 +19,7 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export var eikonal_directional_sweeps := 0
 @export var eikonal_final_max_change_s := 0.0
 @export var eikonal_max_residual_rad_m := 0.0
+@export var eikonal_interior_residual_rad_m := 0.0
 
 @export_storage var depth_m := PackedFloat32Array()
 @export_storage var local_k := PackedFloat32Array()
@@ -33,6 +34,8 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export_storage var phase_gradient_z := PackedFloat32Array()
 @export_storage var local_direction_x := PackedFloat32Array()
 @export_storage var local_direction_z := PackedFloat32Array()
+@export_storage var render_direction_x := PackedFloat32Array()
+@export_storage var render_direction_z := PackedFloat32Array()
 @export_storage var reached_mask := PackedByteArray()
 @export_storage var shadow_scale := PackedFloat32Array()
 
@@ -46,13 +49,19 @@ func is_valid() -> bool:
 	return width >= 2 and height >= 2 and cell_size_m > 0.0 and omega_ref_rad_s > 0.0 and k0_rad_m > 0.0 and depth_m.size() == count and local_k.size() == count and wavelength_m.size() == count and phase_speed_mps.size() == count and group_velocity_mps.size() == count and shoaling_scale.size() == count and phase_offset_rad.size() == count and valid_mask.size() == count and phase_rad.size() == count and phase_gradient_x.size() == count and phase_gradient_z.size() == count and local_direction_x.size() == count and local_direction_z.size() == count and reached_mask.size() == count
 
 
+func has_render_direction() -> bool:
+	var count := width * height
+	return render_direction_x.size() == count and render_direction_z.size() == count
+
+
 func world_max_xz() -> Vector2:
 	return world_origin_xz + Vector2(float(width - 1), float(height - 1)) * cell_size_m
 
 
 func approximate_memory_bytes() -> int:
-	# Trece float32 + dos máscaras CPU. shadow_scale aún no se sube a GPU.
-	return width * height * (13 * 4 + 2)
+	# Straight legacy: 13 float32 + dos máscaras. Eikonal añade render_direction.
+	var float_fields := 15 if has_render_direction() else 13
+	return width * height * (float_fields * 4 + 2)
 
 
 func approximate_gpu_memory_bytes() -> int:
@@ -88,6 +97,10 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	result.phase_gradient_x = _bilinear(phase_gradient_x, i00, i10, i01, i11, tx, tz)
 	result.phase_gradient_z = _bilinear(phase_gradient_z, i00, i10, i01, i11, tx, tz)
 	result.local_direction_xz = Vector2(_bilinear(local_direction_x, i00, i10, i01, i11, tx, tz), _bilinear(local_direction_z, i00, i10, i01, i11, tx, tz)).normalized()
+	if has_render_direction():
+		result.render_direction_xz = Vector2(_bilinear(render_direction_x, i00, i10, i01, i11, tx, tz), _bilinear(render_direction_z, i00, i10, i01, i11, tx, tz)).normalized()
+	else:
+		result.render_direction_xz = result.local_direction_xz
 	var nearest := clampi(int(round(grid.y)), 0, height - 1) * width + clampi(int(round(grid.x)), 0, width - 1)
 	result.reached = reached_mask[nearest] != 0
 	result.valid = valid_mask[nearest] != 0 and result.reached

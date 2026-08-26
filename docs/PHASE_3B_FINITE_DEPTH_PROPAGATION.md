@@ -25,7 +25,9 @@ CoastalPropagationBaker
         ▼
 CoastalPropagationData
   ├─ CPU sample_propagation(world_xz)
-  ├─ shadow_scale CPU (legacy fallback; no se sube a GPU)
+  ├─ shadow_scale CPU (shadow energético; no se sube a GPU)
+  ├─ local_direction CPU (raw normalizado de ∇T)
+  ├─ render_direction CPU (suavizado adaptativo; no se sube a GPU)
   └─ tres RGBA32F GPU en 3B.1 (mismo grid/mapping)
         │
 OceanClipmapSurface: sólo LONG
@@ -81,10 +83,15 @@ máximo final. El bake es offline y no afecta al coste por frame.
 En 3B.1, las celdas de agua válidas y finitas conservan `reached_mask` aunque
 la línea directa quede bloqueada por tierra. `shadow_scale` vale 1 en línea de
 vista, y en oclusión usa `0.70 * exp(-detour / 32 m)`, acotado por 0.15 y
-suavizado en dos pasadas sobre vecinos 4-conectados alcanzados. El campo de
-tiempo se resuelve con Fast Sweeping; la visibilidad no difunde por LAND ni
-por agua no alcanzada. Straight Baker inicializa el campo a 1 en agua y 0 en
-LAND; samples de recursos legacy sin el array aplican el mismo fallback.
+suavizado en dos pasadas sobre vecinos 4-conectados alcanzados. Después, una
+recuperación anisotrópica downstream mezcla la energía del slice upstream con
+dos donantes laterales cuyo alcance crece según `tan(shadow_diffraction_angle)`;
+sólo usa agua válida y reached, nunca LAND ni agua no alcanzada. El resultado
+final es `max(geometric_shadow, recovered_energy)`, no una solución Helmholtz
+completa sino una aproximación determinista coste/beneficio para videojuego.
+El campo de tiempo se resuelve con Fast Sweeping. Straight Baker inicializa el
+campo a 1 en agua y 0 en LAND; samples de recursos legacy sin el array aplican
+el mismo fallback.
 
 ## Visualización y debug
 
@@ -97,7 +104,8 @@ LAND; samples de recursos legacy sin el array aplican el mismo fallback.
 - `set_coastal_debug_field()` para DEPTH, WAVELENGTH, PHASE_SPEED,
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
 - `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
-  `LOCAL_DIRECTION` y `SHADOW_SCALE`; no toca shaders ni el render final. Su
+  `RAW_DIRECTION`, `RENDER_DIRECTION` y `SHADOW_SCALE`; `LOCAL_DIRECTION` es
+  alias de `RAW_DIRECTION`. No toca shaders ni el render final. Su
   geometría es siempre un único `PlaneMesh` horizontal de dos triángulos y una
   `ImageTexture` RGBA8 de un píxel por celda; cambiar el modo sólo regenera esa
   textura.
@@ -114,9 +122,22 @@ LAND; samples de recursos legacy sin el array aplican el mismo fallback.
 reutiliza una única implementación de dispersión/metrics, pero evita la fase
 rectilínea y su ordenamiento completo. La visibilidad incidente y la distancia
 ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
-`sort_custom` del grid. El preview imprime tiempos de bathymetry, metrics,
-sweep Eikonal, fase, shadow, debug mesh y total, además de ciclos y cambio
-final.
+`sort_custom` del grid. La recuperación energética y el suavizado de dirección
+son también O(N) por pasada, sin cambiar `travel_time`, `phase`, `reached` ni
+`local_direction`. El preview imprime sus tiempos adicionales junto a
+bathymetry, metrics, sweep Eikonal, fase, shadow, debug mesh y total.
+
+Los parámetros de recuperación parten de `shadow_recovery_enabled = true`,
+`shadow_diffraction_angle_deg = 12`, `shadow_recovery_strength = 1`. El campo
+de presentación parte de tres pasadas, `direction_smoothing_strength = 0.35`
+y `direction_smoothing_threshold_deg = 6`; son parámetros derivados del bake,
+no de la identidad macroscópica de la ola.
+
+Además de `eikonal_max_residual`, el bake registra
+`eikonal_interior_residual_rad_m`: el máximo residual sólo en agua interior
+reached con vecinos de agua reached, excluyendo el borde y las celdas de
+transición junto a tierra. Sirve para distinguir la precisión del solve en el
+interior de los gradientes necesariamente discretos de la frontera.
 
 En modo normal LONG conserva el FFT y se desplaza/multiplica de forma
 coherente. Las normales LONG se escalan con el desplazamiento de muestra; la
@@ -137,8 +158,9 @@ aproximación explícita en 3B, no una normal costeña final.
 `tests/phase_3b_1_eikonal_validation.gd` cubre agua plana (shadow neutro),
 un obstáculo aislado, dos islas con canal, agua leeward alcanzada, giro de
 dirección local, sombra suave, comparación con solve estricto y determinismo
-del solve. También valida grids 512×512 y 1024×1024 y que el debug conserve
-dos triángulos, no una malla por celda.
+del solve. También valida grids 512×512 y 1024×1024, recuperación de isla y
+roca pequeña, continuidad de `render_direction`, residual interior y que el
+debug conserve dos triángulos, no una malla por celda.
 
 `tests/phase_3b_coastal_preview_validation.gd` cubre la máquina de estados,
 worker, doble bake bloqueado, cierre durante solve, rebake, eliminación
