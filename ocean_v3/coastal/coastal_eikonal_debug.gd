@@ -117,6 +117,6 @@ func _color_at(x: int, z: int) -> Color:
 		Mode.SHADOW_SCALE:
 			if data.reached_mask[index] == 0:
 				return Color(0.18, 0.12, 0.10, 0.82)
-			var scale: float = data.shadow_scale[index] if data.shadow_scale.size() == data.width * data.height else 1.0
-			return Color(lerpf(0.08, 0.98, clampf(scale, 0.0, 1.0)), lerpf(0.08, 0.92, clampf(scale, 0.0, 1.0)), 0.12, 0.88)
+			var shadow_scale: float = data.shadow_scale[index] if data.shadow_scale.size() == data.width * data.height else 1.0
+			return Color(lerpf(0.08, 0.98, clampf(shadow_scale, 0.0, 1.0)), lerpf(0.08, 0.92, clampf(shadow_scale, 0.0, 1.0)), 0.12, 0.88)
 	return Color.WHITE

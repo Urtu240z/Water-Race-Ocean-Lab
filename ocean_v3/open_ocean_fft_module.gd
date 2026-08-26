@@ -89,10 +89,10 @@ class _WaveTransitionPreparationTask:
 			"duration_s": duration_s,
 		}
 
-	func _build_h0_datas(source_configs: Array[OpenOceanFFTConfig], seed: int) -> Array[PackedByteArray]:
+	func _build_h0_datas(source_configs: Array[OpenOceanFFTConfig], simulation_seed: int) -> Array[PackedByteArray]:
 		var result: Array[PackedByteArray] = []
 		for config in source_configs:
-			result.append(Spectrum.build_h0_rgba32f(config, Spectrum.derive_cascade_seed(seed, config.id)))
+			result.append(Spectrum.build_h0_rgba32f(config, Spectrum.derive_cascade_seed(simulation_seed, config.id)))
 		return result
 
 	func _interpolated_configs(source: Array[OpenOceanFFTConfig], target: Array[OpenOceanFFTConfig], alpha: float) -> Array[OpenOceanFFTConfig]:
