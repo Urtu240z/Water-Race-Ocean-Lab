@@ -129,7 +129,7 @@ func _set_handle(gizmo: EditorNode3DGizmo, handle_id: int, _secondary: bool, cam
 	var distance := plane.intersects_ray(ray_origin, ray_direction)
 	if distance == null:
 		return
-	var local_point := zone.to_local(ray_origin + ray_direction * float(distance))
+	var local_point := zone.to_local(ray_origin + ray_direction * distance)
 	var half := zone.box_size_m * 0.5
 	match handle_id:
 		HANDLE_X:
