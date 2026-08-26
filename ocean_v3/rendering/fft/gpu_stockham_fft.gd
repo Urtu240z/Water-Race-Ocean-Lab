@@ -263,7 +263,8 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 			crest_delta = _crest_foam_accumulator
 			_crest_foam_accumulator = fmod(_crest_foam_accumulator, crest_period)
 	if crest_update_due:
-		# Fresh whitecaps are born from current J; only residual history is advected.
+		# Fresh whitecaps are born from current J; both inherited foam channels are
+		# advected by update_foam before that current-frame source is applied.
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
 		_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
 		# update_foam receives rates per second and accumulated simulation delta; the shader
@@ -278,8 +279,8 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 			1.0 if _foam_advection_enabled else 0.0,
 			_foam_advection_strength,
 			_config.domain_size_m,
-			0.0,
-			0.0,
+			alpha,
+			maxf(target_config.foam_whitecap - _config.foam_whitecap, 0.0),
 			0.0,
 		])
 		_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
