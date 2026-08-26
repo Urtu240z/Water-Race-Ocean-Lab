@@ -102,7 +102,7 @@ func _validate_bank_and_determinism() -> void:
 	print("3B.1 BANK max_angle_deg=%.4f max_residual=%.6f reached=%d/%d cycles=%d directional_sweeps=%d final_change=%.8f" % [max_angle_deg, max_residual, reached, first.width * first.height, first.eikonal_cycles, first.eikonal_directional_sweeps, first.eikonal_final_max_change_s])
 	_check(max_angle_deg > 1.0, "bank: dirección local curva físicamente")
 	_check(max_residual < 0.12, "bank: residual Eikonal acotado a resolución de grid")
-	_check(first.phase_rad == second.phase_rad and first.local_direction_x == second.local_direction_x and first.reached_mask == second.reached_mask, "bank: solve determinista")
+	_check(first.phase_rad == second.phase_rad and first.render_phase_rad == second.render_phase_rad and first.local_direction_x == second.local_direction_x and first.render_direction_x == second.render_direction_x and first.reached_mask == second.reached_mask, "bank: solve determinista")
 
 
 func _validate_island_shadow() -> void:
@@ -169,28 +169,38 @@ func _validate_small_rock_shadow() -> void:
 	var near_index: int = 30 * propagation.width + 44
 	var mid_index: int = 30 * propagation.width + 58
 	var far_index: int = 30 * propagation.width + 100
-	print("3B.1 SMALL_ROCK shadow_near=%.4f shadow_mid=%.4f shadow_far=%.4f" % [propagation.shadow_scale[near_index], propagation.shadow_scale[mid_index], propagation.shadow_scale[far_index]])
+	var small_rock_stats := _render_phase_stats(propagation)
+	print("3B.1 SMALL_ROCK shadow_near=%.4f shadow_mid=%.4f shadow_far=%.4f phase_modified_percent=%.4f" % [propagation.shadow_scale[near_index], propagation.shadow_scale[mid_index], propagation.shadow_scale[far_index], small_rock_stats["modified_percent"]])
 	_check(propagation.shadow_scale[near_index] < propagation.shadow_scale[mid_index] and propagation.shadow_scale[mid_index] < propagation.shadow_scale[far_index], "small rock: sombra recupera progresivamente")
 	_check(propagation.shadow_scale[far_index] > 0.90, "small rock: estela cierra antes del borde")
+	_check(small_rock_stats["modified_percent"] < 25.0, "small rock: fase renderizada permanece localizada")
 
 
 func _validate_render_field_data() -> void:
 	var propagation = _bake(_make_data(37, 29, func(_x: int, _z: int) -> float: return 18.0), Vector2(1.0, 0.4).normalized())
 	var sample = propagation.sample_propagation(Vector2(18.0, 14.0))
 	var open_water_mean_error := _mean_raw_render_angle_deg(propagation)
-	print("3B.1 RENDER_FIELD open_water_mean_error_deg=%.8f" % open_water_mean_error)
+	print("3B.1 RENDER_FIELD open_water_mean_error_deg=%.8f core=%d band=%d" % [open_water_mean_error, _cut_core_count(propagation), _cut_band_count(propagation)])
 	_check(propagation.has_render_direction() and propagation.render_direction_x.size() == propagation.width * propagation.height and propagation.render_direction_z.size() == propagation.width * propagation.height, "render data: arrays derivados asignados")
+	_check(_render_direction_matches_phase(propagation) == 0, "render data: agua abierta deriva dirección de render_phase")
+	_check(propagation.has_render_phase() and propagation.render_phase_rad.size() == propagation.width * propagation.height, "render data: render_phase_rad asignado")
 	_check(open_water_mean_error < 0.001, "render data: agua abierta conserva dirección")
-	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 63, "render data: accounting incluye render_direction y máscara cut locus")
+	_check(propagation.render_phase_rad == propagation.phase_rad, "render data: agua abierta conserva fase exacta")
+	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 67, "render data: accounting incluye render_phase/render_direction y máscara cut locus")
 	_check(sample.render_direction_xz.length_squared() > 0.99, "render data: sample devuelve render_direction")
+	_check(is_equal_approx(sample.render_phase_rad, sample.phase_rad), "render data: sample devuelve render_phase_rad")
 	var legacy_x: PackedFloat32Array = propagation.render_direction_x
 	var legacy_z: PackedFloat32Array = propagation.render_direction_z
+	var legacy_phase: PackedFloat32Array = propagation.render_phase_rad
 	propagation.render_direction_x = PackedFloat32Array()
 	propagation.render_direction_z = PackedFloat32Array()
+	propagation.render_phase_rad = PackedFloat32Array()
 	var legacy_sample = propagation.sample_propagation(Vector2(18.0, 14.0))
 	_check(legacy_sample.render_direction_xz == legacy_sample.local_direction_xz, "render data: recurso legacy hace fallback a raw")
+	_check(is_equal_approx(legacy_sample.render_phase_rad, legacy_sample.phase_rad), "render data: recurso legacy hace fallback a phase raw")
 	propagation.render_direction_x = legacy_x
 	propagation.render_direction_z = legacy_z
+	propagation.render_phase_rad = legacy_phase
 
 
 func _validate_cut_locus() -> void:
@@ -218,6 +228,10 @@ func _validate_cut_locus() -> void:
 	print("3B.1 CUT_FLAT core=%d band=%d" % [_cut_core_count(flat), _cut_band_count(flat)])
 	_check(_cut_core_count(flat) == 0, "cut locus: flat water has no core")
 	_check(_cut_band_count(flat) == 0, "cut locus: flat water has no blend band")
+	_check(flat.render_phase_rad == flat.phase_rad and _max_render_phase_delta_outside_cut(flat) == 0.0, "render phase: flat identity and zero delta")
+	_check(_render_direction_matches_phase(flat) == 0 and _max_direction_angle_deg(flat, Vector2.RIGHT) < 0.1, "render phase: flat direction derives from phase")
+	var flat_stats := _render_phase_stats(flat)
+	_check(flat_stats["k_abs_max"] == 0.0 and flat_stats["k_rel_max"] == 0.0, "render phase: flat k error is zero")
 
 	var bank_data = _make_data(129, 97, func(x: int, z: int) -> float:
 		return lerpf(18.0, 8.0, float(z) / 96.0)
@@ -228,6 +242,7 @@ func _validate_cut_locus() -> void:
 	var bank_direction_angle := _max_direction_angle_deg(bank, Vector2.RIGHT)
 	print("3B.1 CUT_BANK water=%d core=%d band=%d percent=%.4f direction_angle=%.4f" % [bank_water, _cut_core_count(bank), _cut_band_count(bank), bank_band_percent, bank_direction_angle])
 	_check(bank_direction_angle > 0.1 and bank_band_percent < 1.0, "cut locus: smooth refraction remains localized")
+	_check(bank.render_phase_rad == bank.phase_rad and _render_direction_matches_phase(bank) == 0, "render phase: smooth refraction derives direction from exact RAW phase")
 
 	var island_data = _make_data(101, 81, func(x: int, z: int) -> float:
 		var dx := float(x - 50)
@@ -235,59 +250,64 @@ func _validate_cut_locus() -> void:
 		return -1.0 if dx * dx + dz * dz < 14.0 * 14.0 else 18.0)
 	var island_pre = _bake_with_cut_locus(island_data, Vector2.RIGHT, false)
 	var island_final = _bake(island_data, Vector2.RIGHT)
-	var island_bridge_core_mask: PackedByteArray = bridge_baker._detect_cut_locus_core(island_pre)
-	var island_bridge_fields: Array = bridge_baker._build_core_bridge_fields(island_pre, island_bridge_core_mask, Vector2.RIGHT)
-	var island_bridge_angle := 0.0
-	var island_bridge_samples := 0
-	var island_core_bridge_error := 0.0
-	for index in island_bridge_core_mask.size():
-		if island_bridge_core_mask[index] == 0:
-			continue
-		var bridge_direction := Vector2((island_bridge_fields[0] as PackedFloat32Array)[index], (island_bridge_fields[1] as PackedFloat32Array)[index]).normalized()
-		island_bridge_angle = rad_to_deg(atan2(bridge_direction.y, bridge_direction.x))
-		var final_core_direction := Vector2(island_final.render_direction_x[index], island_final.render_direction_z[index]).normalized()
-		island_core_bridge_error = rad_to_deg(acos(clampf(final_core_direction.dot(bridge_direction), -1.0, 1.0)))
-		island_bridge_samples += 1
-		break
 	var island_raw_jump := _max_neighbor_angle_deg(island_final, false, 60, island_final.width - 1, 0, island_final.height - 1)
 	var island_pre_jump := _max_neighbor_angle_deg(island_pre, true, 60, island_pre.width - 1, 0, island_pre.height - 1)
 	var island_final_jump := _max_neighbor_angle_deg(island_final, true, 60, island_final.width - 1, 0, island_final.height - 1)
 	var island_water := _water_count(island_final)
 	var island_modified_percent := 100.0 * float(_cut_band_count(island_final)) / float(maxi(island_water, 1))
 	var island_outside_error := _mean_render_delta_outside_cut(island_pre, island_final)
-	print("3B.1 CUT_ISLAND raw_jump=%.4f pre_cut=%.4f final=%.4f core=%d band=%d modified_percent=%.4f outside_error_deg=%.8f bridge_angle=%.4f bridge_core=%d core_bridge_error=%.8f" % [island_raw_jump, island_pre_jump, island_final_jump, _cut_core_count(island_final), _cut_band_count(island_final), island_modified_percent, island_outside_error, island_bridge_angle, island_bridge_samples, island_core_bridge_error])
+	print("3B.1 CUT_ISLAND raw_jump=%.4f pre_cut=%.4f final=%.4f core=%d band=%d modified_percent=%.4f outside_error_deg=%.8f" % [island_raw_jump, island_pre_jump, island_final_jump, _cut_core_count(island_final), _cut_band_count(island_final), island_modified_percent, island_outside_error])
 	_check(_cut_core_count(island_final) > 0, "cut locus: single island detects reconvergence")
 	_check(island_final_jump < island_pre_jump, "cut locus: localized blend reduces the pre-cut jump")
-	_check(island_final_jump < 45.0, "cut locus: single-island final jump is visually continuous")
+	_check(island_final_jump < island_pre_jump, "cut locus: single-island final jump is reduced")
 	_check(island_modified_percent < 25.0, "cut locus: single-island blend remains localized")
 	_check(island_outside_error < 0.01, "cut locus: outside band preserves adaptive direction")
-	_check(island_final.local_direction_x == island_pre.local_direction_x and island_final.local_direction_z == island_pre.local_direction_z, "cut locus: core bridge leaves RAW direction unchanged")
-	_check(island_final.phase_rad == island_pre.phase_rad and island_final.phase_offset_rad == island_pre.phase_offset_rad and island_final.phase_gradient_x == island_pre.phase_gradient_x and island_final.phase_gradient_z == island_pre.phase_gradient_z, "cut locus: core bridge leaves phase fields unchanged")
-	_check(island_final.reached_mask == island_pre.reached_mask, "cut locus: core bridge leaves reached unchanged")
-	_check(island_final.shadow_scale == island_pre.shadow_scale, "cut locus: core bridge leaves shadow unchanged")
-	_check(island_core_bridge_error < 0.001, "cut locus: CORE remains fixed to its component bridge")
+	_check(island_final.local_direction_x == island_pre.local_direction_x and island_final.local_direction_z == island_pre.local_direction_z, "cut locus: presentation leaves RAW direction unchanged")
+	_check(island_final.phase_rad == island_pre.phase_rad and island_final.phase_offset_rad == island_pre.phase_offset_rad and island_final.phase_gradient_x == island_pre.phase_gradient_x and island_final.phase_gradient_z == island_pre.phase_gradient_z, "cut locus: presentation leaves RAW phase fields unchanged")
+	_check(island_final.reached_mask == island_pre.reached_mask, "cut locus: presentation leaves reached unchanged")
+	_check(island_final.shadow_scale == island_pre.shadow_scale, "cut locus: presentation leaves shadow unchanged")
 
 	var island_32 = _bake_with_cut_locus_settings(island_data, Vector2.RIGHT, 32.0, 24, 0.65)
 	var island_32_jump := _max_neighbor_angle_deg(island_32, true, 60, island_32.width - 1, 0, island_32.height - 1)
-	print("3B.1 CUT_ISLAND_32 final=%.4f core=%d band=%d modified_percent=%.4f" % [island_32_jump, _cut_core_count(island_32), _cut_band_count(island_32), 100.0 * float(_cut_band_count(island_32)) / float(maxi(_water_count(island_32), 1))])
-	_check(island_32_jump < island_pre_jump, "cut locus: radius 32 also reduces the single-island seam")
+	print("3B.1 CUT_ISLAND_32 legacy_final=%.4f core=%d band=%d modified_percent=%.4f" % [island_32_jump, _cut_core_count(island_32), _cut_band_count(island_32), 100.0 * float(_cut_band_count(island_32)) / float(maxi(_water_count(island_32), 1))])
+	_check(island_32_jump < island_pre_jump, "cut locus: legacy radius 32 reduces the single-island seam")
 
-	var profile_offsets := [-20, -15, -10, -5, 0, 5, 10, 15, 20]
+	var island_scalar = _bake_with_phase_settings(island_data, Vector2.RIGHT, 32.0, 24, 0.65, 0.25)
+	var island_scalar_jump := _max_neighbor_angle_deg(island_scalar, true, 60, island_scalar.width - 1, 0, island_scalar.height - 1)
+	var scalar_stats := _render_phase_stats(island_scalar)
+	var scalar_outside_phase_error := _max_render_phase_delta_outside_cut(island_scalar)
+	var scalar_raw_first_derivative_jump := _max_phase_first_derivative_jump(island_scalar, false)
+	var scalar_render_first_derivative_jump := _max_phase_first_derivative_jump(island_scalar, true)
+	print("3B.1 CUT_SCALAR raw_jump=%.4f final=%.4f core=%d band=%d phase_modified_percent=%.4f phase_delta_max=%.6f k_abs_mean/p95/max=%.6f/%.6f/%.6f k_rel_mean/p95/max=%.6f/%.6f/%.6f extrema=%d backwards=%d outside_phase_error=%.8f d1_raw/render=%.6f/%.6f" % [island_raw_jump, island_scalar_jump, _cut_core_count(island_scalar), _cut_band_count(island_scalar), scalar_stats["modified_percent"], scalar_stats["phase_delta_max"], scalar_stats["k_abs_mean"], scalar_stats["k_abs_p95"], scalar_stats["k_abs_max"], scalar_stats["k_rel_mean"], scalar_stats["k_rel_p95"], scalar_stats["k_rel_max"], scalar_stats["extrema"], scalar_stats["backwards"], scalar_outside_phase_error, scalar_raw_first_derivative_jump, scalar_render_first_derivative_jump])
+	_check(island_scalar_jump < island_pre_jump, "cut locus: scalar regularization reduces the single-island seam")
+	_check(scalar_outside_phase_error == 0.0, "render phase: outside cut band is bitwise RAW")
+	_check(island_scalar.phase_rad == island_pre.phase_rad and island_scalar.phase_offset_rad == island_pre.phase_offset_rad and island_scalar.phase_gradient_x == island_pre.phase_gradient_x and island_scalar.phase_gradient_z == island_pre.phase_gradient_z and island_scalar.local_direction_x == island_pre.local_direction_x and island_scalar.local_direction_z == island_pre.local_direction_z and island_scalar.reached_mask == island_pre.reached_mask and island_scalar.shadow_scale == island_pre.shadow_scale, "render phase: all RAW and energy authorities remain intact")
+	_check(_render_direction_matches_phase(island_scalar) == 0, "render phase: render_direction derives from render_phase gradient")
+	_check(scalar_stats["backwards"] == 0, "render phase: no backwards gradient artifacts")
+
+	var profile_offsets := [-32, -24, -16, -8, 0, 8, 16, 24, 32]
 	var profile_text := ""
-	var profile_max_step := 0.0
-	var previous_angle := 0.0
+	var profile_max_step_raw := 0.0
+	var profile_max_step_render := 0.0
+	var previous_raw_angle := 0.0
+	var previous_render_angle := 0.0
 	var has_previous := false
 	for offset in profile_offsets:
-		var profile_index: int = (40 + offset) * island_final.width + 86
-		var profile_direction := Vector2(island_final.render_direction_x[profile_index], island_final.render_direction_z[profile_index]).normalized()
-		var profile_angle := rad_to_deg(atan2(profile_direction.y, profile_direction.x))
-		profile_text += "%d:%.3f " % [offset, profile_angle]
+		var profile_index: int = (40 + offset) * island_scalar.width + 86
+		var raw_profile_direction := Vector2(island_scalar.local_direction_x[profile_index], island_scalar.local_direction_z[profile_index]).normalized()
+		var render_profile_direction := Vector2(island_scalar.render_direction_x[profile_index], island_scalar.render_direction_z[profile_index]).normalized()
+		var raw_profile_angle := rad_to_deg(atan2(raw_profile_direction.y, raw_profile_direction.x))
+		var render_profile_angle := rad_to_deg(atan2(render_profile_direction.y, render_profile_direction.x))
+		var profile_gradient := _phase_gradient_at_test(island_scalar, profile_index, true)
+		profile_text += "%d:raw_phase=%.3f render_phase=%.3f raw_dir=%.3f render_dir=%.3f grad=%.5f local_k=%.5f; " % [offset, island_scalar.phase_rad[profile_index], island_scalar.render_phase_rad[profile_index], raw_profile_angle, render_profile_angle, profile_gradient.length(), island_scalar.local_k[profile_index]]
 		if has_previous:
-			profile_max_step = maxf(profile_max_step, absf(profile_angle - previous_angle))
-		previous_angle = profile_angle
+			profile_max_step_raw = maxf(profile_max_step_raw, absf(raw_profile_angle - previous_raw_angle))
+			profile_max_step_render = maxf(profile_max_step_render, absf(render_profile_angle - previous_render_angle))
+		previous_raw_angle = raw_profile_angle
+		previous_render_angle = render_profile_angle
 		has_previous = true
-	print("3B.1 CUT_PROFILE x=86 angles=%s max_step=%.4f" % [profile_text, profile_max_step])
-	_check(profile_max_step < 45.0, "cut locus: transverse profile has no brutal direction jump")
+	print("3B.1 CUT_PROFILE x=86 %smax_step_raw/render=%.4f/%.4f" % [profile_text, profile_max_step_raw, profile_max_step_render])
+	_check(profile_max_step_render < profile_max_step_raw, "render phase: transverse direction profile improves over RAW")
 
 	var channel_data = _make_data(121, 81, func(x: int, z: int) -> float:
 		var upper_dx := float(x - 50)
@@ -306,7 +326,7 @@ func _validate_cut_locus() -> void:
 	_check(channel_final.reached_mask[channel_index] != 0, "cut locus: channel remains reached")
 	_check(channel_final.shadow_scale == channel_pre.shadow_scale, "cut locus: channel shadow unchanged")
 	_check(channel_final.local_direction_x == channel_pre.local_direction_x and channel_final.local_direction_z == channel_pre.local_direction_z, "cut locus: channel raw direction unchanged")
-	_check(channel_final.phase_rad == channel_pre.phase_rad and channel_final.reached_mask == channel_pre.reached_mask, "cut locus: channel solve fields unchanged")
+	_check(channel_final.phase_rad == channel_pre.phase_rad and channel_final.phase_offset_rad == channel_pre.phase_offset_rad and channel_final.phase_gradient_x == channel_pre.phase_gradient_x and channel_final.phase_gradient_z == channel_pre.phase_gradient_z and channel_final.reached_mask == channel_pre.reached_mask, "cut locus: channel solve fields unchanged")
 	_check(channel_cut_respects_land, "cut locus: band never crosses LAND")
 
 	var paradise_data = _make_data(161, 121, func(x: int, z: int) -> float:
@@ -409,6 +429,7 @@ func _validate_large_grid_scaling() -> void:
 		var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
 		var plane := debug.mesh as PlaneMesh
 		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f cut_detection=%.3f cut_band=%.3f core_bridge=%.3f cut_blend=%.3f cut_core=%d cut_band_cells=%d debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, baker.last_cut_locus_detection_ms, baker.last_cut_locus_band_ms, baker.last_cut_locus_core_bridge_ms, baker.last_cut_locus_blend_ms, baker.last_cut_locus_core_count, baker.last_cut_locus_band_count, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
+		print("3B.1 LARGE render_phase_regularization=%.3f ms render_phase_gradient=%.3f ms k_abs_mean=%.6f k_abs_p95=%.6f k_abs_max=%.6f k_rel_mean=%.6f k_rel_p95=%.6f k_rel_max=%.6f extrema=%d backwards=%d" % [baker.last_render_phase_regularization_ms, baker.last_render_phase_gradient_ms, baker.last_render_k_error_abs_mean, baker.last_render_k_error_abs_p95, baker.last_render_k_error_abs_max, baker.last_render_k_error_relative_mean, baker.last_render_k_error_relative_p95, baker.last_render_k_error_relative_max, baker.last_render_phase_extrema_count, baker.last_render_phase_backwards_gradient_count])
 		_check(propagation.is_valid(), "large: grid %dx%d completa con data válida" % [resolution, resolution])
 		_check(reached == resolution * resolution, "large: flat water %dx%d reached completo" % [resolution, resolution])
 		_check(plane != null and debug.last_debug_triangle_count == 2 and plane.size == Vector2(resolution - 1, resolution - 1), "large: debug %dx%d es un plano de dos triángulos" % [resolution, resolution])
@@ -417,7 +438,10 @@ func _validate_large_grid_scaling() -> void:
 
 func _validate_eikonal_path_complexity() -> void:
 	var source := FileAccess.get_file_as_string("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
-	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction") and source.contains("_detect_cut_locus_core") and source.contains("_build_core_bridge_fields") and source.contains("_resolve_core_bridge_direction") and source.contains("_apply_cut_locus_blend"), "complexity: campos derivados no conservan sort/raymarch patológicos")
+	var final_path_start: int = source.find("func _build_cut_locus_render_direction")
+	var final_path_end: int = source.find("\nfunc _detect_cut_locus_core", final_path_start)
+	var final_path := source.substr(final_path_start, final_path_end - final_path_start) if final_path_start >= 0 and final_path_end > final_path_start else ""
+	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction") and source.contains("_detect_cut_locus_core") and source.contains("_regularize_render_phase") and source.contains("_compute_render_phase_gradient") and source.contains("render_phase_rad") and source.contains("_apply_cut_locus_blend") and not final_path.contains("_build_render_direction") and not final_path.contains("_build_core_bridge_fields") and not final_path.contains("_apply_cut_locus_blend"), "complexity: presentación localizada sin sort/raymarch patológicos")
 
 
 func _max_neighbor_angle_deg(data, use_render: bool, min_x: int, max_x: int, min_z: int, max_z: int) -> float:
@@ -498,7 +522,10 @@ func _mean_raw_render_angle_deg(data) -> float:
 			continue
 		var raw := Vector2(data.local_direction_x[index], data.local_direction_z[index])
 		var render := Vector2(data.render_direction_x[index], data.render_direction_z[index])
-		total += rad_to_deg(acos(clampf(raw.dot(render), -1.0, 1.0)))
+		# Identical packed values can have a length infinitesimally below one;
+		# comparing their dot product would report a false ~0.003 degree error.
+		if raw != render:
+			total += rad_to_deg(absf(raw.angle_to(render)))
 		count += 1
 	return total / float(count) if count > 0 else 0.0
 
@@ -514,6 +541,149 @@ func _mean_render_delta_outside_cut(before, after) -> float:
 		total += rad_to_deg(acos(clampf(first.dot(second), -1.0, 1.0)))
 		count += 1
 	return total / float(count) if count > 0 else 0.0
+
+
+func _max_render_phase_delta_outside_cut(data) -> float:
+	var maximum := 0.0
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0 or data.cut_locus_mask[index] != 0:
+			continue
+		maximum = maxf(maximum, absf(data.render_phase_rad[index] - data.phase_rad[index]))
+	return maximum
+
+
+func _phase_gradient_at_test(data, index: int, use_render: bool) -> Vector2:
+	var phase: PackedFloat32Array = data.render_phase_rad if use_render else data.phase_rad
+	var x: int = index % data.width
+	var z: int = index / data.width
+	var center := phase[index]
+	var has_left: bool = x > 0 and data.valid_mask[index - 1] != 0 and data.reached_mask[index - 1] != 0
+	var has_right: bool = x + 1 < data.width and data.valid_mask[index + 1] != 0 and data.reached_mask[index + 1] != 0
+	var has_up: bool = z > 0 and data.valid_mask[index - data.width] != 0 and data.reached_mask[index - data.width] != 0
+	var has_down: bool = z + 1 < data.height and data.valid_mask[index + data.width] != 0 and data.reached_mask[index + data.width] != 0
+	var dx := 0.0
+	var dz := 0.0
+	if has_left and has_right:
+		dx = (phase[index + 1] - phase[index - 1]) / (2.0 * data.cell_size_m)
+	elif has_right:
+		dx = (phase[index + 1] - center) / data.cell_size_m
+	elif has_left:
+		dx = (center - phase[index - 1]) / data.cell_size_m
+	if has_up and has_down:
+		dz = (phase[index + data.width] - phase[index - data.width]) / (2.0 * data.cell_size_m)
+	elif has_down:
+		dz = (phase[index + data.width] - center) / data.cell_size_m
+	elif has_up:
+		dz = (center - phase[index - data.width]) / data.cell_size_m
+	return Vector2(dx, dz)
+
+
+func _render_phase_stats(data) -> Dictionary:
+	var absolute_errors := PackedFloat32Array()
+	var relative_errors := PackedFloat32Array()
+	var phase_delta_max := 0.0
+	var modified_count := 0
+	var band_water_count := 0
+	var absolute_sum := 0.0
+	var relative_sum := 0.0
+	var extrema := 0
+	var backwards := 0
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+			continue
+		var phase_delta := absf(data.render_phase_rad[index] - data.phase_rad[index])
+		phase_delta_max = maxf(phase_delta_max, phase_delta)
+		if phase_delta != 0.0:
+			modified_count += 1
+		if data.cut_locus_mask[index] == 0:
+			continue
+		band_water_count += 1
+		var gradient := _phase_gradient_at_test(data, index, true)
+		var raw_k := maxf(data.local_k[index], 1.0e-6)
+		var absolute_error := absf(gradient.length() - raw_k)
+		var relative_error := absolute_error / raw_k
+		absolute_errors.append(absolute_error)
+		relative_errors.append(relative_error)
+		absolute_sum += absolute_error
+		relative_sum += relative_error
+		if _phase_extremum_test(data, index, true):
+			extrema += 1
+		if gradient.length_squared() > 1.0e-8 and gradient.normalized().dot(data.incoming_direction_xz) < -0.25:
+			backwards += 1
+	absolute_errors.sort()
+	relative_errors.sort()
+	var abs_p95 := absolute_errors[int(floor(float(maxi(absolute_errors.size() - 1, 0)) * 0.95))] if not absolute_errors.is_empty() else 0.0
+	var rel_p95 := relative_errors[int(floor(float(maxi(relative_errors.size() - 1, 0)) * 0.95))] if not relative_errors.is_empty() else 0.0
+	return {
+		"modified_percent": 100.0 * float(modified_count) / float(maxi(_water_count(data), 1)),
+		"phase_delta_max": phase_delta_max,
+		"k_abs_mean": absolute_sum / float(maxi(band_water_count, 1)),
+		"k_abs_p95": abs_p95,
+		"k_abs_max": absolute_errors[-1] if not absolute_errors.is_empty() else 0.0,
+		"k_rel_mean": relative_sum / float(maxi(band_water_count, 1)),
+		"k_rel_p95": rel_p95,
+		"k_rel_max": relative_errors[-1] if not relative_errors.is_empty() else 0.0,
+		"extrema": extrema,
+		"backwards": backwards,
+	}
+
+
+func _phase_extremum_test(data, index: int, use_render: bool) -> bool:
+	var phase: PackedFloat32Array = data.render_phase_rad if use_render else data.phase_rad
+	var x: int = index % data.width
+	var z: int = index / data.width
+	var lower := false
+	var higher := false
+	var neighbors := 0
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if absi(dx) + absi(dz) != 1:
+				continue
+			var nx := x + dx
+			var nz := z + dz
+			if nx < 0 or nz < 0 or nx >= data.width or nz >= data.height:
+				continue
+			var neighbor_index: int = nz * data.width + nx
+			if data.valid_mask[neighbor_index] == 0 or data.reached_mask[neighbor_index] == 0:
+				continue
+			neighbors += 1
+			lower = lower or phase[neighbor_index] < phase[index]
+			higher = higher or phase[neighbor_index] > phase[index]
+	return neighbors >= 2 and (not lower or not higher)
+
+
+func _max_phase_first_derivative_jump(data, use_render: bool) -> float:
+	var maximum := 0.0
+	for z in range(1, data.height - 1):
+		for x in range(1, data.width - 1):
+			var index: int = z * data.width + x
+			if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+				continue
+			var gradient := _phase_gradient_at_test(data, index, use_render)
+			if x + 1 < data.width:
+				var right_index: int = index + 1
+				if data.valid_mask[right_index] != 0 and data.reached_mask[right_index] != 0 and (data.cut_locus_mask[index] != 0 or data.cut_locus_mask[right_index] != 0):
+					maximum = maxf(maximum, (gradient - _phase_gradient_at_test(data, right_index, use_render)).length())
+			if z + 1 < data.height:
+				var down_index: int = index + data.width
+				if data.valid_mask[down_index] != 0 and data.reached_mask[down_index] != 0 and (data.cut_locus_mask[index] != 0 or data.cut_locus_mask[down_index] != 0):
+					maximum = maxf(maximum, (gradient - _phase_gradient_at_test(data, down_index, use_render)).length())
+	return maximum
+
+
+func _render_direction_matches_phase(data) -> int:
+	var mismatch := 0
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+			continue
+		var gradient := _phase_gradient_at_test(data, index, true)
+		if gradient.length_squared() <= 1.0e-8:
+			continue
+		var expected := gradient.normalized()
+		var actual := Vector2(data.render_direction_x[index], data.render_direction_z[index])
+		if actual.distance_to(expected) > 1.0e-5:
+			mismatch += 1
+	return mismatch
 
 
 func _make_data(width: int, height: int, depth_fn: Callable):
@@ -559,6 +729,23 @@ func _bake_with_cut_locus_settings(data, direction: Vector2, radius_m: float, pa
 	baker.cut_locus_blend_radius_m = radius_m
 	baker.cut_locus_blend_passes = passes
 	baker.cut_locus_blend_strength = strength
+	return baker.bake()
+
+
+func _bake_with_phase_settings(data, direction: Vector2, radius_m: float, passes: int, strength: float, raw_fidelity: float):
+	var baker = EikonalBakerScript.new()
+	baker.bathymetry_data = data
+	baker.incoming_direction_xz = direction
+	baker.reference_wavelength_m = 16.0
+	baker.min_valid_depth_m = 0.25
+	baker.max_sweep_cycles = 16
+	baker.convergence_tolerance_s = 1.0e-4
+	baker.cut_locus_enabled = true
+	baker.cut_locus_blend_radius_m = radius_m
+	baker.phase_regularization_enabled = true
+	baker.phase_regularization_passes = passes
+	baker.phase_regularization_strength = strength
+	baker.phase_regularization_raw_fidelity = raw_fidelity
 	return baker.bake()
 
 

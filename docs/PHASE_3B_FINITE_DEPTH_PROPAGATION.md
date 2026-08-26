@@ -27,7 +27,8 @@ CoastalPropagationData
   ├─ CPU sample_propagation(world_xz)
   ├─ shadow_scale CPU (shadow energético; no se sube a GPU)
   ├─ local_direction CPU (raw normalizado de ∇T)
-  ├─ render_direction CPU (suavizado + cut locus; no se sube a GPU)
+  ├─ render_phase_rad CPU (fase de presentación derivada; no se sube a GPU)
+  ├─ render_direction CPU (gradiente de render_phase_rad; no se sube a GPU)
   ├─ cut_locus_mask CPU (debug derivado; no se sube a GPU)
   └─ tres RGBA32F GPU en 3B.1 (mismo grid/mapping)
         │
@@ -94,24 +95,41 @@ El campo de tiempo se resuelve con Fast Sweeping. Straight Baker inicializa el
 campo a 1 en agua y 0 en LAND; samples de recursos legacy sin el array aplican
 el mismo fallback.
 
-La dirección de presentación sigue la cadena `RAW EIKONAL → adaptive smoothing
-→ cut locus detection → core bridge/anchor → localized vector blend →
-render_direction`. La detección
-usa `local_direction` raw como señal conservadora: exige un salto vecino mayor
-que `cut_locus_detect_angle_deg`, una diferencia clara entre lados opuestos y un
-vecindario 3×3 completamente water/reached. Así una refracción suave no basta
-por sí sola. Una BFS multi-source crea la banda en agua reached, con LAND como
-barrera. Antes del blend, el CORE se separa en componentes conectadas 8-neighbor;
-cada componente recibe un único `bridge_direction` calculado con muestras de
-`render_direction` PRE-CUT en su frontera no-core. Las muestras fuertemente
-backwards (dot con la dirección entrante menor que -0.25) se descartan. Si la
-suma vectorial se cancela o no queda ninguna muestra estable, el fallback es la
-dirección entrante; el mismo filtro evita producir una dirección final hacia
-atrás. El CORE queda fijo con ese ancla durante todos los pases, mientras que
-el resto de la banda se actualiza desde copias explícitas previous→next de los
-arrays y las celdas fuera de la banda permanecen fijas. No es un solver
-multi-arrival ni reconstruye el Eikonal: es una corrección de presentación para
-fusionar ramas equivalentes del first-arrival.
+La física conserva como autoridad los campos RAW del solve: `travel_time`,
+`phase_rad`, `phase_offset_rad`, `phase_gradient_x/z`, `local_direction`,
+`reached_mask`, `valid_mask`, `shadow_scale`, `local_k`, longitudes de onda,
+velocidades y shoaling. La presentación usa una copia separada:
+`render_phase_rad` se inicializa exactamente con la fase Eikonal desenrollada y
+sólo se modifica dentro de la banda del detector cut locus. Fuera de esa banda
+es idéntica a RAW, sin fase envuelta ni módulo; los modos de debug son la única
+excepción y aplican wrapping sólo al color HSV.
+
+La detección reutiliza `local_direction` raw como señal conservadora: exige un
+salto vecino mayor que `cut_locus_detect_angle_deg`, una diferencia clara entre
+lados opuestos y un vecindario 3×3 completamente water/reached. Una BFS
+multi-source crea la banda en agua reached, con LAND como barrera. En esa banda
+se ejecuta una regularización escalar local tipo screened Laplacian, con
+Gauss–Seidel determinista sobre `band_indices` estables:
+
+```text
+target_i = (Σ render_phase_j + raw_fidelity * phase_i)
+           / (n_neighbors + raw_fidelity)
+render_phase_i ← lerp(render_phase_i, target_i,
+                      strength * cut_weight_i)
+```
+
+Sólo donan vecinos water/reached; LAND, inválidos y no alcanzados no cruzan la
+barrera. Después, `render_direction` se calcula como
+`normalize(grad(render_phase_rad))`, usando diferencias centrales cuando hay
+vecinos válidos a ambos lados y one-sided en LAND, bordes o no alcanzados. Si el
+gradiente es degenerado se usa primero RAW `local_direction` y luego la
+dirección entrante; únicamente se rechaza una inversión numérica absurda, no
+los cambios laterales legítimos. Esto no reconstruye el Eikonal ni es un
+solver multi-arrival: es una corrección escalar localizada de presentación.
+
+El antiguo core bridge y el blend vectorial permanecen en el baker para
+comparación/debug y para conservar las regresiones históricas, pero ya no son
+la autoridad ni se llaman desde el bake final.
 
 ## Visualización y debug
 
@@ -124,7 +142,8 @@ fusionar ramas equivalentes del first-arrival.
 - `set_coastal_debug_field()` para DEPTH, WAVELENGTH, PHASE_SPEED,
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
 - `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
-  `RAW_DIRECTION`, `RENDER_DIRECTION`, `SHADOW_SCALE` y `CUT_LOCUS`;
+  `RAW_DIRECTION`, `RENDER_DIRECTION`, `SHADOW_SCALE`, `CUT_LOCUS`,
+  `RAW_PHASE`, `RENDER_PHASE` y `PHASE_DELTA`;
   `LOCAL_DIRECTION` es alias de `RAW_DIRECTION`. No toca shaders ni el render
   final. `CUT_LOCUS` pinta core rojo, banda naranja y fuera negro/transparente.
   Su
@@ -146,28 +165,37 @@ rectilínea y su ordenamiento completo. La visibilidad incidente y la distancia
 ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
 `sort_custom` del grid. La recuperación energética y el suavizado de dirección
 son también O(N) por pasada, sin cambiar `travel_time`, `phase`, `reached` ni
-`local_direction`. Cut-locus detection y construcción de banda son O(N); el
-core bridge tiene un coste O(N) de almacenamiento/recorrido de sus campos y
-O(C) de componentes con una vecindad constante por celda CORE, donde N es el
-grid y C el número de celdas CORE; el blend es O(B × passes), donde B es el
-número de celdas de la banda. El preview imprime detección, banda, core bridge y blend junto a
-bathymetry, metrics, sweep Eikonal, fase, shadow, debug mesh y total.
+`local_direction`. Cut-locus detection y construcción de banda son O(N); la
+regularización escalar es O(B × phase_regularization_passes), donde B es el
+número de celdas de la banda, y el gradiente final es O(N). El preview imprime
+detección, banda, regularización de fase, gradiente, métricas k, bathymetry,
+metrics, sweep Eikonal, fase, shadow, debug mesh y total.
 
 Los parámetros de recuperación parten de `shadow_recovery_enabled = true`,
-`shadow_diffraction_angle_deg = 12`, `shadow_recovery_strength = 1`. El campo
-de presentación parte de tres pasadas, `direction_smoothing_strength = 0.35`
-y `direction_smoothing_threshold_deg = 6`; son parámetros derivados del bake,
-no de la identidad macroscópica de la ola.
+`shadow_diffraction_angle_deg = 12`, `shadow_recovery_strength = 1`. Los
+parámetros de suavizado vectorial anteriores (`direction_smoothing_*`) se
+conservan sólo para comparación/regresión; el bake final usa la regularización
+escalar de `render_phase_rad`. Ninguna de estas etapas cambia la identidad
+macroscópica de la ola.
 
 La etapa cut locus parte de `cut_locus_enabled = true`,
 `cut_locus_detect_angle_deg = 35`, `cut_locus_blend_radius_m = 12`,
 `cut_locus_blend_passes = 12` y `cut_locus_blend_strength = 0.55`. Para evitar
 confundir una curvatura refractiva con dos ramas reconvergentes, además del
 umbral configurable de 35° exige una separación fuerte de 60° entre lados
-opuestos; ese filtro no se expone como otro parámetro. El bridge no modifica
-`travel_time`, `phase_rad`, `phase_offset_rad`, gradientes de fase,
-`local_direction`, `reached_mask` ni `shadow_scale`; sólo escribe
-`render_direction_x/z`.
+opuestos; ese filtro no se expone como otro parámetro. La regularización escalar
+parte de `phase_regularization_enabled = true`,
+`phase_regularization_passes = 24`, `phase_regularization_strength = 0.65` y
+`phase_regularization_raw_fidelity = 0.25`; reutiliza
+`cut_locus_blend_radius_m` como radio espacial y no crea otro detector. Sólo
+escribe `render_phase_rad` en la banda y `render_direction_x/z` como su
+gradiente; todos los campos RAW y de energía permanecen intactos.
+
+El bake registra tiempo de regularización y gradiente, error absoluto y relativo
+de `|∇render_phase|` frente a `local_k` (media, p95 y máximo), extremos locales
+y gradientes hacia atrás dentro de la banda. La configuración de referencia de
+las pruebas usa lambda 16 m y radio 32 m para hacer visible el perfil escalar;
+el preset del preview conserva el radio cut locus de 12 m.
 
 Además de `eikonal_max_residual`, el bake registra
 `eikonal_interior_residual_rad_m`: el máximo residual sólo en agua interior

@@ -8,7 +8,7 @@ extends Node
 const DebugScript := preload("res://ocean_v3/coastal/coastal_eikonal_debug.gd")
 const EikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 
-enum PreviewMode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS }
+enum PreviewMode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS, RAW_PHASE, RENDER_PHASE, PHASE_DELTA }
 const LOCAL_DIRECTION: PreviewMode = PreviewMode.RAW_DIRECTION
 enum BakeState { IDLE, BAKING_BATHYMETRY, SOLVING_EIKONAL, BUILDING_DEBUG, DONE, ERROR }
 
@@ -37,6 +37,10 @@ class EikonalWorker extends RefCounted:
 	var cut_locus_blend_radius_m := 12.0
 	var cut_locus_blend_passes := 12
 	var cut_locus_blend_strength := 0.55
+	var phase_regularization_enabled := true
+	var phase_regularization_passes := 24
+	var phase_regularization_strength := 0.65
+	var phase_regularization_raw_fidelity := 0.25
 
 	func run() -> Dictionary:
 		var baker = EikonalBakerScript.new()
@@ -57,6 +61,15 @@ class EikonalWorker extends RefCounted:
 		baker.direction_smoothing_passes = direction_smoothing_passes
 		baker.direction_smoothing_strength = direction_smoothing_strength
 		baker.direction_smoothing_threshold_deg = direction_smoothing_threshold_deg
+		baker.cut_locus_enabled = cut_locus_enabled
+		baker.cut_locus_detect_angle_deg = cut_locus_detect_angle_deg
+		baker.cut_locus_blend_radius_m = cut_locus_blend_radius_m
+		baker.cut_locus_blend_passes = cut_locus_blend_passes
+		baker.cut_locus_blend_strength = cut_locus_blend_strength
+		baker.phase_regularization_enabled = phase_regularization_enabled
+		baker.phase_regularization_passes = phase_regularization_passes
+		baker.phase_regularization_strength = phase_regularization_strength
+		baker.phase_regularization_raw_fidelity = phase_regularization_raw_fidelity
 		var data = baker.bake()
 		return {
 			"data": data,
@@ -77,6 +90,16 @@ class EikonalWorker extends RefCounted:
 			"cut_locus_core_count": baker.last_cut_locus_core_count,
 			"cut_locus_band_count": baker.last_cut_locus_band_count,
 			"cut_locus_modified_count": baker.last_cut_locus_modified_count,
+			"render_phase_regularization_ms": baker.last_render_phase_regularization_ms,
+			"render_phase_gradient_ms": baker.last_render_phase_gradient_ms,
+			"render_k_error_abs_mean": baker.last_render_k_error_abs_mean,
+			"render_k_error_abs_p95": baker.last_render_k_error_abs_p95,
+			"render_k_error_abs_max": baker.last_render_k_error_abs_max,
+			"render_k_error_relative_mean": baker.last_render_k_error_relative_mean,
+			"render_k_error_relative_p95": baker.last_render_k_error_relative_p95,
+			"render_k_error_relative_max": baker.last_render_k_error_relative_max,
+			"render_phase_extrema_count": baker.last_render_phase_extrema_count,
+			"render_phase_backwards_gradient_count": baker.last_render_phase_backwards_gradient_count,
 		}
 
 @export_category("Bathymetry")
@@ -111,6 +134,12 @@ class EikonalWorker extends RefCounted:
 @export_range(0, 64, 1) var cut_locus_blend_passes := 12
 @export_range(0.0, 1.0, 0.01) var cut_locus_blend_strength := 0.55
 
+@export_category("Render Phase Regularization")
+@export var phase_regularization_enabled := true
+@export_range(0, 128, 1) var phase_regularization_passes := 24
+@export_range(0.0, 1.0, 0.01) var phase_regularization_strength := 0.65
+@export_range(0.0, 4.0, 0.01) var phase_regularization_raw_fidelity := 0.25
+
 @export_category("Preview")
 @export var preview_mode: PreviewMode = PreviewMode.SHADOW_SCALE:
 	set(value):
@@ -142,6 +171,16 @@ var last_cut_locus_blend_ms := 0.0
 var last_cut_locus_core_count := 0
 var last_cut_locus_band_count := 0
 var last_cut_locus_modified_count := 0
+var last_render_phase_regularization_ms := 0.0
+var last_render_phase_gradient_ms := 0.0
+var last_render_k_error_abs_mean := 0.0
+var last_render_k_error_abs_p95 := 0.0
+var last_render_k_error_abs_max := 0.0
+var last_render_k_error_relative_mean := 0.0
+var last_render_k_error_relative_p95 := 0.0
+var last_render_k_error_relative_max := 0.0
+var last_render_phase_extrema_count := 0
+var last_render_phase_backwards_gradient_count := 0
 
 var _preview: CoastalEikonalDebug = null
 var _bathymetry_data: BathymetryData = null
@@ -166,6 +205,16 @@ var _pending_cut_locus_blend_ms := 0.0
 var _pending_cut_locus_core_count := 0
 var _pending_cut_locus_band_count := 0
 var _pending_cut_locus_modified_count := 0
+var _pending_render_phase_regularization_ms := 0.0
+var _pending_render_phase_gradient_ms := 0.0
+var _pending_render_k_error_abs_mean := 0.0
+var _pending_render_k_error_abs_p95 := 0.0
+var _pending_render_k_error_abs_max := 0.0
+var _pending_render_k_error_relative_mean := 0.0
+var _pending_render_k_error_relative_p95 := 0.0
+var _pending_render_k_error_relative_max := 0.0
+var _pending_render_phase_extrema_count := 0
+var _pending_render_phase_backwards_gradient_count := 0
 var _discard_worker_result := false
 
 
@@ -225,6 +274,10 @@ func bake_coastal_preview() -> void:
 	_eikonal_worker.cut_locus_blend_radius_m = cut_locus_blend_radius_m
 	_eikonal_worker.cut_locus_blend_passes = cut_locus_blend_passes
 	_eikonal_worker.cut_locus_blend_strength = cut_locus_blend_strength
+	_eikonal_worker.phase_regularization_enabled = phase_regularization_enabled
+	_eikonal_worker.phase_regularization_passes = phase_regularization_passes
+	_eikonal_worker.phase_regularization_strength = phase_regularization_strength
+	_eikonal_worker.phase_regularization_raw_fidelity = phase_regularization_raw_fidelity
 	_eikonal_thread = Thread.new()
 	_set_bake_state(BakeState.SOLVING_EIKONAL)
 	print("COASTAL PREVIEW: solving eikonal in worker thread...")
@@ -277,6 +330,16 @@ func _process(_delta: float) -> void:
 	_pending_cut_locus_core_count = int(result.get("cut_locus_core_count", 0))
 	_pending_cut_locus_band_count = int(result.get("cut_locus_band_count", 0))
 	_pending_cut_locus_modified_count = int(result.get("cut_locus_modified_count", 0))
+	_pending_render_phase_regularization_ms = float(result.get("render_phase_regularization_ms", 0.0))
+	_pending_render_phase_gradient_ms = float(result.get("render_phase_gradient_ms", 0.0))
+	_pending_render_k_error_abs_mean = float(result.get("render_k_error_abs_mean", 0.0))
+	_pending_render_k_error_abs_p95 = float(result.get("render_k_error_abs_p95", 0.0))
+	_pending_render_k_error_abs_max = float(result.get("render_k_error_abs_max", 0.0))
+	_pending_render_k_error_relative_mean = float(result.get("render_k_error_relative_mean", 0.0))
+	_pending_render_k_error_relative_p95 = float(result.get("render_k_error_relative_p95", 0.0))
+	_pending_render_k_error_relative_max = float(result.get("render_k_error_relative_max", 0.0))
+	_pending_render_phase_extrema_count = int(result.get("render_phase_extrema_count", 0))
+	_pending_render_phase_backwards_gradient_count = int(result.get("render_phase_backwards_gradient_count", 0))
 	last_shadow_geometric_ms = _pending_shadow_geometric_ms
 	last_shadow_recovery_ms = _pending_shadow_recovery_ms
 	last_direction_smoothing_ms = _pending_direction_smoothing_ms
@@ -287,6 +350,16 @@ func _process(_delta: float) -> void:
 	last_cut_locus_core_count = _pending_cut_locus_core_count
 	last_cut_locus_band_count = _pending_cut_locus_band_count
 	last_cut_locus_modified_count = _pending_cut_locus_modified_count
+	last_render_phase_regularization_ms = _pending_render_phase_regularization_ms
+	last_render_phase_gradient_ms = _pending_render_phase_gradient_ms
+	last_render_k_error_abs_mean = _pending_render_k_error_abs_mean
+	last_render_k_error_abs_p95 = _pending_render_k_error_abs_p95
+	last_render_k_error_abs_max = _pending_render_k_error_abs_max
+	last_render_k_error_relative_mean = _pending_render_k_error_relative_mean
+	last_render_k_error_relative_p95 = _pending_render_k_error_relative_p95
+	last_render_k_error_relative_max = _pending_render_k_error_relative_max
+	last_render_phase_extrema_count = _pending_render_phase_extrema_count
+	last_render_phase_backwards_gradient_count = _pending_render_phase_backwards_gradient_count
 	_set_bake_state(BakeState.BUILDING_DEBUG)
 	_install_preview(_pending_bathymetry_data, coastal_resource as CoastalPropagationData)
 	_pending_bathymetry_data = null
@@ -331,6 +404,11 @@ func _install_preview(bathymetry_data: BathymetryData, coastal_data: CoastalProp
 	print("cut locus band = %.3f ms" % _pending_cut_locus_band_ms)
 	print("cut locus core bridge = %.3f ms" % _pending_cut_locus_core_bridge_ms)
 	print("cut locus blend = %.3f ms" % _pending_cut_locus_blend_ms)
+	print("render phase regularization = %.3f ms" % _pending_render_phase_regularization_ms)
+	print("render phase gradient = %.3f ms" % _pending_render_phase_gradient_ms)
+	print("render k error abs mean/p95/max = %.6f / %.6f / %.6f" % [_pending_render_k_error_abs_mean, _pending_render_k_error_abs_p95, _pending_render_k_error_abs_max])
+	print("render k error relative mean/p95/max = %.6f / %.6f / %.6f" % [_pending_render_k_error_relative_mean, _pending_render_k_error_relative_p95, _pending_render_k_error_relative_max])
+	print("render phase extrema/backwards = %d / %d" % [_pending_render_phase_extrema_count, _pending_render_phase_backwards_gradient_count])
 	print("eikonal total = %.3f ms" % last_eikonal_ms)
 	print("debug mesh = %.3f ms" % last_debug_mesh_ms)
 	print("total = %.3f ms" % last_total_ms)

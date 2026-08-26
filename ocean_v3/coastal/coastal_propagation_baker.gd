@@ -39,6 +39,7 @@ func bake_base_fields():
 	output.phase_offset_rad.resize(count)
 	output.valid_mask.resize(count)
 	output.phase_rad.resize(count)
+	output.render_phase_rad.resize(count)
 	output.phase_gradient_x.resize(count)
 	output.phase_gradient_z.resize(count)
 	output.local_direction_x.resize(count)
@@ -91,6 +92,7 @@ func _populate_straight_phase_fields(output, direction: Vector2) -> void:
 			var index: int = z * output.width + x
 			var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
 			output.phase_rad[index] = output.k0_rad_m * point.dot(direction) + output.phase_offset_rad[index]
+			output.render_phase_rad[index] = output.phase_rad[index]
 			output.phase_gradient_x[index] = output.local_k[index] * direction.x
 			output.phase_gradient_z[index] = output.local_k[index] * direction.y
 			output.local_direction_x[index] = direction.x

@@ -62,6 +62,15 @@ func _validate_lifecycle() -> void:
 	var texture_before_cut_locus_mode = first_debug._image_texture
 	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.CUT_LOCUS
 	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.CUT_LOCUS and first_debug._image_texture != texture_before_cut_locus_mode, "lifecycle: modo CUT_LOCUS sin rebake")
+	var texture_before_raw_phase_mode = first_debug._image_texture
+	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.RAW_PHASE
+	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.RAW_PHASE and first_debug._image_texture != texture_before_raw_phase_mode, "lifecycle: modo RAW_PHASE sin rebake")
+	var texture_before_render_phase_mode = first_debug._image_texture
+	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.RENDER_PHASE
+	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.RENDER_PHASE and first_debug._image_texture != texture_before_render_phase_mode, "lifecycle: modo RENDER_PHASE sin rebake")
+	var texture_before_phase_delta_mode = first_debug._image_texture
+	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.PHASE_DELTA
+	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.PHASE_DELTA and first_debug._image_texture != texture_before_phase_delta_mode, "lifecycle: modo PHASE_DELTA sin rebake")
 	preview_baker.bake_coastal_preview()
 	await _wait_for_bake(preview_baker)
 	var second_debug = preview_baker._find_owned_preview()

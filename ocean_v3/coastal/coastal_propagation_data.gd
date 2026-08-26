@@ -30,6 +30,7 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export_storage var phase_offset_rad := PackedFloat32Array()
 @export_storage var valid_mask := PackedByteArray()
 @export_storage var phase_rad := PackedFloat32Array()
+@export_storage var render_phase_rad := PackedFloat32Array()
 @export_storage var phase_gradient_x := PackedFloat32Array()
 @export_storage var phase_gradient_z := PackedFloat32Array()
 @export_storage var local_direction_x := PackedFloat32Array()
@@ -55,6 +56,10 @@ func has_render_direction() -> bool:
 	return render_direction_x.size() == count and render_direction_z.size() == count
 
 
+func has_render_phase() -> bool:
+	return render_phase_rad.size() == width * height
+
+
 func has_cut_locus_mask() -> bool:
 	return cut_locus_mask.size() == width * height
 
@@ -64,9 +69,9 @@ func world_max_xz() -> Vector2:
 
 
 func approximate_memory_bytes() -> int:
-	# Straight legacy: 13 float32 + dos máscaras. Eikonal añade render_direction
-	# y, cuando existe, una máscara byte de cut locus para el debug CPU.
-	var float_fields := 15 if has_render_direction() else 13
+	# Straight legacy: 13 float32 + dos máscaras. Eikonal añade render_direction,
+	# render_phase y, cuando existe, una máscara byte de cut locus para debug CPU.
+	var float_fields := 13 + (2 if has_render_direction() else 0) + (1 if has_render_phase() else 0)
 	var byte_fields := 3 if has_cut_locus_mask() else 2
 	return width * height * (float_fields * 4 + byte_fields)
 
@@ -101,6 +106,7 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	result.shoaling_scale = _bilinear(shoaling_scale, i00, i10, i01, i11, tx, tz)
 	result.phase_offset_rad = _bilinear(phase_offset_rad, i00, i10, i01, i11, tx, tz)
 	result.phase_rad = _bilinear(phase_rad, i00, i10, i01, i11, tx, tz)
+	result.render_phase_rad = _bilinear(render_phase_rad, i00, i10, i01, i11, tx, tz) if has_render_phase() else result.phase_rad
 	result.phase_gradient_x = _bilinear(phase_gradient_x, i00, i10, i01, i11, tx, tz)
 	result.phase_gradient_z = _bilinear(phase_gradient_z, i00, i10, i01, i11, tx, tz)
 	result.local_direction_xz = Vector2(_bilinear(local_direction_x, i00, i10, i01, i11, tx, tz), _bilinear(local_direction_z, i00, i10, i01, i11, tx, tz)).normalized()

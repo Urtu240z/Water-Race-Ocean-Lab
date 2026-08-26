@@ -5,7 +5,7 @@ extends MeshInstance3D
 ## Una sola PlaneMesh horizontal y una textura RGBA con un píxel por celda.
 ## No modifica el campo ni participa en el render final del océano.
 
-enum Mode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS }
+enum Mode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS, RAW_PHASE, RENDER_PHASE, PHASE_DELTA }
 const LOCAL_DIRECTION: Mode = Mode.RAW_DIRECTION
 
 @export var data: Resource = null:
@@ -123,4 +123,21 @@ func _color_at(x: int, z: int) -> Color:
 			if not data.has_cut_locus_mask() or data.cut_locus_mask[index] == 0:
 				return Color(0.0, 0.0, 0.0, 0.05)
 			return Color(0.95, 0.08, 0.04, 0.92) if data.cut_locus_mask[index] >= 2 else Color(1.0, 0.52, 0.06, 0.78)
+		Mode.RAW_PHASE:
+			if data.reached_mask[index] == 0:
+				return Color(0.18, 0.12, 0.10, 0.82)
+			return Color.from_hsv(fposmod(data.phase_rad[index] / TAU, 1.0), 0.78, 0.96, 0.88)
+		Mode.RENDER_PHASE:
+			if data.reached_mask[index] == 0:
+				return Color(0.18, 0.12, 0.10, 0.82)
+			var render_phase: float = data.phase_rad[index] if not data.has_render_phase() else data.render_phase_rad[index]
+			return Color.from_hsv(fposmod(render_phase / TAU, 1.0), 0.78, 0.96, 0.88)
+		Mode.PHASE_DELTA:
+			if data.reached_mask[index] == 0:
+				return Color(0.18, 0.12, 0.10, 0.82)
+			var render_phase: float = data.phase_rad[index] if not data.has_render_phase() else data.render_phase_rad[index]
+			var signed_delta := clampf((render_phase - data.phase_rad[index]) / TAU, -1.0, 1.0)
+			if signed_delta >= 0.0:
+				return Color(0.5 + 0.5 * signed_delta, 0.5 - 0.3 * signed_delta, 0.5 - 0.3 * signed_delta, 0.9)
+			return Color(0.5 + 0.3 * signed_delta, 0.5 + 0.3 * signed_delta, 0.5 - 0.5 * signed_delta, 0.9)
 	return Color.WHITE

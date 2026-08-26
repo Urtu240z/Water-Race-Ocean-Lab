@@ -27,6 +27,10 @@ var cut_locus_detect_angle_deg := 35.0
 var cut_locus_blend_radius_m := 12.0
 var cut_locus_blend_passes := 12
 var cut_locus_blend_strength := 0.55
+var phase_regularization_enabled := true
+var phase_regularization_passes := 24
+var phase_regularization_strength := 0.65
+var phase_regularization_raw_fidelity := 0.25
 var last_base_metrics_ms := 0.0
 var last_eikonal_sweep_ms := 0.0
 var last_phase_populate_ms := 0.0
@@ -41,6 +45,16 @@ var last_cut_locus_blend_ms := 0.0
 var last_cut_locus_core_count := 0
 var last_cut_locus_band_count := 0
 var last_cut_locus_modified_count := 0
+var last_render_phase_regularization_ms := 0.0
+var last_render_phase_gradient_ms := 0.0
+var last_render_k_error_abs_mean := 0.0
+var last_render_k_error_abs_p95 := 0.0
+var last_render_k_error_abs_max := 0.0
+var last_render_k_error_relative_mean := 0.0
+var last_render_k_error_relative_p95 := 0.0
+var last_render_k_error_relative_max := 0.0
+var last_render_phase_extrema_count := 0
+var last_render_phase_backwards_gradient_count := 0
 var last_cycles_used := 0
 var last_directional_sweeps_used := 0
 var last_final_max_change := 0.0
@@ -75,9 +89,6 @@ func bake():
 	var phase_start := Time.get_ticks_usec()
 	_populate_phase_fields(output, travel_time, direction)
 	last_phase_populate_ms = float(Time.get_ticks_usec() - phase_start) / 1000.0
-	var direction_start := Time.get_ticks_usec()
-	_build_render_direction(output)
-	last_direction_smoothing_ms = float(Time.get_ticks_usec() - direction_start) / 1000.0
 	_build_cut_locus_render_direction(output, direction)
 	print("COASTAL PREVIEW: building shadow...")
 	var shadow_start := Time.get_ticks_usec()
@@ -418,6 +429,11 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 		last_cut_locus_core_count = 0
 		last_cut_locus_band_count = 0
 		last_cut_locus_modified_count = 0
+		_initialize_render_phase(output)
+		last_render_phase_regularization_ms = 0.0
+		var phase_gradient_start := Time.get_ticks_usec()
+		_compute_render_phase_gradient(output, incoming_direction)
+		last_render_phase_gradient_ms = float(Time.get_ticks_usec() - phase_gradient_start) / 1000.0
 		return
 	var detection_start := Time.get_ticks_usec()
 	var core_mask := _detect_cut_locus_core(output)
@@ -435,11 +451,6 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 		queue.append(index)
 		core_count += 1
 	last_cut_locus_core_count = core_count
-	var core_bridge_start := Time.get_ticks_usec()
-	var core_bridge_fields: Array = _build_core_bridge_fields(output, core_mask, incoming_direction)
-	last_cut_locus_core_bridge_ms = float(Time.get_ticks_usec() - core_bridge_start) / 1000.0
-	var core_bridge_x: PackedFloat32Array = core_bridge_fields[0]
-	var core_bridge_z: PackedFloat32Array = core_bridge_fields[1]
 	var radius_cells: int = maxi(0, ceili(cut_locus_blend_radius_m / maxf(output.cell_size_m, 1.0e-6)))
 	var head := 0
 	while head < queue.size():
@@ -476,9 +487,14 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 	last_cut_locus_band_count = band_count
 	last_cut_locus_modified_count = modified_count
 	output.cut_locus_mask = cut_mask
-	var blend_start := Time.get_ticks_usec()
-	_apply_cut_locus_blend(output, distance_cells, band_indices, incoming_direction, core_bridge_x, core_bridge_z)
-	last_cut_locus_blend_ms = float(Time.get_ticks_usec() - blend_start) / 1000.0
+	last_cut_locus_core_bridge_ms = 0.0
+	last_cut_locus_blend_ms = 0.0
+	var phase_regularization_start := Time.get_ticks_usec()
+	_regularize_render_phase(output, distance_cells, band_indices)
+	last_render_phase_regularization_ms = float(Time.get_ticks_usec() - phase_regularization_start) / 1000.0
+	var phase_gradient_start := Time.get_ticks_usec()
+	_compute_render_phase_gradient(output, incoming_direction)
+	last_render_phase_gradient_ms = float(Time.get_ticks_usec() - phase_gradient_start) / 1000.0
 
 
 func _detect_cut_locus_core(output) -> PackedByteArray:
@@ -519,6 +535,181 @@ func _direction_angle(first: Vector2, second: Vector2) -> float:
 	if first.length_squared() <= 1.0e-8 or second.length_squared() <= 1.0e-8:
 		return 0.0
 	return acos(clampf(first.dot(second), -1.0, 1.0))
+
+
+func _initialize_render_phase(output) -> void:
+	# This is an exact unwrapped copy. Never apply modulo or angle wrapping here.
+	output.render_phase_rad = output.phase_rad.duplicate()
+	last_render_k_error_abs_mean = 0.0
+	last_render_k_error_abs_p95 = 0.0
+	last_render_k_error_abs_max = 0.0
+	last_render_k_error_relative_mean = 0.0
+	last_render_k_error_relative_p95 = 0.0
+	last_render_k_error_relative_max = 0.0
+	last_render_phase_extrema_count = 0
+	last_render_phase_backwards_gradient_count = 0
+
+
+func _regularize_render_phase(output, distance_cells: PackedInt32Array, band_indices: PackedInt32Array) -> void:
+	_initialize_render_phase(output)
+	if not phase_regularization_enabled or band_indices.is_empty() or phase_regularization_passes <= 0:
+		return
+	var current: PackedFloat32Array = output.render_phase_rad
+	var raw: PackedFloat32Array = output.phase_rad
+	var radius_m := maxf(cut_locus_blend_radius_m, 0.0)
+	var strength := clampf(phase_regularization_strength, 0.0, 1.0)
+	var raw_fidelity := maxf(phase_regularization_raw_fidelity, 0.0)
+	for _pass in phase_regularization_passes:
+		for index in band_indices:
+			var x: int = index % output.width
+			var z: int = index / output.width
+			var neighbor_sum := 0.0
+			var neighbor_count := 0
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if absi(dx) + absi(dz) != 1:
+						continue
+					var neighbor_x := x + dx
+					var neighbor_z := z + dz
+					if neighbor_x < 0 or neighbor_z < 0 or neighbor_x >= output.width or neighbor_z >= output.height:
+						continue
+					var neighbor_index: int = neighbor_z * output.width + neighbor_x
+					if output.valid_mask[neighbor_index] == 0 or output.reached_mask[neighbor_index] == 0:
+						continue
+					neighbor_sum += current[neighbor_index]
+					neighbor_count += 1
+			if neighbor_count == 0:
+				continue
+			var denominator := float(neighbor_count) + raw_fidelity
+			var target := (neighbor_sum + raw_fidelity * raw[index]) / denominator
+			var distance_m: float = float(distance_cells[index]) * output.cell_size_m
+			var normalized_distance := distance_m / radius_m if radius_m > 1.0e-6 else 0.0
+			var edge := clampf(normalized_distance, 0.0, 1.0)
+			var smooth_edge := edge * edge * (3.0 - 2.0 * edge)
+			var cut_weight := 1.0 - smooth_edge
+			# Deterministic Gauss-Seidel relaxation propagates the boundary
+			# condition across the local band faster than a Jacobi copy while
+			# retaining the same screened target and pass count.
+			current[index] = lerpf(current[index], target, strength * cut_weight)
+	output.render_phase_rad = current
+
+
+func _phase_neighbor_is_valid(output, index: int) -> bool:
+	return output.valid_mask[index] != 0 and output.reached_mask[index] != 0
+
+
+func _compute_render_phase_gradient_at(output, phase: PackedFloat32Array, x: int, z: int) -> Vector2:
+	var index: int = z * output.width + x
+	var center := phase[index]
+	var has_left: bool = x > 0 and _phase_neighbor_is_valid(output, index - 1)
+	var has_right: bool = x + 1 < output.width and _phase_neighbor_is_valid(output, index + 1)
+	var has_up: bool = z > 0 and _phase_neighbor_is_valid(output, index - output.width)
+	var has_down: bool = z + 1 < output.height and _phase_neighbor_is_valid(output, index + output.width)
+	var dx := 0.0
+	var dz := 0.0
+	if has_left and has_right:
+		dx = (phase[index + 1] - phase[index - 1]) / (2.0 * output.cell_size_m)
+	elif has_right:
+		dx = (phase[index + 1] - center) / output.cell_size_m
+	elif has_left:
+		dx = (center - phase[index - 1]) / output.cell_size_m
+	if has_up and has_down:
+		dz = (phase[index + output.width] - phase[index - output.width]) / (2.0 * output.cell_size_m)
+	elif has_down:
+		dz = (phase[index + output.width] - center) / output.cell_size_m
+	elif has_up:
+		dz = (center - phase[index - output.width]) / output.cell_size_m
+	return Vector2(dx, dz)
+
+
+func _is_render_phase_extremum(output, phase: PackedFloat32Array, x: int, z: int) -> bool:
+	var index: int = z * output.width + x
+	var value := phase[index]
+	var has_lower := false
+	var has_higher := false
+	var neighbor_count := 0
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if absi(dx) + absi(dz) != 1:
+				continue
+			var neighbor_x := x + dx
+			var neighbor_z := z + dz
+			if neighbor_x < 0 or neighbor_z < 0 or neighbor_x >= output.width or neighbor_z >= output.height:
+				continue
+			var neighbor_index: int = neighbor_z * output.width + neighbor_x
+			if not _phase_neighbor_is_valid(output, neighbor_index):
+				continue
+			neighbor_count += 1
+			if phase[neighbor_index] < value:
+				has_lower = true
+			elif phase[neighbor_index] > value:
+				has_higher = true
+	return neighbor_count >= 2 and (not has_lower or not has_higher)
+
+
+func _percentile(values: PackedFloat32Array, fraction: float) -> float:
+	if values.is_empty():
+		return 0.0
+	var sorted := values.duplicate()
+	sorted.sort()
+	var index := clampi(int(floor(float(sorted.size() - 1) * fraction)), 0, sorted.size() - 1)
+	return sorted[index]
+
+
+func _compute_render_phase_gradient(output, incoming_direction: Vector2) -> void:
+	if not output.has_render_phase():
+		_initialize_render_phase(output)
+	var absolute_errors := PackedFloat32Array()
+	var relative_errors := PackedFloat32Array()
+	var absolute_sum := 0.0
+	var relative_sum := 0.0
+	var phase: PackedFloat32Array = output.render_phase_rad
+	output.render_direction_x.resize(output.width * output.height)
+	output.render_direction_z.resize(output.width * output.height)
+	for z in output.height:
+		for x in output.width:
+			var index: int = z * output.width + x
+			var fallback := Vector2(output.local_direction_x[index], output.local_direction_z[index]).normalized()
+			if fallback.length_squared() <= 1.0e-8:
+				fallback = incoming_direction
+			if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+				output.render_direction_x[index] = fallback.x
+				output.render_direction_z[index] = fallback.y
+				continue
+			var in_cut_band: bool = output.cut_locus_mask.size() == output.width * output.height and output.cut_locus_mask[index] != 0
+			# The presentation direction always comes from the presentation phase.
+			# Outside the band that phase is bitwise RAW, so this changes no scalar
+			# authority while still using central/one-sided differences consistently.
+			var gradient := _compute_render_phase_gradient_at(output, phase, x, z)
+			var direction := gradient.normalized()
+			if direction.length_squared() <= 1.0e-8:
+				direction = fallback
+			elif direction.dot(fallback) < -0.95:
+				# Reject only an absurd numerical inversion, not valid lateral wrapping.
+				direction = fallback
+			output.render_direction_x[index] = direction.x
+			output.render_direction_z[index] = direction.y
+			if not in_cut_band:
+				continue
+			var render_k := gradient.length()
+			var raw_k := maxf(output.local_k[index], 1.0e-6)
+			var absolute_error := absf(render_k - raw_k)
+			var relative_error := absolute_error / raw_k
+			absolute_errors.append(absolute_error)
+			relative_errors.append(relative_error)
+			absolute_sum += absolute_error
+			relative_sum += relative_error
+			last_render_k_error_abs_max = maxf(last_render_k_error_abs_max, absolute_error)
+			last_render_k_error_relative_max = maxf(last_render_k_error_relative_max, relative_error)
+			if _is_render_phase_extremum(output, phase, x, z):
+				last_render_phase_extrema_count += 1
+			if gradient.length_squared() > 1.0e-8 and gradient.normalized().dot(incoming_direction) < -0.25:
+				last_render_phase_backwards_gradient_count += 1
+	if not absolute_errors.is_empty():
+		last_render_k_error_abs_mean = absolute_sum / float(absolute_errors.size())
+		last_render_k_error_relative_mean = relative_sum / float(relative_errors.size())
+		last_render_k_error_abs_p95 = _percentile(absolute_errors, 0.95)
+		last_render_k_error_relative_p95 = _percentile(relative_errors, 0.95)
 
 
 func _resolve_core_bridge_direction(samples: PackedVector2Array, incoming_direction: Vector2) -> Vector2:
