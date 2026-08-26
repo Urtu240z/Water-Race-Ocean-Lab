@@ -653,6 +653,11 @@ func _install_prepared_wave_transition(payload: Dictionary) -> void:
 		RenderingServer.call_on_render_thread(_cascades[index].solver.begin_h0_transition.bind(
 			_wave_transition_target_render_h0_datas[index], target_config
 		))
+	if _breaker_pool != null and not _wave_transition_target_configs.is_empty():
+		_breaker_pool.begin_wave_transition(
+			_wave_transition_target_configs[0].target_hs_m,
+			_coastal_fraction_from_metrics(_wave_transition_target_energy_metrics)
+		)
 	_apply_transition_effective_state()
 	_dispatch_requested = true
 
@@ -1253,9 +1258,15 @@ func _update_breaking_energy_model() -> void:
 	# 4B: el pool recoloca sus anchors con el mismo modelo de energía (Hs + fracción).
 	if _breaker_pool != null:
 		if _wave_transition_active:
-			_breaker_pool.set_runtime_energy_model(effective_hs, _breaking_coastal_fraction)
+			_breaker_pool.set_wave_transition_alpha(_wave_transition_alpha, effective_hs, _breaking_coastal_fraction)
 		else:
 			_breaker_pool.set_energy_model(effective_hs, _breaking_coastal_fraction)
+
+
+func _coastal_fraction_from_metrics(metrics: Dictionary) -> float:
+	var total_variance: float = float(metrics.get("total_reconstructed_variance", 0.0))
+	var coastal_variance: float = float(metrics.get("reconstructed_spatial_variance_coastal", 0.0))
+	return clampf(coastal_variance / maxf(total_variance, 1.0e-8), 0.0, 1.0)
 
 
 func _effective_long_hs_m() -> float:
@@ -1706,6 +1717,8 @@ func _complete_wave_transition() -> void:
 		_query_reduced.complete_spectrum_transition()
 	if _query_golden != null:
 		_query_golden.set_spectrum(configs, _current_h0_datas)
+	if _breaker_pool != null:
+		_breaker_pool.complete_wave_transition()
 	_reset_wave_transition_state()
 	_update_breaking_energy_model()
 	_apply_crest_sharpen_config()

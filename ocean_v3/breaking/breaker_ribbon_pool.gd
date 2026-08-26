@@ -54,6 +54,14 @@ const SPAWN_INTERVAL_MAX := 3.0
 const STAGE_LIFE_END := 0.82
 const FADE_IN_END_LIFE := 0.12
 const FADE_OUT_BEGIN_LIFE := 0.80
+const TRANSITION_MAX_ANCHORS := 16
+const TRANSITION_ANCHOR_MATCH_DISTANCE_FACTOR := 0.65
+const TRANSITION_ANCHOR_MATCH_DIRECTION_DOT := 0.85
+const ACTIVE_CREST_TRACK_INTERVAL := 0.05
+const ACTIVE_CREST_SAMPLE_OFFSETS: Array = [-0.30, -0.15, 0.0, 0.15, 0.30]
+const ACTIVE_CREST_MAX_CORRECTION_LAMBDA := 0.32
+const ACTIVE_CREST_MISS_LIMIT := 3
+const ACTIVE_CREST_FADE_DURATION_S := 0.35
 
 ## Límite estricto de slots simultáneos; el pool reutiliza las mismas instancias.
 @export_range(1, 16, 1) var max_breakers := 8
@@ -142,6 +150,12 @@ var _detector_tick := 0
 var _detector_queried_slots_last_tick := 0
 var _detector_queried_points_last_tick := 0
 var _structural_energy_update_pending := false
+var _wave_transition_active := false
+var _wave_transition_alpha := 0.0
+var _next_active_crest_tracking_time := 0.0
+var _active_tracking_queries_last_tick := 0
+var _active_tracking_points_last_tick := 0
+var _skip_next_structural_energy_update := false
 
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
@@ -190,6 +204,9 @@ func set_energy_model(long_hs_m: float, coastal_fraction: float) -> void:
 	## split). Si hay breakers ACTIVE, difiere la operación destructiva hasta que
 	## terminen; nunca reinicia su lifecycle por un cambio de sea state.
 	set_runtime_energy_model(long_hs_m, coastal_fraction)
+	if _skip_next_structural_energy_update:
+		_skip_next_structural_energy_update = false
+		return
 	if _has_active_breakers():
 		_structural_energy_update_pending = true
 		return
@@ -201,6 +218,59 @@ func set_runtime_energy_model(long_hs_m: float, coastal_fraction: float) -> void
 	## futuros. No recoloca anchors, resetea scheduler ni recrea ribbons.
 	_long_hs_m = maxf(long_hs_m, 0.0)
 	_coastal_fraction = clampf(coastal_fraction, 0.0, 1.0)
+
+
+func begin_wave_transition(target_long_hs_m: float, target_coastal_fraction: float) -> void:
+	## Construye una vez el superset CURRENT + TARGET sin tocar slots ACTIVE.
+	if _propagation == null or not _propagation.is_valid():
+		return
+	var target_anchors := _place_anchors_for_energy(target_long_hs_m, target_coastal_fraction)
+	var merged: Array[Dictionary] = []
+	for source_anchor in _anchors:
+		var anchor := source_anchor.duplicate()
+		anchor["current_eligibility"] = _anchor_runtime_eligibility(anchor)
+		anchor["target_eligibility"] = _anchor_eligibility_for_energy(anchor, target_long_hs_m, target_coastal_fraction)
+		anchor["retire_when_idle"] = false
+		merged.append(anchor)
+	for target_anchor in target_anchors:
+		var match := _find_matching_anchor(merged, target_anchor)
+		if match >= 0:
+			merged[match]["target_eligibility"] = float(target_anchor.get("target_eligibility", 1.0))
+			continue
+		if merged.size() >= min(TRANSITION_MAX_ANCHORS, max_breakers * 2):
+			break
+		var target_only := target_anchor.duplicate()
+		target_only["current_eligibility"] = 0.0
+		target_only["target_eligibility"] = float(target_anchor.get("target_eligibility", 1.0))
+		target_only["retire_when_idle"] = false
+		merged.append(target_only)
+	_wave_transition_active = true
+	_wave_transition_alpha = 0.0
+	_next_active_crest_tracking_time = 0.0
+	_structural_energy_update_pending = false
+	_install_transition_anchors(merged)
+
+
+func set_wave_transition_alpha(alpha: float, effective_long_hs_m: float, effective_coastal_fraction: float) -> void:
+	if not _wave_transition_active:
+		return
+	_wave_transition_alpha = clampf(alpha, 0.0, 1.0)
+	set_runtime_energy_model(effective_long_hs_m, effective_coastal_fraction)
+
+
+func complete_wave_transition() -> void:
+	## Promueve TARGET sin reconstruir. Los anchors CURRENT exclusivos sobreviven
+	## sólo hasta que su slot ACTIVE termine naturalmente.
+	if not _wave_transition_active:
+		return
+	_wave_transition_alpha = 1.0
+	_wave_transition_active = false
+	for anchor in _anchors:
+		anchor["current_eligibility"] = float(anchor.get("target_eligibility", 0.0))
+		anchor["retire_when_idle"] = float(anchor.get("target_eligibility", 0.0)) <= 0.0001
+	_structural_energy_update_pending = false
+	_skip_next_structural_energy_update = true
+	_prune_retired_transition_anchors()
 
 
 func _apply_structural_energy_model() -> void:
@@ -366,6 +436,10 @@ func track_time() -> float:
 
 
 func summary() -> Dictionary:
+	var active_count := 0
+	for entry in _tracking:
+		if bool(entry.get("active", false)):
+			active_count += 1
 	return {
 		"configured": _propagation != null and _propagation.is_valid(),
 		"slots": _anchors.size(),
@@ -377,6 +451,12 @@ func summary() -> Dictionary:
 		"detector_tick": _detector_tick,
 		"queried_slots_last_tick": _detector_queried_slots_last_tick,
 		"queried_points_last_tick": _detector_queried_points_last_tick,
+		"transition_active": _wave_transition_active,
+		"transition_alpha": _wave_transition_alpha,
+		"transition_anchor_count": _anchors.size(),
+		"active_breaker_count": active_count,
+		"active_tracking_queries_last_tick": _active_tracking_queries_last_tick,
+		"active_tracking_points_last_tick": _active_tracking_points_last_tick,
 	}
 
 
@@ -385,6 +465,7 @@ func _process(_delta: float) -> void:
 		return
 	_sync_uniforms()
 	_update_tracking()
+	_prune_retired_transition_anchors()
 	if _structural_energy_update_pending and not _has_active_breakers():
 		_apply_structural_energy_model()
 
@@ -402,8 +483,8 @@ func _sync_uniforms() -> void:
 
 func _update_tracking() -> void:
 	## 5R.1F: scheduling por estados (sin rediseñar el detector):
-	##  - ACTIVE: se actualiza CADA frame con _update_active_breaker() (autónomo,
-	##    sin OceanQuery).
+	##  - ACTIVE: conserva lifecycle autónomo. Sólo durante una transición global
+	##    recibe una corrección de cresta por batch a 20 Hz.
 	##  - COOLDOWN: si render_time < next_spawn_time NO se consulta; sólo se
 	##    mantiene/publica el countdown.
 	##  - DETECT: sólo se consulta en ticks de DETECTOR_INTERVAL (20 Hz), con
@@ -417,6 +498,8 @@ func _update_tracking() -> void:
 	var render_time: float = SimulationClock.get_render_time()
 	_last_track_time = render_time
 	_update_active_slots(render_time)
+	if _wave_transition_active:
+		_update_active_crest_tracking(render_time)
 	_update_cooldown_slots(render_time)
 	if render_time < _next_detector_time:
 		return
@@ -430,6 +513,86 @@ func _update_active_slots(render_time: float) -> void:
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 		if bool(entry.get("active", false)):
 			_update_active_breaker(index, entry, render_time)
+
+
+func _update_active_crest_tracking(render_time: float) -> void:
+	## Una sola batch para todos los ACTIVE; fuera de transición no se llama.
+	if render_time < _next_active_crest_tracking_time:
+		return
+	_next_active_crest_tracking_time = render_time + ACTIVE_CREST_TRACK_INTERVAL
+	var active_indices: Array[int] = []
+	var positions: Array[Vector3] = []
+	for index in _anchors.size():
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		if not bool(entry.get("active", false)):
+			continue
+		active_indices.append(index)
+		var predicted := _predicted_breaker_xz(entry, render_time)
+		var direction: Vector2 = Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized()
+		var wavelength := maxf(float(entry.get("spawn_wavelength", 1.0)), 0.5)
+		for offset in ACTIVE_CREST_SAMPLE_OFFSETS:
+			var xz := predicted + direction * (float(offset) * wavelength)
+			positions.append(Vector3(xz.x, _sea_level_y, xz.y))
+	if active_indices.is_empty():
+		_active_tracking_queries_last_tick = 0
+		_active_tracking_points_last_tick = 0
+		return
+	var samples: Array = _query_batch.call(positions, render_time)
+	if samples.size() != positions.size():
+		# El lifecycle continúa autónomo ante un fallo puntual de query.
+		_active_tracking_queries_last_tick = 0
+		_active_tracking_points_last_tick = 0
+		return
+	_active_tracking_queries_last_tick = active_indices.size()
+	_active_tracking_points_last_tick = positions.size()
+	for active_index in active_indices.size():
+		var index: int = active_indices[active_index]
+		var entry: Dictionary = _tracking[index]
+		var base := active_index * ACTIVE_CREST_SAMPLE_OFFSETS.size()
+		var crest := _find_active_crest(entry, samples, base, render_time)
+		if bool(crest.get("valid", false)):
+			var correction: Vector2 = Vector2(entry.get("crest_correction_xz", Vector2.ZERO))
+			entry["crest_correction_xz"] = correction.lerp(Vector2(crest["correction_xz"]), 0.60)
+			entry["crest_miss_ticks"] = 0
+			entry["host_crest_fade_start"] = -1.0
+		else:
+			var misses: int = int(entry.get("crest_miss_ticks", 0)) + 1
+			entry["crest_miss_ticks"] = misses
+			if misses >= ACTIVE_CREST_MISS_LIMIT and float(entry.get("host_crest_fade_start", -1.0)) < 0.0:
+				entry["host_crest_fade_start"] = render_time
+		_tracking[index] = entry
+
+
+func _find_active_crest(entry: Dictionary, samples: Array, base: int, render_time: float) -> Dictionary:
+	var heights := PackedFloat32Array()
+	for offset_index in ACTIVE_CREST_SAMPLE_OFFSETS.size():
+		var sample: OceanQuerySample = samples[base + offset_index]
+		if sample == null or not sample.valid or not is_finite(sample.height):
+			return {"valid": false}
+		heights.append(sample.height)
+	var best_index := 1
+	var best_prominence := -INF
+	for index in range(1, heights.size() - 1):
+		var prominence := heights[index] - 0.5 * (heights[index - 1] + heights[index + 1])
+		if prominence > best_prominence:
+			best_prominence = prominence
+			best_index = index
+	var wavelength := maxf(float(entry.get("spawn_wavelength", 1.0)), 0.5)
+	var minimum_prominence := maxf(0.008, 0.03 * float(entry.get("spawn_local_hs", 0.0)))
+	if best_prominence < minimum_prominence:
+		return {"valid": false}
+	var denominator := heights[best_index - 1] - 2.0 * heights[best_index] + heights[best_index + 1]
+	var interpolation := 0.0
+	if absf(denominator) > CREST_TRACK_EPSILON:
+		interpolation = clampf(0.5 * (heights[best_index - 1] - heights[best_index + 1]) / denominator, -1.0, 1.0)
+	var sample_spacing := (float(ACTIVE_CREST_SAMPLE_OFFSETS[1]) - float(ACTIVE_CREST_SAMPLE_OFFSETS[0])) * wavelength
+	var crest_offset := float(ACTIVE_CREST_SAMPLE_OFFSETS[best_index]) * wavelength + interpolation * sample_spacing
+	var predicted := _predicted_breaker_xz(entry, render_time)
+	var direction: Vector2 = Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized()
+	var correction := direction * crest_offset
+	if correction.length() > ACTIVE_CREST_MAX_CORRECTION_LAMBDA * wavelength:
+		return {"valid": false}
+	return {"valid": true, "correction_xz": correction, "crest_xz": predicted + correction}
 
 
 func _update_cooldown_slots(render_time: float) -> void:
@@ -551,8 +714,8 @@ func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, s
 
 
 func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -> void:
-	## Breaker autónomo: posición/stage/alpha derivados SOLO de spawn_time (nada
-	## de OceanQuery). Fórmula absoluta -> pausa determinista y sin acumulación.
+	## Lifecycle autónomo; durante transición sólo suma la corrección de cresta ya
+	## obtenida por la batch limitada, sin alterar spawn_time ni stage.
 	var spawn_time: float = float(entry.get("spawn_time", render_time))
 	var duration: float = maxf(float(entry.get("lifecycle_duration", 1.0)), 0.001)
 	var age: float = maxf(0.0, render_time - spawn_time)
@@ -575,7 +738,21 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	var fade_out: float = 1.0 - _smoothstep(FADE_OUT_BEGIN_LIFE, 1.0, life_t)
 	var alpha: float = fade_in * fade_out
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
-	var breaker_xz: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO)) + Vector2(entry.get("spawn_direction", Vector2.RIGHT)) * (phase_speed * age)
+	var breaker_xz := _predicted_breaker_xz(entry, render_time) + Vector2(entry.get("crest_correction_xz", Vector2.ZERO))
+	var host_crest_fade_start: float = float(entry.get("host_crest_fade_start", -1.0))
+	if host_crest_fade_start >= 0.0:
+		var host_fade := 1.0 - _smoothstep(0.0, ACTIVE_CREST_FADE_DURATION_S, render_time - host_crest_fade_start)
+		alpha *= host_fade
+		if host_fade <= 0.0001:
+			var faded_state := _base_state(entry)
+			faded_state["active"] = false
+			faded_state["valid"] = 0.0
+			faded_state["stage"] = 0.0
+			faded_state["alpha"] = 0.0
+			faded_state["tracked_xz"] = breaker_xz
+			faded_state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", render_time)) - render_time)
+			_publish_slot(index, faded_state)
+			return
 	var active_state := _base_state(entry)
 	active_state["active"] = true
 	active_state["valid"] = 1.0
@@ -586,6 +763,13 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	active_state["phase_speed"] = phase_speed
 	active_state["remaining"] = 0.0
 	_publish_slot(index, active_state)
+
+
+func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
+	var spawn_time: float = float(entry.get("spawn_time", render_time))
+	var age: float = maxf(0.0, render_time - spawn_time)
+	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
+	return Vector2(entry.get("spawn_xz", Vector2.ZERO)) + Vector2(entry.get("spawn_direction", Vector2.RIGHT)) * (phase_speed * age)
 
 
 func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render_time: float) -> void:
@@ -676,7 +860,8 @@ func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_d
 
 
 func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2) -> float:
-	var pressure_score: float = _smoothstep(anchor_min_depth_pressure, minf(anchor_max_depth_pressure, 1.15), float(anchor["pressure"]))
+	var pressure := estimate_depth_pressure(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)), float(anchor.get("depth_m", 1.0)))
+	var pressure_score: float = _smoothstep(anchor_min_depth_pressure, minf(anchor_max_depth_pressure, 1.15), pressure)
 	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
 	var prominence_score: float = _smoothstep(0.04 * local_hs, 0.20 * local_hs, maxf(float(candidate["prominence"]), 0.0))
 	var sample: OceanQuerySample = candidate["sample"]
@@ -684,7 +869,8 @@ func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2
 	var slope_xz := -Vector2(sample.normal.x, sample.normal.z) / ny
 	var slope_long: float = absf(slope_xz.dot(travel_dir))
 	var steepness_score: float = _smoothstep(0.20, 0.75, slope_long)
-	return clampf(SCORE_PRESSURE_WEIGHT * pressure_score + SCORE_PROMINENCE_WEIGHT * prominence_score + SCORE_STEEPNESS_WEIGHT * steepness_score, 0.0, 1.0)
+	var raw_score := clampf(SCORE_PRESSURE_WEIGHT * pressure_score + SCORE_PROMINENCE_WEIGHT * prominence_score + SCORE_STEEPNESS_WEIGHT * steepness_score, 0.0, 1.0)
+	return raw_score * _anchor_runtime_eligibility(anchor)
 
 
 func _deterministic_roll(slot: int, wave_serial: int) -> float:
@@ -724,6 +910,9 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"life_t": float(entry.get("life_t", 0.0)),
 		"phase_speed": float(entry.get("phase_speed", 0.0)),
 		"remaining": float(entry.get("remaining", 0.0)),
+		"crest_correction_xz": entry.get("crest_correction_xz", Vector2.ZERO),
+		"crest_miss_ticks": int(entry.get("crest_miss_ticks", 0)),
+		"host_crest_fade_start": float(entry.get("host_crest_fade_start", -1.0)),
 	}
 
 
@@ -785,6 +974,10 @@ func _ensure_material() -> void:
 
 
 func _place_anchors() -> Array[Dictionary]:
+	return _place_anchors_for_energy(_long_hs_m, _coastal_fraction)
+
+
+func _place_anchors_for_energy(long_hs_m: float, coastal_fraction: float) -> Array[Dictionary]:
 	## Candidatos = celdas válidas/alcanzadas de la propagación cuya presión de
 	## profundidad estimada cae en la zona de pre-break. Greedy con separación
 	## mínima, cap en max_breakers. Todo desde datos horneados (CPU).
@@ -811,7 +1004,7 @@ func _place_anchors() -> Array[Dictionary]:
 			var depth := depth_arr[index]
 			if depth < maxf(min_valid, anchor_min_depth_m):
 				continue
-			var pressure := estimate_depth_pressure(_long_hs_m, _coastal_fraction, shoal_arr[index], depth)
+			var pressure := estimate_depth_pressure(long_hs_m, coastal_fraction, shoal_arr[index], depth)
 			if pressure < anchor_min_depth_pressure:
 				continue
 			if pressure > anchor_max_depth_pressure:
@@ -829,6 +1022,9 @@ func _place_anchors() -> Array[Dictionary]:
 				"local_k": maxf(k_arr[index], k0),
 				"shoaling": shoal_arr[index],
 				"phase_speed_mps": phase_speed_arr[index],
+				"current_eligibility": _anchor_eligibility_for_pressure(pressure),
+				"target_eligibility": _anchor_eligibility_for_pressure(pressure),
+				"retire_when_idle": false,
 			})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if absf(a["depth_m"] - b["depth_m"]) > 0.001:
@@ -849,6 +1045,92 @@ func _place_anchors() -> Array[Dictionary]:
 			continue
 		picked.append(candidate)
 	return picked
+
+
+func _anchor_eligibility_for_pressure(pressure: float) -> float:
+	var enter := _smoothstep(anchor_min_depth_pressure, anchor_min_depth_pressure + 0.10, pressure)
+	var exit := 1.0 - _smoothstep(anchor_max_depth_pressure - 0.18, anchor_max_depth_pressure, pressure)
+	return clampf(enter * exit, 0.0, 1.0)
+
+
+func _anchor_eligibility_for_energy(anchor: Dictionary, long_hs_m: float, coastal_fraction: float) -> float:
+	var pressure := estimate_depth_pressure(long_hs_m, coastal_fraction, float(anchor.get("shoaling", 1.0)), float(anchor.get("depth_m", 1.0)))
+	return _anchor_eligibility_for_pressure(pressure)
+
+
+func _anchor_runtime_eligibility(anchor: Dictionary) -> float:
+	var current: float = float(anchor.get("current_eligibility", 1.0))
+	if not _wave_transition_active:
+		return current
+	return lerpf(current, float(anchor.get("target_eligibility", current)), _wave_transition_alpha)
+
+
+func _find_matching_anchor(anchors: Array[Dictionary], candidate: Dictionary) -> int:
+	var max_distance := maxf(2.0, anchor_min_spacing_m * TRANSITION_ANCHOR_MATCH_DISTANCE_FACTOR)
+	var candidate_xz: Vector2 = Vector2(candidate["xz"])
+	var candidate_direction: Vector2 = Vector2(candidate["direction"])
+	for index in anchors.size():
+		var anchor: Dictionary = anchors[index]
+		if (Vector2(anchor["xz"]) - candidate_xz).length() > max_distance:
+			continue
+		if Vector2(anchor["direction"]).dot(candidate_direction) < TRANSITION_ANCHOR_MATCH_DIRECTION_DOT:
+			continue
+		return index
+	return -1
+
+
+func _install_transition_anchors(merged: Array[Dictionary]) -> void:
+	## Reutiliza cada MeshInstance y tracking existente por identidad espacial.
+	var old_anchors: Array[Dictionary] = _anchors
+	var old_ribbons: Array[MeshInstance3D] = _ribbons
+	var old_tracking: Array[Dictionary] = _tracking
+	var next_ribbons: Array[MeshInstance3D] = []
+	var next_tracking: Array[Dictionary] = []
+	var used: Array[bool] = []
+	used.resize(old_anchors.size())
+	for index in used.size():
+		used[index] = false
+	for index in merged.size():
+		var anchor: Dictionary = merged[index]
+		var match := _find_matching_anchor(old_anchors, anchor)
+		if match >= 0 and not used[match] and match < old_ribbons.size():
+			used[match] = true
+			next_ribbons.append(old_ribbons[match])
+			next_tracking.append(old_tracking[match] if match < old_tracking.size() else _base_state({}))
+		else:
+			var instance := _create_ribbon_instance(index, anchor)
+			next_ribbons.append(instance)
+			var idle_state := _base_state({})
+			idle_state["tracked_xz"] = Vector2(anchor["xz"])
+			next_tracking.append(idle_state)
+	_anchors = merged
+	_ribbons = next_ribbons
+	_tracking = next_tracking
+	_last_fingerprint = _anchors_fingerprint()
+	for index in _ribbons.size():
+		_configure_ribbon_instance(_ribbons[index], index, _anchors[index])
+		_publish_slot(index, _tracking[index])
+	_apply_visibility()
+	_sync_takeover_mask()
+
+
+func _prune_retired_transition_anchors() -> void:
+	for index in range(_anchors.size() - 1, -1, -1):
+		if not bool(_anchors[index].get("retire_when_idle", false)):
+			continue
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		if bool(entry.get("active", false)):
+			continue
+		if index < _ribbons.size():
+			_ribbons[index].queue_free()
+			_ribbons.remove_at(index)
+		_anchors.remove_at(index)
+		if index < _tracking.size():
+			_tracking.remove_at(index)
+	if _ribbons.size() == _anchors.size():
+		for index in _ribbons.size():
+			_configure_ribbon_instance(_ribbons[index], index, _anchors[index])
+	_last_fingerprint = _anchors_fingerprint()
 
 
 func _anchors_fingerprint() -> String:
@@ -873,28 +1155,35 @@ func _rebuild_instances() -> void:
 	_ribbons.clear()
 	for index in _anchors.size():
 		var anchor: Dictionary = _anchors[index]
-		var instance := MeshInstance3D.new()
-		instance.name = "Ribbon%d" % index
-		instance.mesh = _template_mesh
-		instance.material_override = _material
-		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		instance.extra_cull_margin = 4096.0
-		instance.set_instance_shader_parameter(&"anchor_xz", Vector2(anchor["xz"]))
-		instance.set_instance_shader_parameter(&"direction_xz", Vector2(anchor["direction"]))
-		instance.set_instance_shader_parameter(&"ribbon_id", float(index))
-		instance.set_instance_shader_parameter(&"ribbon_wavelength_m", float(anchor["wavelength_m"]) * ribbon_length_lambda)
-		instance.set_instance_shader_parameter(&"ribbon_width_m", ribbon_width_m)
-		# 4C-S4.2: breaker autónomo (fallback = anchor + stage 0 + sin spawn).
-		instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
-		instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
-		instance.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
-		instance.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
-		instance.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)
-		add_child(instance)
-		_ribbons.append(instance)
+		_ribbons.append(_create_ribbon_instance(index, anchor))
 	_tracking.resize(_anchors.size())
 	_apply_visibility()
 	_sync_takeover_mask()
+
+
+func _create_ribbon_instance(index: int, anchor: Dictionary) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	instance.mesh = _template_mesh
+	instance.material_override = _material
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	instance.extra_cull_margin = 4096.0
+	_configure_ribbon_instance(instance, index, anchor)
+	instance.set_instance_shader_parameter(&"tracked_crest_xz", Vector2(anchor["xz"]))
+	instance.set_instance_shader_parameter(&"breaker_lifecycle_stage", 0.0)
+	instance.set_instance_shader_parameter(&"breaker_lifecycle_alpha", 0.0)
+	instance.set_instance_shader_parameter(&"breaker_spawn_strength", 0.0)
+	instance.set_instance_shader_parameter(&"breaker_spawn_hs_m", 0.0)
+	add_child(instance)
+	return instance
+
+
+func _configure_ribbon_instance(instance: MeshInstance3D, index: int, anchor: Dictionary) -> void:
+	instance.name = "Ribbon%d" % index
+	instance.set_instance_shader_parameter(&"anchor_xz", Vector2(anchor["xz"]))
+	instance.set_instance_shader_parameter(&"direction_xz", Vector2(anchor["direction"]))
+	instance.set_instance_shader_parameter(&"ribbon_id", float(index))
+	instance.set_instance_shader_parameter(&"ribbon_wavelength_m", float(anchor["wavelength_m"]) * ribbon_length_lambda)
+	instance.set_instance_shader_parameter(&"ribbon_width_m", ribbon_width_m)
 
 
 func _sync_takeover_mask() -> void:
