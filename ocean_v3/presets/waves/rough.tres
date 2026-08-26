@@ -1,23 +1,19 @@
-[gd_resource type="Resource" script_class="OceanWavePreset" load_steps=5 format=3]
+[gd_resource type="Resource" script_class="OceanWavePreset" format=3 uid="uid://cgxhqijreoaiv"]
 
-[ext_resource type="Script" path="res://ocean_v3/core/ocean_wave_preset.gd" id="1_preset"]
-[ext_resource type="Script" path="res://ocean_v3/core/ocean_wave_band_settings.gd" id="2_band"]
+[ext_resource type="Script" uid="uid://vo5q3d3j1uf6" path="res://ocean_v3/core/ocean_wave_preset.gd" id="1_preset"]
+[ext_resource type="Script" uid="uid://eiq2sub7wu6f" path="res://ocean_v3/core/ocean_wave_band_settings.gd" id="2_band"]
 
 [sub_resource type="Resource" id="Band_long"]
 script = ExtResource("2_band")
 target_hs_m = 2.5
 choppiness = 2.0
 wind_direction = Vector2(1, 0.1)
-directional_spread = 5.0
 fetch_length_m = 25000.0
 swell = 0.8
-detail = 1.0
 jonswap_spread = 0.05
 min_wavelength_m = 16.0
 max_wavelength_m = 128.0
 transition_width_m = 4.0
-short_wave_damping_m = 0.35
-foam_enabled = true
 foam_whitecap = 0.62
 foam_amount = 1.6
 foam_decay = 4.5
@@ -29,15 +25,6 @@ target_hs_m = 0.6
 choppiness = 1.25
 wind_direction = Vector2(1, 0.38)
 directional_spread = 3.5
-fetch_length_m = 3000.0
-swell = 0.45
-detail = 1.0
-jonswap_spread = 0.35
-min_wavelength_m = 4.0
-max_wavelength_m = 20.0
-transition_width_m = 0.75
-short_wave_damping_m = 0.35
-foam_enabled = true
 foam_whitecap = 0.66
 foam_amount = 0.42
 foam_decay = 4.5
@@ -51,13 +38,11 @@ wind_direction = Vector2(1, 0.62)
 directional_spread = 3.0
 fetch_length_m = 300.0
 swell = 0.15
-detail = 1.0
 jonswap_spread = 0.75
 min_wavelength_m = 0.5
 max_wavelength_m = 5.0
 transition_width_m = 0.15
 short_wave_damping_m = 0.2
-foam_enabled = true
 foam_whitecap = 0.68
 foam_amount = 0.22
 foam_decay = 4.5
@@ -70,4 +55,3 @@ global_wind_speed_mps = 18.0
 long_band = SubResource("Band_long")
 mid_band = SubResource("Band_mid")
 short_band = SubResource("Band_short")
-short_geometry_strength = 0.25

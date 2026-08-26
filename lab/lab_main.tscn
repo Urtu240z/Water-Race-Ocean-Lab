@@ -7,6 +7,7 @@
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
+[ext_resource type="Resource" path="res://ocean_v3/presets/waves/rough.tres" id="7_73jaq"]
 [ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
@@ -18,6 +19,7 @@ energy_multiplier = 5.54
 
 [sub_resource type="Sky" id="Sky_lab"]
 sky_material = SubResource("PanoramaSkyMaterial_5myqe")
+radiance_size = 4
 
 [sub_resource type="Environment" id="Environment_lab"]
 background_mode = 2
@@ -75,6 +77,20 @@ script = ExtResource("4_metrics")
 [node name="OceanV3Mount" type="Node3D" parent="." unique_id=426342056]
 
 [node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
+wave_preset = ExtResource("7_73jaq")
+global_wind_speed_mps = 18.0
+long_target_hs_m = 2.5
+long_choppiness = 2.0
+long_wind_direction = Vector2(1, 0.1)
+long_directional_spread = 5.0
+mid_target_hs_m = 0.6
+mid_choppiness = 1.25
+mid_wind_direction = Vector2(1, 0.38)
+mid_directional_spread = 3.5
+short_target_hs_m = 0.12
+short_choppiness = 0.4
+short_wind_direction = Vector2(1, 0.62)
+short_directional_spread = 3.0
 surface_normal_world_size_a = 34.15
 surface_normal_world_size_b = 2.4
 surface_normal_strength = 0.66
@@ -104,7 +120,7 @@ foam_edge_softness = 0.32
 crest_filigree_whitecap = 0.4
 crest_fresh_filigree_strength = 0.5
 crest_residual_filigree_strength = 0.62
-crest_filigree_normal_influence = 0.4
+crest_filigree_normal_influence = 0.0
 surface_foam_stochastic_cell_size_m = 55.0
 surface_foam_whitecap = 0.71
 surface_foam_topology_resolution = 512
@@ -114,9 +130,6 @@ surface_foam_strength = 2.52
 surface_foam_threshold_visual = 0.11
 surface_foam_mid_fold_start = 0.0
 surface_foam_mid_fold_end = 1.0
-foam_fresh_specular = 0.57
-foam_residual_specular = 0.53
-surface_foam_specular = 0.76
 surface_foam_source_domain_m = 4.0
 surface_foam_wind_speed_mps = 9.0
 surface_foam_micro_detail_enabled = false

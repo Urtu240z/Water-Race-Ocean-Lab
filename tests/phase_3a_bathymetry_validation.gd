@@ -29,6 +29,7 @@ func _bake(source: MeshInstance3D):
 	baker.sea_level_y = 0.0
 	baker.cell_size_m = 1.0
 	baker.use_source_bounds = true
+	baker.bounds_padding_m = 0.0
 	var data = baker.bake()
 	source.free()
 	baker.free()
@@ -79,7 +80,7 @@ func _validate_memory() -> void:
 	for size in [256, 512, 1024]:
 		data.width = size
 		data.height = size
-		var expected = size * size * 18
+		var expected = size * size * 23
 		_check(data.approximate_memory_bytes() == expected, "memory: %dx%d = %d bytes" % [size, size, expected])
 
 
@@ -95,7 +96,7 @@ func _validate_debug_mesh() -> void:
 	data.land_water_mask = PackedByteArray([1, 1, 0, 0])
 	var debug = DebugScript.new()
 	debug.data = data
-	for mode in [0, 1, 2]:
+	for mode in [0, 1, 2, 3, 4]:
 		debug.mode = mode
 		_check(debug.mesh != null, "debug: modo %d genera overlay" % mode)
 	debug.free()

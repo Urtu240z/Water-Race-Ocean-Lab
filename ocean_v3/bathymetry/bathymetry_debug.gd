@@ -3,7 +3,7 @@ class_name BathymetryDebug
 extends MeshInstance3D
 ## Overlay de tooling: no participa en la representación final del océano.
 
-enum Mode { DEPTH, GRADIENT_SLOPE, LAND_WATER }
+enum Mode { DEPTH, GRADIENT_SLOPE, LAND_WATER, SHORE_DISTANCE, DEPTH_SOURCE }
 
 @export var data: Variant = null:
 	set(value):
@@ -20,6 +20,10 @@ enum Mode { DEPTH, GRADIENT_SLOPE, LAND_WATER }
 @export_range(0.1, 200.0, 0.1, "suffix:m") var depth_color_range_m := 20.0:
 	set(value):
 		depth_color_range_m = value
+		rebuild()
+@export_range(0.1, 200.0, 0.1, "suffix:m") var shore_distance_color_range_m := 32.0:
+	set(value):
+		shore_distance_color_range_m = value
 		rebuild()
 
 
@@ -62,6 +66,17 @@ func _color_at(x: int, z: int) -> Color:
 			return Color(slope_t, 1.0 - slope_t, 0.08, 0.82)
 		Mode.LAND_WATER:
 			return Color(0.06, 0.35, 0.95, 0.75) if data.land_water_mask[index] != 0 else Color(0.72, 0.42, 0.12, 0.82)
+		Mode.SHORE_DISTANCE:
+			var shore_distance: float = data.shore_signed_distance_m[index] if data.shore_signed_distance_m.size() == data.depth_m.size() else 0.0
+			var distance_t := clampf(absf(shore_distance) / shore_distance_color_range_m, 0.0, 1.0)
+			if shore_distance >= 0.0:
+				return Color(0.05, lerpf(0.85, 0.12, distance_t), lerpf(0.98, 0.42, distance_t), 0.86)
+			return Color(lerpf(0.95, 0.25, distance_t), lerpf(0.62, 0.12, distance_t), 0.04, 0.88)
+		Mode.DEPTH_SOURCE:
+			if data.land_water_mask[index] == 0:
+				return Color(0.35, 0.25, 0.16, 0.82)
+			var measured: bool = data.depth_source_mask.size() == data.depth_m.size() and data.depth_source_mask[index] != 0
+			return Color(0.08, 0.92, 0.28, 0.88) if measured else Color(0.82, 0.16, 0.95, 0.88)
 	return Color.WHITE
 
 

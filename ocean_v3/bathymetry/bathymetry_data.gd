@@ -17,6 +17,8 @@ const SampleScript := preload("res://ocean_v3/bathymetry/bathymetry_sample.gd")
 @export_storage var gradient_z := PackedFloat32Array()
 @export_storage var slope_magnitude := PackedFloat32Array()
 @export_storage var land_water_mask := PackedByteArray() # 1 water, 0 land/shore.
+@export_storage var shore_signed_distance_m := PackedFloat32Array() # water +, land -.
+@export_storage var depth_source_mask := PackedByteArray() # 0 synthetic/open water, 1 measured from mesh.
 # Reservado para coast type/material futuro; 0 = sin clasificar en Fase 3A.
 @export_storage var coast_metadata := PackedByteArray()
 
@@ -34,8 +36,8 @@ func world_max_xz() -> Vector2:
 
 
 func approximate_memory_bytes() -> int:
-	# 4 float32 por nodo + mask + metadata reservado.
-	return cell_count() * (4 * 4 + 1 + 1)
+	# depth, gradiente X/Z, slope y shore distance + dos máscaras + metadata.
+	return cell_count() * (5 * 4 + 1 + 1 + 1)
 
 
 func sample_bathymetry(world_xz: Vector2, reuse = null):
@@ -61,10 +63,18 @@ func sample_bathymetry(world_xz: Vector2, reuse = null):
 	result.gradient_x = lerpf(lerpf(gradient_x[i00], gradient_x[i10], tx), lerpf(gradient_x[i01], gradient_x[i11], tx), tz)
 	result.gradient_z = lerpf(lerpf(gradient_z[i00], gradient_z[i10], tx), lerpf(gradient_z[i01], gradient_z[i11], tx), tz)
 	result.slope_magnitude = lerpf(lerpf(slope_magnitude[i00], slope_magnitude[i10], tx), lerpf(slope_magnitude[i01], slope_magnitude[i11], tx), tz)
+	result.slope = result.slope_magnitude
+	if shore_signed_distance_m.size() == depth_m.size():
+		result.shore_signed_distance_m = lerpf(lerpf(shore_signed_distance_m[i00], shore_signed_distance_m[i10], tx), lerpf(shore_signed_distance_m[i01], shore_signed_distance_m[i11], tx), tz)
+	else:
+		result.shore_signed_distance_m = 0.0
 	# La máscara es nearest-node para no crear agua por interpolación sobre tierra.
 	var nearest_x := clampi(int(round(grid.x)), 0, width - 1)
 	var nearest_z := clampi(int(round(grid.y)), 0, height - 1)
-	result.is_water = land_water_mask[nearest_z * width + nearest_x] != 0
+	var nearest_index := nearest_z * width + nearest_x
+	result.is_water = land_water_mask[nearest_index] != 0
+	result.depth_is_measured = depth_source_mask.size() == depth_m.size() and depth_source_mask[nearest_index] != 0
+	result.gradient = Vector2(result.gradient_x, result.gradient_z)
 	return result
 
 

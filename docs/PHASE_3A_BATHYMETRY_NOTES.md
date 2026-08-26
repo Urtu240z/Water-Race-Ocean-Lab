@@ -9,21 +9,24 @@ No modifica FFT/OceanQuery ni implementa shoaling, refracción, breaking,
 ## Arquitectura
 
 ```text
-MeshInstance3D BathymetrySource (artista / Blender, simplificado)
+Node3D BathymetrySource (artista / Blender; uno o varios MeshInstance3D)
         │  bake offline/dev-time
         ▼
 BathymetryBaker
         ▼
 BathymetryData .tres persistente (rejilla 2D world-space)
-        ├─ depth / ∇depth / slope / land-water / metadata reservada
+        ├─ depth / ∇depth / slope / land-water / shore distance / source mask
         ├─ BathymetryDebug (tooling visual)
         └─ sample_bathymetry(world_xz) (runtime, sólo arrays)
 ```
 
 El seabed visual, collision seabed y BathymetryData son capas separadas.
-El baker puede leer un `MeshInstance3D` dedicado; no presupone que sea el
-mesh visual final. En runtime no hay raycasts, consultas de triángulos ni
-dependencia de cámara/clipmap/LOD/orientación visual.
+El baker acepta preferentemente un `source_root: Node3D` y recorre todos sus
+descendientes `MeshInstance3D`, incluyendo GLB con varias islas, rocas o
+seabeds. `source: MeshInstance3D` se conserva como compatibilidad. Todas las
+caras se transforman a world-space antes de rasterizar. En runtime no hay
+raycasts, consultas de triángulos ni dependencia de cámara/clipmap/LOD/
+orientación visual.
 
 ## Formato `BathymetryData`
 
@@ -31,14 +34,19 @@ dependencia de cámara/clipmap/LOD/orientación visual.
 - `width`, `height`: número de nodos de muestra, bordes incluidos;
 - `cell_size_m`: configurable; Lab usa 1.0 m;
 - `sea_level_y`: explícito, default 0 m;
-- por nodo: `depth_m`, `gradient_x`, `gradient_z`, `slope_magnitude`
-  (`PackedFloat32Array`), `land_water_mask` y `coast_metadata` reservado
-  (`PackedByteArray`).
+- por nodo: `depth_m`, `gradient_x`, `gradient_z`, `slope_magnitude` y
+  `shore_signed_distance_m` (`PackedFloat32Array`), `land_water_mask`,
+  `depth_source_mask` y `coast_metadata` (`PackedByteArray`).
 
-`depth_m = sea_level_y - seabed_y`. Agua es `depth > 0`; tierra/shore es
-`depth <= 0`. Un píxel sin geometría se hornea como 0 (tierra/shore), por lo
-que el bake nunca inventa profundidad positiva. `coast_metadata` reserva el
-formato para tipos beach/rock/wall/reef sin imponer un editor en 3A.
+La clasificación es global y por nodo: superficie sobre el nivel del mar es
+LAND; superficie bajo el nivel del mar es WATER con profundidad medida; sin
+superficie es WATER abierta. Para conservar la API existente, la tierra
+mantiene profundidad firmada `sea_level_y - top_y`, aunque la máscara es la
+autoridad para clasificarla. El agua abierta usa profundidad sintética basada
+en la distancia firmada a la costa. `depth_source_mask` vale 1 sólo para agua
+medida desde una superficie bajo el mar y 0 para agua sintética/tierra.
+`coast_metadata` reserva el formato para tipos beach/rock/wall/reef sin
+imponer un editor en esta fase.
 
 ### Mapping world-space
 
@@ -60,15 +68,18 @@ simplificado. Después calcula diferencias finitas sobre `depth_m`: central en
 interior, one-sided en bordes. El convenio es **`gradient = ∇depth`**, apunta
 hacia agua más profunda; `slope_magnitude = length(gradient)`.
 
-La shoreline básica está implementada como transición derivada de la máscara
-water/land. `shore_distance` y `shore_normal` no se implementaron: son deuda
-acotada de 3A.1, no un prerrequisito de datos de 3A.
+La distancia firmada se deriva de la transición global water/land mediante un
+Euclidean Distance Transform 2D separable y determinista. Agua es positiva,
+tierra negativa y las celdas de transición quedan en cero. Esto hace que el
+canal entre islas use automáticamente la costa más cercana de cualquiera de
+sus lados.
 
 ## Tooling y escenas
 
 - `BathymetryBaker.bake_to_resource()` permite guardar un `.tres` desde un
   componente dev/editor;
-- `BathymetryDebug` dibuja un overlay con DEPTH, GRADIENT/SLOPE o LAND_WATER;
+- `BathymetryDebug` dibuja un overlay con DEPTH, GRADIENT/SLOPE, LAND_WATER,
+  SHORE_DISTANCE o DEPTH_SOURCE;
 - `lab/bathymetry/bathymetry_cases.tscn` crea tres casos debug reales:
   RAMP BEACH, SUBMERGED BANK y SIMPLE ISLAND. Las geometrías son simples,
   pero pasan por el mismo MeshInstance→baker que un asset de Blender.
@@ -83,6 +94,12 @@ acotada de 3A.1, no un prerrequisito de datos de 3A.
 - island: centro con depth negativa/tierra, transición land→water entre los
   nodos 3 y 4 m desde centro, exterior profundo >7.9 m;
 - determinismo de buffers, mapping, mask y memoria PASS.
+
+`tests/phase_3a_bathymetry_coastal_validation.gd` PASS:
+
+- isla única sin seabed: vacío como agua sintética;
+- dos islas: recolección recursiva y canal con costa global;
+- seabed real: profundidad medida conserva precedencia sobre synthetic.
 
 La precisión interior es mucho menor que la celda de 1 m porque las rampas y
 las caras de prueba son lineales; shorelines discretas quedan naturalmente
@@ -108,8 +125,8 @@ Query `sample_bathymetry(world_xz, reusable_sample)`, mediana de 9:
 La consulta es una lectura/interpolación GDScript de arrays y no toca
 geometría. El sample reutilizable evita allocs de resultados por query.
 
-Memoria de payload, sin overhead de `Resource`/arrays: cuatro float32 + dos
-bytes por nodo = **18 B/nodo**.
+Memoria de payload, sin overhead de `Resource`/arrays: cinco float32 + tres
+bytes por nodo = **23 B/nodo**.
 
 | Grid | bytes | MiB |
 |---|---:|---:|
@@ -117,12 +134,12 @@ bytes por nodo = **18 B/nodo**.
 | 512×512 | 4,718,592 | 4.50 |
 | 1024×1024 | 18,874,368 | 18.00 |
 
-## Deudas explícitas de 3A.1
+## Deudas explícitas posteriores
 
-1. shore distance y shore normal derivados;
-2. aceleración espacial de bake para mallas grandes;
-3. tiles/chunks/streaming, si el tamaño real de mundo lo exige;
-4. edición/import de metadata de costa.
+1. aceleración espacial de bake para mallas grandes;
+2. tiles/chunks/streaming, si el tamaño real de mundo lo exige;
+3. edición/import de metadata de costa;
+4. normal de costa, si una fase futura la necesita.
 
 No son necesarios para consumir `depth` y `∇depth` en 3B.
 

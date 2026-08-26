@@ -1,27 +1,32 @@
 @tool
 class_name BathymetryBaker
 extends Node
-## Herramienta offline/dev-time. Rasteriza el MeshInstance3D de fondo a datos
+## Herramienta offline/dev-time. Rasteriza una o varias superficies a datos
 ## 2D; el runtime sólo consulta BathymetryData y nunca vuelve a tocar triángulos.
 
+@export var source_root: Node3D
 @export var source: MeshInstance3D
 @export var sea_level_y := 0.0
 @export_range(0.1, 32.0, 0.1, "suffix:m") var cell_size_m := 1.0
 @export var bounds_min_xz := Vector2(-64.0, -64.0)
 @export var bounds_max_xz := Vector2(64.0, 64.0)
 @export var use_source_bounds := true
+@export_range(0.0, 10000.0, 1.0, "suffix:m") var bounds_padding_m := 64.0
+@export var synthetic_depth_enabled := true
+@export_range(0.0, 10.0, 0.01) var synthetic_slope := 0.20
+@export_range(0.0, 10000.0, 0.1, "suffix:m") var synthetic_max_depth_m := 20.0
 @export_file("*.tres") var output_path := ""
 
 
 func bake():
-	if source == null or source.mesh == null:
-		push_error("BathymetryBaker: falta MeshInstance3D source con mesh.")
-		return null
-	var faces := _world_faces(source)
+	var faces := _collect_world_faces()
 	if faces.is_empty():
-		push_error("BathymetryBaker: el mesh source no tiene caras trianguladas.")
+		push_error("BathymetryBaker: no hay caras válidas bajo source_root/source.")
 		return null
 	var bounds := _bounds_from_faces(faces) if use_source_bounds else Rect2(bounds_min_xz, bounds_max_xz - bounds_min_xz)
+	if use_source_bounds:
+		var padding := Vector2(bounds_padding_m, bounds_padding_m)
+		bounds = Rect2(bounds.position - padding, bounds.size + 2.0 * padding)
 	return bake_faces(faces, bounds.position, bounds.end)
 
 
@@ -47,38 +52,173 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 	data.sea_level_y = sea_level_y
 	data.width = maxi(2, int(ceil(span.x / cell_size_m)) + 1)
 	data.height = maxi(2, int(ceil(span.y / cell_size_m)) + 1)
-	var count := data.cell_count()
+	var count: int = data.cell_count()
 	data.depth_m.resize(count)
 	data.gradient_x.resize(count)
 	data.gradient_z.resize(count)
 	data.slope_magnitude.resize(count)
 	data.land_water_mask.resize(count)
+	data.shore_signed_distance_m.resize(count)
+	data.depth_source_mask.resize(count)
 	data.coast_metadata.resize(count)
 	for z in data.height:
 		for x in data.width:
 			var world_xz := min_xz + Vector2(float(x), float(z)) * cell_size_m
 			var seabed_y := _top_surface_y(world_faces, world_xz)
 			var index = z * data.width + x
-			# Sin geometría no se inventa profundidad: se representa como tierra/shore.
-			var depth := 0.0 if is_nan(seabed_y) else sea_level_y - seabed_y
-			data.depth_m[index] = depth
-			data.land_water_mask[index] = 1 if depth > 0.0 else 0
+			if is_nan(seabed_y):
+				# Un dominio con islas no necesita un seabed cerrado: el vacío es
+				# agua abierta y se rellena después de conocer todas las costas.
+				data.depth_m[index] = 0.0
+				data.land_water_mask[index] = 1
+				data.depth_source_mask[index] = 0
+			elif seabed_y >= sea_level_y:
+				# Conservamos la profundidad firmada histórica para tierra; la
+				# máscara es la autoridad que consumen los sistemas costeros.
+				data.depth_m[index] = sea_level_y - seabed_y
+				data.land_water_mask[index] = 0
+				data.depth_source_mask[index] = 0
+			else:
+				data.depth_m[index] = sea_level_y - seabed_y
+				data.land_water_mask[index] = 1
+				data.depth_source_mask[index] = 1
 			data.coast_metadata[index] = 0
+	_compute_shore_signed_distance(data)
+	_apply_synthetic_depth(data)
 	_compute_gradients(data)
 	return data
 
 
-func _world_faces(instance: MeshInstance3D) -> PackedVector3Array:
+func _collect_world_faces() -> PackedVector3Array:
+	var faces := PackedVector3Array()
+	if source_root != null:
+		_append_node_faces(source_root, faces)
+	elif source != null:
+		_append_instance_faces(source, faces)
+	return faces
+
+
+func _append_node_faces(node: Node, faces: PackedVector3Array) -> void:
+	if node is MeshInstance3D:
+		_append_instance_faces(node as MeshInstance3D, faces)
+	for child in node.get_children():
+		_append_node_faces(child, faces)
+
+
+func _append_instance_faces(instance: MeshInstance3D, faces: PackedVector3Array) -> void:
+	if instance.mesh == null:
+		return
 	var local_faces := instance.mesh.get_faces()
-	var world_faces := PackedVector3Array()
-	world_faces.resize(local_faces.size())
-	# Un baker de editor normalmente está en árbol; los tests/tools también
-	# pueden hornear un MeshInstance aún no añadido. Su transform local es world
-	# en ese caso y evita depender de SceneTree para el formato de datos.
-	var transform := instance.global_transform if instance.is_inside_tree() else instance.transform
-	for index in local_faces.size():
-		world_faces[index] = transform * local_faces[index]
-	return world_faces
+	if local_faces.is_empty():
+		return
+	var transform := _world_transform(instance)
+	for local_face in local_faces:
+		faces.append(transform * local_face)
+
+
+func _world_transform(instance: MeshInstance3D) -> Transform3D:
+	if instance.is_inside_tree():
+		return instance.global_transform
+	var result := instance.transform
+	var parent := instance.get_parent()
+	while parent is Node3D:
+		result = (parent as Node3D).transform * result
+		parent = parent.get_parent()
+	return result
+
+
+func _world_faces(instance: MeshInstance3D) -> PackedVector3Array:
+	# Compatibilidad interna con callers/tools antiguos; bake() usa el collector.
+	var faces := PackedVector3Array()
+	_append_instance_faces(instance, faces)
+	return faces
+
+
+func _compute_shore_signed_distance(data) -> void:
+	var count: int = data.cell_count()
+	var seeds := PackedByteArray()
+	seeds.resize(count)
+	var seed_count := 0
+	for z in data.height:
+		for x in data.width:
+			var index: int = z * data.width + x
+			var water: bool = data.land_water_mask[index] != 0
+			var boundary := false
+			for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
+				if neighbor.x < 0 or neighbor.y < 0 or neighbor.x >= data.width or neighbor.y >= data.height:
+					continue
+				if (data.land_water_mask[neighbor.y * data.width + neighbor.x] != 0) != water:
+					boundary = true
+					break
+			if boundary:
+				seeds[index] = 1
+				seed_count += 1
+	data.shore_signed_distance_m.fill(0.0)
+	if seed_count == 0:
+		return
+
+	# Felzenszwalb/Huttenlocher separable squared Euclidean transform.
+	var horizontal := PackedFloat32Array()
+	horizontal.resize(count)
+	for z in data.height:
+		var row := []
+		row.resize(data.width)
+		for x in data.width:
+			row[x] = 0.0 if seeds[z * data.width + x] != 0 else 1.0e20
+		var transformed: Array = _edt_1d(row, data.width)
+		for x in data.width:
+			horizontal[z * data.width + x] = transformed[x]
+	for x in data.width:
+		var column := []
+		column.resize(data.height)
+		for z in data.height:
+			column[z] = horizontal[z * data.width + x]
+		var transformed: Array = _edt_1d(column, data.height)
+		for z in data.height:
+			var distance: float = sqrt(maxf(0.0, float(transformed[z]))) * data.cell_size_m
+			data.shore_signed_distance_m[z * data.width + x] = distance if data.land_water_mask[z * data.width + x] != 0 else -distance
+
+
+func _edt_1d(values: Array, length: int) -> Array:
+	var result := []
+	result.resize(length)
+	var vertices := []
+	vertices.resize(length)
+	var boundaries := []
+	boundaries.resize(length + 1)
+	var k := 0
+	vertices[0] = 0
+	boundaries[0] = -INF
+	boundaries[1] = INF
+	for q in range(1, length):
+		var intersection := _edt_intersection(values, vertices[k], q)
+		while intersection <= boundaries[k]:
+			k -= 1
+			intersection = _edt_intersection(values, vertices[k], q)
+		k += 1
+		vertices[k] = q
+		boundaries[k] = intersection
+		boundaries[k + 1] = INF
+	k = 0
+	for q in length:
+		while boundaries[k + 1] < q:
+			k += 1
+		var delta := float(q - vertices[k])
+		result[q] = delta * delta + values[vertices[k]]
+	return result
+
+
+func _edt_intersection(values: Array, left: int, right: int) -> float:
+	return ((values[right] + float(right * right)) - (values[left] + float(left * left))) / (2.0 * float(right - left))
+
+
+func _apply_synthetic_depth(data) -> void:
+	if not synthetic_depth_enabled:
+		return
+	for index in data.cell_count():
+		if data.land_water_mask[index] == 0 or data.depth_source_mask[index] != 0:
+			continue
+		data.depth_m[index] = minf(synthetic_max_depth_m, maxf(0.0, data.shore_signed_distance_m[index] * synthetic_slope))
 
 
 func _bounds_from_faces(faces: PackedVector3Array) -> Rect2:
