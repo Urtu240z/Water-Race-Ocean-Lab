@@ -137,6 +137,9 @@ func _log(msg: String) -> void:
 		f.store_line(msg)
 		f.close()
 	print(msg)
+
+
+func _report() -> void:
 	var bank_diff := _diff(_results["bank_off"], _results["bank_on"])
 	var flat_diff := _diff(_results["flat_off"], _results["flat_on"])
 	# Guardar capturas para inspecciÃ³n y verificar que el render cambia con el tiempo.

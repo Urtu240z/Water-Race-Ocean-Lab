@@ -6,7 +6,7 @@ const Factory := preload("res://lab/bathymetry/bathymetry_case_factory.gd")
 const BakerScript := preload("res://ocean_v3/bathymetry/bathymetry_baker.gd")
 const DebugScript := preload("res://ocean_v3/bathymetry/bathymetry_debug.gd")
 
-@export var debug_mode := 0 # BathymetryDebug.Mode.DEPTH
+@export var debug_mode := 0: # BathymetryDebug.Mode.DEPTH
 	set(value):
 		debug_mode = value
 		for child in get_children():
@@ -31,7 +31,7 @@ func _add_case(label: String, source: MeshInstance3D) -> void:
 	baker.sea_level_y = 0.0
 	baker.cell_size_m = 1.0
 	add_child(baker)
-	var data := baker.bake()
+	var data = baker.bake()
 	var debug = DebugScript.new()
 	debug.name = "%sDebug" % label
 	debug.data = data

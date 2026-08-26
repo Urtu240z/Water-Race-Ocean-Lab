@@ -11,30 +11,30 @@ const ASSEMBLE_SHADER := "res://ocean_v3/rendering/fft/shaders/assemble_maps.gls
 
 func _initialize() -> void:
 	var out := FileAccess.open("res://lab/coastal/shader_check_log.txt", FileAccess.WRITE)
-	var log := func(msg: String) -> void:
+	var write_log := func(msg: String) -> void:
 		if out != null:
 			out.store_line(msg)
 		print(msg)
 	var rd := RenderingServer.get_rendering_device()
 	if rd == null:
-		log("SHADER_CHECK: RenderingDevice null (headless)")
+		write_log.call("SHADER_CHECK: RenderingDevice null (headless)")
 		if out != null: out.close()
 		quit(1)
 		return
 	for path in [SURFACE_SHADER, WIREFRAME_SHADER, EVOLVE_SHADER, STOCKHAM_SHADER, ASSEMBLE_SHADER]:
 		var shader_file: RDShaderFile = load(path)
 		if shader_file == null:
-			log("SHADER_CHECK " + path + ": no se pudo cargar")
+			write_log.call("SHADER_CHECK " + path + ": no se pudo cargar")
 			continue
 		var spirv := shader_file.get_spirv()
 		if spirv == null or spirv.get_stages() == null or spirv.get_stages().size() == 0:
-			log("SHADER_CHECK " + path + ": SPIR-V vacío")
+			write_log.call("SHADER_CHECK " + path + ": SPIR-V vacío")
 			continue
 		var rid := rd.shader_create_from_spirv(spirv, "Check." + path.get_file())
 		if rid.is_valid():
-			log("SHADER_CHECK " + path + ": OK")
+			write_log.call("SHADER_CHECK " + path + ": OK")
 			rd.free_rid(rid)
 		else:
-			log("SHADER_CHECK " + path + ": FALLO compilación")
+			write_log.call("SHADER_CHECK " + path + ": FALLO compilación")
 	if out != null: out.close()
 	quit(0)
