@@ -38,6 +38,7 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export_storage var render_direction_z := PackedFloat32Array()
 @export_storage var reached_mask := PackedByteArray()
 @export_storage var shadow_scale := PackedFloat32Array()
+@export_storage var cut_locus_mask := PackedByteArray()
 
 var _field_texture: ImageTexture
 var _metrics_texture: ImageTexture
@@ -54,14 +55,20 @@ func has_render_direction() -> bool:
 	return render_direction_x.size() == count and render_direction_z.size() == count
 
 
+func has_cut_locus_mask() -> bool:
+	return cut_locus_mask.size() == width * height
+
+
 func world_max_xz() -> Vector2:
 	return world_origin_xz + Vector2(float(width - 1), float(height - 1)) * cell_size_m
 
 
 func approximate_memory_bytes() -> int:
-	# Straight legacy: 13 float32 + dos máscaras. Eikonal añade render_direction.
+	# Straight legacy: 13 float32 + dos máscaras. Eikonal añade render_direction
+	# y, cuando existe, una máscara byte de cut locus para el debug CPU.
 	var float_fields := 15 if has_render_direction() else 13
-	return width * height * (float_fields * 4 + 2)
+	var byte_fields := 3 if has_cut_locus_mask() else 2
+	return width * height * (float_fields * 4 + byte_fields)
 
 
 func approximate_gpu_memory_bytes() -> int:

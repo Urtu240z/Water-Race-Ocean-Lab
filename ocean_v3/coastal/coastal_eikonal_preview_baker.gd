@@ -8,7 +8,7 @@ extends Node
 const DebugScript := preload("res://ocean_v3/coastal/coastal_eikonal_debug.gd")
 const EikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
 
-enum PreviewMode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE }
+enum PreviewMode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS }
 const LOCAL_DIRECTION: PreviewMode = PreviewMode.RAW_DIRECTION
 enum BakeState { IDLE, BAKING_BATHYMETRY, SOLVING_EIKONAL, BUILDING_DEBUG, DONE, ERROR }
 
@@ -32,6 +32,11 @@ class EikonalWorker extends RefCounted:
 	var direction_smoothing_passes := 3
 	var direction_smoothing_strength := 0.35
 	var direction_smoothing_threshold_deg := 6.0
+	var cut_locus_enabled := true
+	var cut_locus_detect_angle_deg := 35.0
+	var cut_locus_blend_radius_m := 12.0
+	var cut_locus_blend_passes := 12
+	var cut_locus_blend_strength := 0.55
 
 	func run() -> Dictionary:
 		var baker = EikonalBakerScript.new()
@@ -65,6 +70,12 @@ class EikonalWorker extends RefCounted:
 			"shadow_geometric_ms": baker.last_shadow_geometric_ms,
 			"shadow_recovery_ms": baker.last_shadow_recovery_ms,
 			"direction_smoothing_ms": baker.last_direction_smoothing_ms,
+			"cut_locus_detection_ms": baker.last_cut_locus_detection_ms,
+			"cut_locus_band_ms": baker.last_cut_locus_band_ms,
+			"cut_locus_blend_ms": baker.last_cut_locus_blend_ms,
+			"cut_locus_core_count": baker.last_cut_locus_core_count,
+			"cut_locus_band_count": baker.last_cut_locus_band_count,
+			"cut_locus_modified_count": baker.last_cut_locus_modified_count,
 		}
 
 @export_category("Bathymetry")
@@ -92,6 +103,13 @@ class EikonalWorker extends RefCounted:
 @export_range(0.0, 1.0, 0.01) var direction_smoothing_strength := 0.35
 @export_range(0.0, 90.0, 0.1, "suffix:deg") var direction_smoothing_threshold_deg := 6.0
 
+@export_category("Cut Locus")
+@export var cut_locus_enabled := true
+@export_range(0.0, 180.0, 0.1, "suffix:deg") var cut_locus_detect_angle_deg := 35.0
+@export_range(0.0, 1000.0, 0.1, "suffix:m") var cut_locus_blend_radius_m := 12.0
+@export_range(0, 64, 1) var cut_locus_blend_passes := 12
+@export_range(0.0, 1.0, 0.01) var cut_locus_blend_strength := 0.55
+
 @export_category("Preview")
 @export var preview_mode: PreviewMode = PreviewMode.SHADOW_SCALE:
 	set(value):
@@ -116,6 +134,12 @@ var last_final_max_change := 0.0
 var last_shadow_geometric_ms := 0.0
 var last_shadow_recovery_ms := 0.0
 var last_direction_smoothing_ms := 0.0
+var last_cut_locus_detection_ms := 0.0
+var last_cut_locus_band_ms := 0.0
+var last_cut_locus_blend_ms := 0.0
+var last_cut_locus_core_count := 0
+var last_cut_locus_band_count := 0
+var last_cut_locus_modified_count := 0
 
 var _preview: CoastalEikonalDebug = null
 var _bathymetry_data: BathymetryData = null
@@ -133,6 +157,12 @@ var _pending_shadow_ms := 0.0
 var _pending_shadow_geometric_ms := 0.0
 var _pending_shadow_recovery_ms := 0.0
 var _pending_direction_smoothing_ms := 0.0
+var _pending_cut_locus_detection_ms := 0.0
+var _pending_cut_locus_band_ms := 0.0
+var _pending_cut_locus_blend_ms := 0.0
+var _pending_cut_locus_core_count := 0
+var _pending_cut_locus_band_count := 0
+var _pending_cut_locus_modified_count := 0
 var _discard_worker_result := false
 
 
@@ -181,6 +211,17 @@ func bake_coastal_preview() -> void:
 	_eikonal_worker.shadow_occlusion_entry_scale = shadow_occlusion_entry_scale
 	_eikonal_worker.shadow_detour_length_m = shadow_detour_length_m
 	_eikonal_worker.shadow_smoothing_passes = shadow_smoothing_passes
+	_eikonal_worker.shadow_recovery_enabled = shadow_recovery_enabled
+	_eikonal_worker.shadow_diffraction_angle_deg = shadow_diffraction_angle_deg
+	_eikonal_worker.shadow_recovery_strength = shadow_recovery_strength
+	_eikonal_worker.direction_smoothing_passes = direction_smoothing_passes
+	_eikonal_worker.direction_smoothing_strength = direction_smoothing_strength
+	_eikonal_worker.direction_smoothing_threshold_deg = direction_smoothing_threshold_deg
+	_eikonal_worker.cut_locus_enabled = cut_locus_enabled
+	_eikonal_worker.cut_locus_detect_angle_deg = cut_locus_detect_angle_deg
+	_eikonal_worker.cut_locus_blend_radius_m = cut_locus_blend_radius_m
+	_eikonal_worker.cut_locus_blend_passes = cut_locus_blend_passes
+	_eikonal_worker.cut_locus_blend_strength = cut_locus_blend_strength
 	_eikonal_thread = Thread.new()
 	_set_bake_state(BakeState.SOLVING_EIKONAL)
 	print("COASTAL PREVIEW: solving eikonal in worker thread...")
@@ -226,9 +267,21 @@ func _process(_delta: float) -> void:
 	_pending_shadow_geometric_ms = float(result.get("shadow_geometric_ms", 0.0))
 	_pending_shadow_recovery_ms = float(result.get("shadow_recovery_ms", 0.0))
 	_pending_direction_smoothing_ms = float(result.get("direction_smoothing_ms", 0.0))
+	_pending_cut_locus_detection_ms = float(result.get("cut_locus_detection_ms", 0.0))
+	_pending_cut_locus_band_ms = float(result.get("cut_locus_band_ms", 0.0))
+	_pending_cut_locus_blend_ms = float(result.get("cut_locus_blend_ms", 0.0))
+	_pending_cut_locus_core_count = int(result.get("cut_locus_core_count", 0))
+	_pending_cut_locus_band_count = int(result.get("cut_locus_band_count", 0))
+	_pending_cut_locus_modified_count = int(result.get("cut_locus_modified_count", 0))
 	last_shadow_geometric_ms = _pending_shadow_geometric_ms
 	last_shadow_recovery_ms = _pending_shadow_recovery_ms
 	last_direction_smoothing_ms = _pending_direction_smoothing_ms
+	last_cut_locus_detection_ms = _pending_cut_locus_detection_ms
+	last_cut_locus_band_ms = _pending_cut_locus_band_ms
+	last_cut_locus_blend_ms = _pending_cut_locus_blend_ms
+	last_cut_locus_core_count = _pending_cut_locus_core_count
+	last_cut_locus_band_count = _pending_cut_locus_band_count
+	last_cut_locus_modified_count = _pending_cut_locus_modified_count
 	_set_bake_state(BakeState.BUILDING_DEBUG)
 	_install_preview(_pending_bathymetry_data, coastal_resource as CoastalPropagationData)
 	_pending_bathymetry_data = null
@@ -268,6 +321,10 @@ func _install_preview(bathymetry_data: BathymetryData, coastal_data: CoastalProp
 	print("shadow geometric = %.3f ms" % _pending_shadow_geometric_ms)
 	print("shadow recovery = %.3f ms" % _pending_shadow_recovery_ms)
 	print("direction smoothing = %.3f ms" % _pending_direction_smoothing_ms)
+	print("cut locus core = %d | band = %d | modified = %d" % [_pending_cut_locus_core_count, _pending_cut_locus_band_count, _pending_cut_locus_modified_count])
+	print("cut locus detection = %.3f ms" % _pending_cut_locus_detection_ms)
+	print("cut locus band = %.3f ms" % _pending_cut_locus_band_ms)
+	print("cut locus blend = %.3f ms" % _pending_cut_locus_blend_ms)
 	print("eikonal total = %.3f ms" % last_eikonal_ms)
 	print("debug mesh = %.3f ms" % last_debug_mesh_ms)
 	print("total = %.3f ms" % last_total_ms)

@@ -27,7 +27,8 @@ CoastalPropagationData
   ├─ CPU sample_propagation(world_xz)
   ├─ shadow_scale CPU (shadow energético; no se sube a GPU)
   ├─ local_direction CPU (raw normalizado de ∇T)
-  ├─ render_direction CPU (suavizado adaptativo; no se sube a GPU)
+  ├─ render_direction CPU (suavizado + cut locus; no se sube a GPU)
+  ├─ cut_locus_mask CPU (debug derivado; no se sube a GPU)
   └─ tres RGBA32F GPU en 3B.1 (mismo grid/mapping)
         │
 OceanClipmapSurface: sólo LONG
@@ -93,6 +94,18 @@ El campo de tiempo se resuelve con Fast Sweeping. Straight Baker inicializa el
 campo a 1 en agua y 0 en LAND; samples de recursos legacy sin el array aplican
 el mismo fallback.
 
+La dirección de presentación sigue la cadena `RAW EIKONAL → adaptive smoothing
+→ cut locus detection → localized vector blend → render_direction`. La detección
+usa `local_direction` raw como señal conservadora: exige un salto vecino mayor
+que `cut_locus_detect_angle_deg`, una diferencia clara entre lados opuestos y un
+vecindario 3×3 completamente water/reached. Así una refracción suave no basta
+por sí sola. Una BFS multi-source crea la banda en agua reached, con LAND como
+barrera; dentro de ella sólo se actualiza `render_direction` en
+`cut_locus_blend_passes` iteraciones usando promedio vectorial y las celdas fuera
+de la banda como condiciones de contorno. No es un solver multi-arrival ni
+reconstruye el Eikonal: es una corrección de presentación para fusionar ramas
+equivalentes del first-arrival.
+
 ## Visualización y debug
 
 `OpenOceanFFTModule` expone parámetros de inspector:
@@ -104,8 +117,10 @@ el mismo fallback.
 - `set_coastal_debug_field()` para DEPTH, WAVELENGTH, PHASE_SPEED,
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
 - `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
-  `RAW_DIRECTION`, `RENDER_DIRECTION` y `SHADOW_SCALE`; `LOCAL_DIRECTION` es
-  alias de `RAW_DIRECTION`. No toca shaders ni el render final. Su
+  `RAW_DIRECTION`, `RENDER_DIRECTION`, `SHADOW_SCALE` y `CUT_LOCUS`;
+  `LOCAL_DIRECTION` es alias de `RAW_DIRECTION`. No toca shaders ni el render
+  final. `CUT_LOCUS` pinta core rojo, banda naranja y fuera negro/transparente.
+  Su
   geometría es siempre un único `PlaneMesh` horizontal de dos triángulos y una
   `ImageTexture` RGBA8 de un píxel por celda; cambiar el modo sólo regenera esa
   textura.
@@ -124,14 +139,23 @@ rectilínea y su ordenamiento completo. La visibilidad incidente y la distancia
 ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
 `sort_custom` del grid. La recuperación energética y el suavizado de dirección
 son también O(N) por pasada, sin cambiar `travel_time`, `phase`, `reached` ni
-`local_direction`. El preview imprime sus tiempos adicionales junto a
-bathymetry, metrics, sweep Eikonal, fase, shadow, debug mesh y total.
+`local_direction`. Cut-locus detection y construcción de banda son O(N); el
+blend es O(B × passes), donde B es el número de celdas de la banda. El preview
+imprime esos tres tiempos junto a bathymetry, metrics, sweep Eikonal, fase,
+shadow, debug mesh y total.
 
 Los parámetros de recuperación parten de `shadow_recovery_enabled = true`,
 `shadow_diffraction_angle_deg = 12`, `shadow_recovery_strength = 1`. El campo
 de presentación parte de tres pasadas, `direction_smoothing_strength = 0.35`
 y `direction_smoothing_threshold_deg = 6`; son parámetros derivados del bake,
 no de la identidad macroscópica de la ola.
+
+La etapa cut locus parte de `cut_locus_enabled = true`,
+`cut_locus_detect_angle_deg = 35`, `cut_locus_blend_radius_m = 12`,
+`cut_locus_blend_passes = 12` y `cut_locus_blend_strength = 0.55`. Para evitar
+confundir una curvatura refractiva con dos ramas reconvergentes, además del
+umbral configurable de 35° exige una separación fuerte de 60° entre lados
+opuestos; ese filtro no se expone como otro parámetro.
 
 Además de `eikonal_max_residual`, el bake registra
 `eikonal_interior_residual_rad_m`: el máximo residual sólo en agua interior
@@ -159,8 +183,10 @@ aproximación explícita en 3B, no una normal costeña final.
 un obstáculo aislado, dos islas con canal, agua leeward alcanzada, giro de
 dirección local, sombra suave, comparación con solve estricto y determinismo
 del solve. También valida grids 512×512 y 1024×1024, recuperación de isla y
-roca pequeña, continuidad de `render_direction`, residual interior y que el
-debug conserve dos triángulos, no una malla por celda.
+roca pequeña, continuidad de `render_direction`, residual interior, detección
+sin falsos positivos en agua plana/refracción suave, isla tipo Paradise, banda
+que no cruza LAND y que el debug conserve dos triángulos, no una malla por
+celda.
 
 `tests/phase_3b_coastal_preview_validation.gd` cubre la máquina de estados,
 worker, doble bake bloqueado, cierre durante solve, rebake, eliminación

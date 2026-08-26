@@ -59,6 +59,9 @@ func _validate_lifecycle() -> void:
 	var texture_before_render_mode = first_debug._image_texture
 	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.RENDER_DIRECTION
 	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.RENDER_DIRECTION and first_debug._image_texture != texture_before_render_mode, "lifecycle: modo RENDER_DIRECTION sin rebake")
+	var texture_before_cut_locus_mode = first_debug._image_texture
+	preview_baker.preview_mode = PreviewBakerScript.PreviewMode.CUT_LOCUS
+	_check(mock.bake_calls == 1 and first_debug.mode == DebugScript.Mode.CUT_LOCUS and first_debug._image_texture != texture_before_cut_locus_mode, "lifecycle: modo CUT_LOCUS sin rebake")
 	preview_baker.bake_coastal_preview()
 	await _wait_for_bake(preview_baker)
 	var second_debug = preview_baker._find_owned_preview()

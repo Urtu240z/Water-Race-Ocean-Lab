@@ -22,6 +22,11 @@ var shadow_recovery_strength := 1.0
 var direction_smoothing_passes := 3
 var direction_smoothing_strength := 0.35
 var direction_smoothing_threshold_deg := 6.0
+var cut_locus_enabled := true
+var cut_locus_detect_angle_deg := 35.0
+var cut_locus_blend_radius_m := 12.0
+var cut_locus_blend_passes := 12
+var cut_locus_blend_strength := 0.55
 var last_base_metrics_ms := 0.0
 var last_eikonal_sweep_ms := 0.0
 var last_phase_populate_ms := 0.0
@@ -29,6 +34,12 @@ var last_shadow_ms := 0.0
 var last_shadow_geometric_ms := 0.0
 var last_shadow_recovery_ms := 0.0
 var last_direction_smoothing_ms := 0.0
+var last_cut_locus_detection_ms := 0.0
+var last_cut_locus_band_ms := 0.0
+var last_cut_locus_blend_ms := 0.0
+var last_cut_locus_core_count := 0
+var last_cut_locus_band_count := 0
+var last_cut_locus_modified_count := 0
 var last_cycles_used := 0
 var last_directional_sweeps_used := 0
 var last_final_max_change := 0.0
@@ -66,6 +77,7 @@ func bake():
 	var direction_start := Time.get_ticks_usec()
 	_build_render_direction(output)
 	last_direction_smoothing_ms = float(Time.get_ticks_usec() - direction_start) / 1000.0
+	_build_cut_locus_render_direction(output, direction)
 	print("COASTAL PREVIEW: building shadow...")
 	var shadow_start := Time.get_ticks_usec()
 	_build_shadow_scale(output, fixed, direction)
@@ -386,6 +398,173 @@ func _build_render_direction(output) -> void:
 				var blended := current.lerp(average, weight).normalized()
 				next_x[index] = blended.x
 				next_z[index] = blended.y
+		current_x = next_x
+		current_z = next_z
+	output.render_direction_x = current_x
+	output.render_direction_z = current_z
+
+
+func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> void:
+	var count: int = output.width * output.height
+	if not cut_locus_enabled:
+		output.cut_locus_mask = PackedByteArray()
+		output.cut_locus_mask.resize(count)
+		output.cut_locus_mask.fill(0)
+		last_cut_locus_detection_ms = 0.0
+		last_cut_locus_band_ms = 0.0
+		last_cut_locus_blend_ms = 0.0
+		last_cut_locus_core_count = 0
+		last_cut_locus_band_count = 0
+		last_cut_locus_modified_count = 0
+		return
+	var detection_start := Time.get_ticks_usec()
+	var core_mask := _detect_cut_locus_core(output)
+	last_cut_locus_detection_ms = float(Time.get_ticks_usec() - detection_start) / 1000.0
+	var band_start := Time.get_ticks_usec()
+	var distance_cells := PackedInt32Array()
+	distance_cells.resize(count)
+	distance_cells.fill(-1)
+	var queue := PackedInt32Array()
+	var core_count := 0
+	for index in count:
+		if core_mask[index] == 0:
+			continue
+		distance_cells[index] = 0
+		queue.append(index)
+		core_count += 1
+	last_cut_locus_core_count = core_count
+	var radius_cells: int = maxi(0, ceili(cut_locus_blend_radius_m / maxf(output.cell_size_m, 1.0e-6)))
+	var head := 0
+	while head < queue.size():
+		var index: int = queue[head]
+		head += 1
+		var distance: int = distance_cells[index]
+		if distance >= radius_cells:
+			continue
+		var x: int = index % output.width
+		var z: int = index / output.width
+		for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
+			if neighbor.x < 0 or neighbor.y < 0 or neighbor.x >= output.width or neighbor.y >= output.height:
+				continue
+			var neighbor_index: int = neighbor.y * output.width + neighbor.x
+			if distance_cells[neighbor_index] >= 0 or output.valid_mask[neighbor_index] == 0 or output.reached_mask[neighbor_index] == 0:
+				continue
+			distance_cells[neighbor_index] = distance + 1
+			queue.append(neighbor_index)
+	var cut_mask := PackedByteArray()
+	cut_mask.resize(count)
+	cut_mask.fill(0)
+	var band_indices := PackedInt32Array()
+	var band_count := 0
+	var modified_count := 0
+	for index in count:
+		if distance_cells[index] < 0:
+			continue
+		cut_mask[index] = 2 if core_mask[index] != 0 else 1
+		band_indices.append(index)
+		band_count += 1
+		if cut_locus_blend_radius_m <= 0.0 or float(distance_cells[index]) * output.cell_size_m < cut_locus_blend_radius_m:
+			modified_count += 1
+	last_cut_locus_band_ms = float(Time.get_ticks_usec() - band_start) / 1000.0
+	last_cut_locus_band_count = band_count
+	last_cut_locus_modified_count = modified_count
+	output.cut_locus_mask = cut_mask
+	var blend_start := Time.get_ticks_usec()
+	_apply_cut_locus_blend(output, distance_cells, band_indices, incoming_direction)
+	last_cut_locus_blend_ms = float(Time.get_ticks_usec() - blend_start) / 1000.0
+
+
+func _detect_cut_locus_core(output) -> PackedByteArray:
+	var core_mask := PackedByteArray()
+	core_mask.resize(output.width * output.height)
+	core_mask.fill(0)
+	var threshold_rad := deg_to_rad(maxf(cut_locus_detect_angle_deg, 0.0))
+	for z in range(1, output.height - 1):
+		for x in range(1, output.width - 1):
+			var index: int = z * output.width + x
+			if output.valid_mask[index] == 0 or output.reached_mask[index] == 0 or not _has_reached_water_neighborhood(output, x, z):
+				continue
+			var current := Vector2(output.local_direction_x[index], output.local_direction_z[index]).normalized()
+			var left := Vector2(output.local_direction_x[index - 1], output.local_direction_z[index - 1]).normalized()
+			var right := Vector2(output.local_direction_x[index + 1], output.local_direction_z[index + 1]).normalized()
+			var up := Vector2(output.local_direction_x[index + output.width], output.local_direction_z[index + output.width]).normalized()
+			var down := Vector2(output.local_direction_x[index - output.width], output.local_direction_z[index - output.width]).normalized()
+			var max_jump := maxf(maxf(_direction_angle(current, left), _direction_angle(current, right)), maxf(_direction_angle(current, up), _direction_angle(current, down)))
+			var max_side_difference := maxf(_direction_angle(left, right), _direction_angle(up, down))
+			var clear_branch_difference := maxf(threshold_rad, deg_to_rad(60.0))
+			if max_jump > threshold_rad and max_side_difference > clear_branch_difference:
+				core_mask[index] = 1
+	return core_mask
+
+
+func _has_reached_water_neighborhood(output, x: int, z: int) -> bool:
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if dx == 0 and dz == 0:
+				continue
+			var index: int = (z + dz) * output.width + x + dx
+			if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+				return false
+	return true
+
+
+func _direction_angle(first: Vector2, second: Vector2) -> float:
+	if first.length_squared() <= 1.0e-8 or second.length_squared() <= 1.0e-8:
+		return 0.0
+	return acos(clampf(first.dot(second), -1.0, 1.0))
+
+
+func _apply_cut_locus_blend(output, distance_cells: PackedInt32Array, band_indices: PackedInt32Array, incoming_direction: Vector2) -> void:
+	var current_x: PackedFloat32Array = output.render_direction_x
+	var current_z: PackedFloat32Array = output.render_direction_z
+	var radius_m := maxf(cut_locus_blend_radius_m, 0.0)
+	var strength := clampf(cut_locus_blend_strength, 0.0, 1.0)
+	for _pass in maxi(cut_locus_blend_passes, 0):
+		var next_x: PackedFloat32Array = current_x
+		var next_z: PackedFloat32Array = current_z
+		for index in band_indices:
+			var current := Vector2(current_x[index], current_z[index]).normalized()
+			var sum := Vector2.ZERO
+			var samples := 0
+			var x: int = index % output.width
+			var z: int = index / output.width
+			if x > 0:
+				var neighbor_index: int = index - 1
+				if output.valid_mask[neighbor_index] != 0 and output.reached_mask[neighbor_index] != 0:
+					sum += Vector2(current_x[neighbor_index], current_z[neighbor_index]).normalized()
+					samples += 1
+			if x + 1 < output.width:
+				var neighbor_index: int = index + 1
+				if output.valid_mask[neighbor_index] != 0 and output.reached_mask[neighbor_index] != 0:
+					sum += Vector2(current_x[neighbor_index], current_z[neighbor_index]).normalized()
+					samples += 1
+			if z > 0:
+				var neighbor_index: int = index - output.width
+				if output.valid_mask[neighbor_index] != 0 and output.reached_mask[neighbor_index] != 0:
+					sum += Vector2(current_x[neighbor_index], current_z[neighbor_index]).normalized()
+					samples += 1
+			if z + 1 < output.height:
+				var neighbor_index: int = index + output.width
+				if output.valid_mask[neighbor_index] != 0 and output.reached_mask[neighbor_index] != 0:
+					sum += Vector2(current_x[neighbor_index], current_z[neighbor_index]).normalized()
+					samples += 1
+			if samples == 0 or sum.length_squared() <= 1.0e-8:
+				continue
+			var average := sum.normalized()
+			var distance_m: float = float(distance_cells[index]) * output.cell_size_m
+			var normalized_distance: float = distance_m / radius_m if radius_m > 1.0e-6 else 0.0
+			var edge := clampf(normalized_distance, 0.0, 1.0)
+			var smooth_edge := edge * edge * (3.0 - 2.0 * edge)
+			var cut_weight := 1.0 - smooth_edge
+			var blended := current.lerp(average, strength * cut_weight).normalized()
+			if blended.length_squared() <= 1.0e-8:
+				continue
+			if blended.dot(incoming_direction) < -0.25:
+				blended = current if current.dot(incoming_direction) >= -0.25 else average
+				if blended.dot(incoming_direction) < -0.25:
+					blended = incoming_direction
+			next_x[index] = blended.x
+			next_z[index] = blended.y
 		current_x = next_x
 		current_z = next_z
 	output.render_direction_x = current_x

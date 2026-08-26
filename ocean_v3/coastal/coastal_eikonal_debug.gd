@@ -5,7 +5,7 @@ extends MeshInstance3D
 ## Una sola PlaneMesh horizontal y una textura RGBA con un píxel por celda.
 ## No modifica el campo ni participa en el render final del océano.
 
-enum Mode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE }
+enum Mode { REACHED, RAW_DIRECTION, RENDER_DIRECTION, SHADOW_SCALE, CUT_LOCUS }
 const LOCAL_DIRECTION: Mode = Mode.RAW_DIRECTION
 
 @export var data: Resource = null:
@@ -119,4 +119,8 @@ func _color_at(x: int, z: int) -> Color:
 				return Color(0.18, 0.12, 0.10, 0.82)
 			var shadow_scale: float = data.shadow_scale[index] if data.shadow_scale.size() == data.width * data.height else 1.0
 			return Color(lerpf(0.08, 0.98, clampf(shadow_scale, 0.0, 1.0)), lerpf(0.08, 0.92, clampf(shadow_scale, 0.0, 1.0)), 0.12, 0.88)
+		Mode.CUT_LOCUS:
+			if not data.has_cut_locus_mask() or data.cut_locus_mask[index] == 0:
+				return Color(0.0, 0.0, 0.0, 0.05)
+			return Color(0.95, 0.08, 0.04, 0.92) if data.cut_locus_mask[index] >= 2 else Color(1.0, 0.52, 0.06, 0.78)
 	return Color.WHITE

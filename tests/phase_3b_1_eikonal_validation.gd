@@ -16,6 +16,7 @@ func _initialize() -> void:
 	_validate_small_rock_shadow()
 	_validate_two_island_channel()
 	_validate_render_field_data()
+	_validate_cut_locus()
 	_validate_convergence_quality()
 	_validate_visibility_sweep()
 	_validate_large_grid_scaling()
@@ -180,7 +181,7 @@ func _validate_render_field_data() -> void:
 	print("3B.1 RENDER_FIELD open_water_mean_error_deg=%.8f" % open_water_mean_error)
 	_check(propagation.has_render_direction() and propagation.render_direction_x.size() == propagation.width * propagation.height and propagation.render_direction_z.size() == propagation.width * propagation.height, "render data: arrays derivados asignados")
 	_check(open_water_mean_error < 0.001, "render data: agua abierta conserva dirección")
-	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 62, "render data: accounting incluye 8 B/nodo adicional")
+	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 63, "render data: accounting incluye render_direction y máscara cut locus")
 	_check(sample.render_direction_xz.length_squared() > 0.99, "render data: sample devuelve render_direction")
 	var legacy_x: PackedFloat32Array = propagation.render_direction_x
 	var legacy_z: PackedFloat32Array = propagation.render_direction_z
@@ -190,6 +191,75 @@ func _validate_render_field_data() -> void:
 	_check(legacy_sample.render_direction_xz == legacy_sample.local_direction_xz, "render data: recurso legacy hace fallback a raw")
 	propagation.render_direction_x = legacy_x
 	propagation.render_direction_z = legacy_z
+
+
+func _validate_cut_locus() -> void:
+	var flat = _bake(_make_data(81, 61, func(_x: int, _z: int) -> float: return 18.0), Vector2.RIGHT)
+	print("3B.1 CUT_FLAT core=%d band=%d" % [_cut_core_count(flat), _cut_band_count(flat)])
+	_check(_cut_core_count(flat) == 0, "cut locus: flat water has no core")
+	_check(_cut_band_count(flat) == 0, "cut locus: flat water has no blend band")
+
+	var bank_data = _make_data(129, 97, func(x: int, z: int) -> float:
+		return lerpf(18.0, 8.0, float(z) / 96.0)
+	)
+	var bank = _bake(bank_data, Vector2.RIGHT)
+	var bank_water := _water_count(bank)
+	var bank_band_percent := 100.0 * float(_cut_band_count(bank)) / float(maxi(bank_water, 1))
+	var bank_direction_angle := _max_direction_angle_deg(bank, Vector2.RIGHT)
+	print("3B.1 CUT_BANK water=%d core=%d band=%d percent=%.4f direction_angle=%.4f" % [bank_water, _cut_core_count(bank), _cut_band_count(bank), bank_band_percent, bank_direction_angle])
+	_check(bank_direction_angle > 0.1 and bank_band_percent < 1.0, "cut locus: smooth refraction remains localized")
+
+	var island_data = _make_data(101, 81, func(x: int, z: int) -> float:
+		var dx := float(x - 50)
+		var dz := float(z - 40)
+		return -1.0 if dx * dx + dz * dz < 14.0 * 14.0 else 18.0)
+	var island_pre = _bake_with_cut_locus(island_data, Vector2.RIGHT, false)
+	var island_final = _bake(island_data, Vector2.RIGHT)
+	var island_raw_jump := _max_neighbor_angle_deg(island_final, false, 60, island_final.width - 1, 0, island_final.height - 1)
+	var island_pre_jump := _max_neighbor_angle_deg(island_pre, true, 60, island_pre.width - 1, 0, island_pre.height - 1)
+	var island_final_jump := _max_neighbor_angle_deg(island_final, true, 60, island_final.width - 1, 0, island_final.height - 1)
+	var island_water := _water_count(island_final)
+	var island_modified_percent := 100.0 * float(_cut_band_count(island_final)) / float(maxi(island_water, 1))
+	var island_outside_error := _mean_render_delta_outside_cut(island_pre, island_final)
+	print("3B.1 CUT_ISLAND raw_jump=%.4f pre_cut=%.4f final=%.4f core=%d band=%d modified_percent=%.4f outside_error_deg=%.8f" % [island_raw_jump, island_pre_jump, island_final_jump, _cut_core_count(island_final), _cut_band_count(island_final), island_modified_percent, island_outside_error])
+	_check(_cut_core_count(island_final) > 0, "cut locus: single island detects reconvergence")
+	_check(island_final_jump < island_pre_jump, "cut locus: localized blend reduces the pre-cut jump")
+	_check(island_final_jump < 45.0, "cut locus: single-island final jump is visually continuous")
+	_check(island_modified_percent < 25.0, "cut locus: single-island blend remains localized")
+	_check(island_outside_error < 0.01, "cut locus: outside band preserves adaptive direction")
+
+	var channel_data = _make_data(121, 81, func(x: int, z: int) -> float:
+		var upper_dx := float(x - 50)
+		var upper_dz := float(z - 28)
+		var lower_dx := float(x - 50)
+		var lower_dz := float(z - 52)
+		return -1.0 if upper_dx * upper_dx + upper_dz * upper_dz < 10.0 * 10.0 or lower_dx * lower_dx + lower_dz * lower_dz < 10.0 * 10.0 else 18.0)
+	var channel_pre = _bake_with_cut_locus(channel_data, Vector2.RIGHT, false)
+	var channel_final = _bake(channel_data, Vector2.RIGHT)
+	var channel_index: int = 40 * channel_final.width + 78
+	var channel_cut_respects_land := true
+	for index in channel_final.width * channel_final.height:
+		if channel_final.cut_locus_mask[index] != 0 and channel_final.valid_mask[index] == 0:
+			channel_cut_respects_land = false
+	print("3B.1 CUT_CHANNEL core=%d band=%d channel_reached=%d channel_shadow=%.4f" % [_cut_core_count(channel_final), _cut_band_count(channel_final), channel_final.reached_mask[channel_index], channel_final.shadow_scale[channel_index]])
+	_check(channel_final.reached_mask[channel_index] != 0, "cut locus: channel remains reached")
+	_check(channel_final.shadow_scale == channel_pre.shadow_scale, "cut locus: channel shadow unchanged")
+	_check(channel_final.local_direction_x == channel_pre.local_direction_x and channel_final.local_direction_z == channel_pre.local_direction_z, "cut locus: channel raw direction unchanged")
+	_check(channel_final.phase_rad == channel_pre.phase_rad and channel_final.reached_mask == channel_pre.reached_mask, "cut locus: channel solve fields unchanged")
+	_check(channel_cut_respects_land, "cut locus: band never crosses LAND")
+
+	var paradise_data = _make_data(161, 121, func(x: int, z: int) -> float:
+		var dx := float(x - 80)
+		var dz := float(z - 60)
+		var body := dx * dx + dz * dz < 22.0 * 22.0
+		var notch := dx < -8.0 and absf(dz) < 7.0
+		return -1.0 if body and not notch else 18.0)
+	var paradise_pre = _bake_with_cut_locus(paradise_data, Vector2.RIGHT, false)
+	var paradise_final = _bake(paradise_data, Vector2.RIGHT)
+	var paradise_pre_jump := _max_neighbor_angle_deg(paradise_pre, true, 100, 145, 15, paradise_pre.height - 16)
+	var paradise_final_jump := _max_neighbor_angle_deg(paradise_final, true, 100, 145, 15, paradise_final.height - 16)
+	print("3B.1 CUT_PARADISE_LIKE pre_cut=%.4f final=%.4f core=%d band=%d" % [paradise_pre_jump, paradise_final_jump, _cut_core_count(paradise_final), _cut_band_count(paradise_final)])
+	_check(_cut_core_count(paradise_final) > 0 and paradise_final_jump < paradise_pre_jump, "cut locus: paradise-like reconvergence seam reduced")
 
 
 func _validate_visibility_sweep() -> void:
@@ -277,7 +347,7 @@ func _validate_large_grid_scaling() -> void:
 		debug.data = propagation
 		var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
 		var plane := debug.mesh as PlaneMesh
-		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
+		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f shadow_geometric=%.3f shadow_recovery=%.3f direction_smoothing=%.3f cut_detection=%.3f cut_band=%.3f cut_blend=%.3f cut_core=%d cut_band_cells=%d debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, baker.last_shadow_geometric_ms, baker.last_shadow_recovery_ms, baker.last_direction_smoothing_ms, baker.last_cut_locus_detection_ms, baker.last_cut_locus_band_ms, baker.last_cut_locus_blend_ms, baker.last_cut_locus_core_count, baker.last_cut_locus_band_count, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
 		_check(propagation.is_valid(), "large: grid %dx%d completa con data válida" % [resolution, resolution])
 		_check(reached == resolution * resolution, "large: flat water %dx%d reached completo" % [resolution, resolution])
 		_check(plane != null and debug.last_debug_triangle_count == 2 and plane.size == Vector2(resolution - 1, resolution - 1), "large: debug %dx%d es un plano de dos triángulos" % [resolution, resolution])
@@ -286,7 +356,7 @@ func _validate_large_grid_scaling() -> void:
 
 func _validate_eikonal_path_complexity() -> void:
 	var source := FileAccess.get_file_as_string("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
-	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction"), "complexity: campos derivados no conservan sort/raymarch patológicos")
+	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output") and source.contains("_recover_shadow_energy") and source.contains("_build_render_direction") and source.contains("_detect_cut_locus_core") and source.contains("_apply_cut_locus_blend"), "complexity: campos derivados no conservan sort/raymarch patológicos")
 
 
 func _max_neighbor_angle_deg(data, use_render: bool, min_x: int, max_x: int, min_z: int, max_z: int) -> float:
@@ -310,6 +380,44 @@ func _max_neighbor_angle_deg(data, use_render: bool, min_x: int, max_x: int, min
 	return maximum
 
 
+func _max_direction_angle_deg(data, incoming: Vector2) -> float:
+	var maximum := 0.0
+	for index in data.width * data.height:
+		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
+			continue
+		var direction := Vector2(data.local_direction_x[index], data.local_direction_z[index])
+		maximum = maxf(maximum, rad_to_deg(acos(clampf(direction.dot(incoming), -1.0, 1.0))))
+	return maximum
+
+
+func _cut_core_count(data) -> int:
+	var count := 0
+	if not data.has_cut_locus_mask():
+		return count
+	for value in data.cut_locus_mask:
+		if value >= 2:
+			count += 1
+	return count
+
+
+func _cut_band_count(data) -> int:
+	var count := 0
+	if not data.has_cut_locus_mask():
+		return count
+	for value in data.cut_locus_mask:
+		if value != 0:
+			count += 1
+	return count
+
+
+func _water_count(data) -> int:
+	var count := 0
+	for index in data.width * data.height:
+		if data.valid_mask[index] != 0 and data.reached_mask[index] != 0:
+			count += 1
+	return count
+
+
 func _raw_direction_matches_gradient(data) -> bool:
 	for index in data.width * data.height:
 		if data.valid_mask[index] == 0 or data.reached_mask[index] == 0:
@@ -330,6 +438,19 @@ func _mean_raw_render_angle_deg(data) -> float:
 		var raw := Vector2(data.local_direction_x[index], data.local_direction_z[index])
 		var render := Vector2(data.render_direction_x[index], data.render_direction_z[index])
 		total += rad_to_deg(acos(clampf(raw.dot(render), -1.0, 1.0)))
+		count += 1
+	return total / float(count) if count > 0 else 0.0
+
+
+func _mean_render_delta_outside_cut(before, after) -> float:
+	var total := 0.0
+	var count := 0
+	for index in after.width * after.height:
+		if after.valid_mask[index] == 0 or after.reached_mask[index] == 0 or after.cut_locus_mask[index] != 0:
+			continue
+		var first := Vector2(before.render_direction_x[index], before.render_direction_z[index])
+		var second := Vector2(after.render_direction_x[index], after.render_direction_z[index])
+		total += rad_to_deg(acos(clampf(first.dot(second), -1.0, 1.0)))
 		count += 1
 	return total / float(count) if count > 0 else 0.0
 
@@ -358,6 +479,14 @@ func _bake(data, direction: Vector2):
 
 
 func _bake_with_settings(data, direction: Vector2, max_cycles: int, tolerance: float):
+	return _bake_with_options(data, direction, max_cycles, tolerance, true)
+
+
+func _bake_with_cut_locus(data, direction: Vector2, enabled: bool):
+	return _bake_with_options(data, direction, 16, 1.0e-4, enabled)
+
+
+func _bake_with_options(data, direction: Vector2, max_cycles: int, tolerance: float, cut_enabled: bool):
 	var baker = EikonalBakerScript.new()
 	baker.bathymetry_data = data
 	baker.incoming_direction_xz = direction
@@ -365,6 +494,7 @@ func _bake_with_settings(data, direction: Vector2, max_cycles: int, tolerance: f
 	baker.min_valid_depth_m = 0.25
 	baker.max_sweep_cycles = max_cycles
 	baker.convergence_tolerance_s = tolerance
+	baker.cut_locus_enabled = cut_enabled
 	return baker.bake()
 
 
