@@ -89,11 +89,28 @@ func _validate_mapping_and_gpu_payload() -> void:
 	var propagation = _bake(data, Vector2.RIGHT)
 	var sample = propagation.sample_propagation(Vector2(-11.5, 8.0), SampleScript.new())
 	_check(sample.in_bounds and sample.valid and sample.depth_m > 3.4 and sample.depth_m < 3.6, "mapping: world-space negativo e interpolación CPU")
+	_check(absf(sample.shadow_scale - 1.0) < 1.0e-6, "mapping: Straight Baker deja shadow_scale neutral")
+	var authored_shadow := PackedFloat32Array()
+	authored_shadow.resize(propagation.width * propagation.height)
+	authored_shadow.fill(0.25)
+	propagation.shadow_scale = authored_shadow
+	var interpolated_shadow = propagation.sample_propagation(Vector2(-11.5, 8.0))
+	_check(absf(interpolated_shadow.shadow_scale - 0.25) < 1.0e-6, "mapping: shadow_scale CPU interpola")
+	propagation.shadow_scale = PackedFloat32Array()
+	var legacy_shadow = propagation.sample_propagation(Vector2(-11.5, 8.0))
+	_check(absf(legacy_shadow.shadow_scale - 1.0) < 1.0e-6, "mapping: shadow_scale legacy fallback válido")
 	var outside = propagation.sample_propagation(Vector2(-40.0, 8.0))
 	_check(not outside.in_bounds, "mapping: bounds explícito")
+	var land_data = _make_bathymetry(5, 5, func(_x: int, _z: int) -> float: return 10.0)
+	var land_index: int = 2 * land_data.width + 2
+	land_data.depth_m[land_index] = -1.0
+	land_data.land_water_mask[land_index] = 0
+	var land_propagation = _bake(land_data, Vector2.RIGHT)
+	_check(land_propagation.shadow_scale[land_index] == 0.0 and land_propagation.shadow_scale[0] == 1.0, "mapping: shadow_scale distingue LAND y agua")
 	var textures: Dictionary = propagation.build_gpu_textures()
 	_check(textures.has("field") and textures.has("metrics") and textures.has("phase") and textures["field"] != null and textures["phase"] != null, "gpu payload: tres texturas derivadas del mismo dato")
 	_check(propagation.approximate_gpu_memory_bytes() == propagation.width * propagation.height * 48, "gpu payload: 48 B/nodo con fase/dirección RGBA32F")
+	_check(propagation.approximate_memory_bytes() == propagation.width * propagation.height * 54, "cpu payload: shadow_scale añade 6 B/nodo")
 
 
 func _validate_determinism() -> void:

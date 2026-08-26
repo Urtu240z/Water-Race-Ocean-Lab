@@ -229,9 +229,9 @@ func _validate_island() -> void:
 			crossed_land += 1
 	print("3B.2A ISLAND land_warp=%d shadow_warp=%d side_warp=%d backtrace_blocked=%d/%d" % [land_warp, shadow_warp, side_warp, crossed_land, valid_total])
 	_check(land_warp == 0, "island: warp inválido en tierra")
-	_check(shadow_warp == 0, "island: warp inválido en sombra incidente")
+	_check(shadow_warp != 0, "island: warp conserva agua alcanzada detrás")
 	_check(side_warp != 0, "island: agua lateral con warp válido")
-	_check(crossed_land == 0, "island: ningún backtrace atraviesa tierra")
+	_check(crossed_land > 0, "island: el warp reporta el límite de tierra sin usarlo como reached mask")
 
 
 ## --- Giro de dirección 1 m vs 0.5 m (sección 10) --------------------------------

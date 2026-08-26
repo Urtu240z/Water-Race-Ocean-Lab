@@ -12,6 +12,10 @@ var gravity_mps2 := 9.81
 var min_valid_depth_m := 0.25
 var max_sweeps := 96
 var convergence_tolerance_s := 1.0e-6
+var shadow_min_scale := 0.15
+var shadow_occlusion_entry_scale := 0.70
+var shadow_detour_length_m := 32.0
+var shadow_smoothing_passes := 2
 
 
 func bake():
@@ -35,7 +39,7 @@ func bake():
 	var fixed := _build_upstream_boundary(output, travel_time, direction)
 	_sweep_travel_time(output, travel_time, fixed)
 	_populate_phase_fields(output, travel_time, direction)
-	_apply_incident_shadow_mask(output, direction)
+	_build_shadow_scale(output, travel_time, fixed, direction)
 	return output
 
 
@@ -50,11 +54,7 @@ func _initialize_travel_time(output, _direction: Vector2) -> PackedFloat32Array:
 func _build_upstream_boundary(output, travel_time: PackedFloat32Array, direction: Vector2) -> PackedByteArray:
 	var fixed := PackedByteArray()
 	fixed.resize(output.width * output.height)
-	var minimum_s := INF
-	for z in output.height:
-		for x in output.width:
-			var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
-			minimum_s = minf(minimum_s, point.dot(direction))
+	var minimum_s := _minimum_projection(output, direction)
 	var deep_phase_speed: float = output.omega_ref_rad_s / output.k0_rad_m
 	for z in output.height:
 		for x in output.width:
@@ -127,11 +127,7 @@ func _travel_at(output, travel_time: PackedFloat32Array, x: int, z: int) -> floa
 
 
 func _populate_phase_fields(output, travel_time: PackedFloat32Array, direction: Vector2) -> void:
-	var minimum_s := INF
-	for z in output.height:
-		for x in output.width:
-			var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
-			minimum_s = minf(minimum_s, point.dot(direction))
+	var minimum_s := _minimum_projection(output, direction)
 	var max_residual := 0.0
 	for z in output.height:
 		for x in output.width:
@@ -182,18 +178,102 @@ func _upwind_gradient_at(output, values: PackedFloat32Array, x: int, z: int) -> 
 	return Vector2(gx, gz)
 
 
-func _apply_incident_shadow_mask(output, direction: Vector2) -> void:
-	## Máscara explícita sin difracción: una celda tras tierra no se reinyecta
-	## lateralmente por el solve isotrópico aunque exista un camino alrededor.
+func _minimum_projection(output, direction: Vector2) -> float:
+	var minimum_s := INF
 	for z in output.height:
 		for x in output.width:
-			var index: int = z * output.width + x
-			if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
-				continue
-			if not _has_incident_line_of_sight(output, x, z, direction):
-				output.reached_mask[index] = 0
-				output.local_direction_x[index] = 0.0
-				output.local_direction_z[index] = 0.0
+			var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
+			minimum_s = minf(minimum_s, point.dot(direction))
+	return minimum_s
+
+
+func _build_shadow_scale(output, travel_time: PackedFloat32Array, fixed: PackedByteArray, direction: Vector2) -> void:
+	var count: int = output.width * output.height
+	var route_distance := PackedFloat32Array()
+	route_distance.resize(count)
+	route_distance.fill(INF)
+	var raw_shadow := PackedFloat32Array()
+	raw_shadow.resize(count)
+	var order := []
+	for index in count:
+		if output.valid_mask[index] != 0 and output.reached_mask[index] != 0 and travel_time[index] < INF * 0.5:
+			order.append(index)
+	order.sort_custom(func(a: int, b: int) -> bool:
+			if not is_equal_approx(travel_time[a], travel_time[b]):
+				return travel_time[a] < travel_time[b]
+			return a < b
+	)
+	var minimum_s := _minimum_projection(output, direction)
+	for current in order:
+		var x: int = current % output.width
+		var z: int = current / output.width
+		var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
+		var direct_distance: float = maxf(0.0, point.dot(direction) - minimum_s)
+		if fixed[current] != 0:
+			route_distance[current] = direct_distance
+		else:
+			var parent := _best_route_parent(output, travel_time, route_distance, x, z)
+			if parent >= 0 and route_distance[parent] < INF * 0.5:
+				route_distance[current] = route_distance[parent] + output.cell_size_m
+			else:
+				route_distance[current] = direct_distance
+		if _has_incident_line_of_sight(output, x, z, direction):
+			raw_shadow[current] = 1.0
+		else:
+			var detour: float = maxf(0.0, route_distance[current] - direct_distance)
+			var decay_length: float = maxf(shadow_detour_length_m, 1.0e-6)
+			raw_shadow[current] = clampf(shadow_occlusion_entry_scale * exp(-detour / decay_length), shadow_min_scale, 1.0)
+	_smooth_shadow_scale(output, raw_shadow, fixed)
+
+
+func _best_route_parent(output, travel_time: PackedFloat32Array, route_distance: PackedFloat32Array, x: int, z: int) -> int:
+	var current: int = z * output.width + x
+	var current_time: float = travel_time[current]
+	var best_index := -1
+	var best_time := INF
+	for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
+		if neighbor.x < 0 or neighbor.y < 0 or neighbor.x >= output.width or neighbor.y >= output.height:
+			continue
+		var candidate: int = neighbor.y * output.width + neighbor.x
+		if output.valid_mask[candidate] == 0 or output.reached_mask[candidate] == 0 or route_distance[candidate] >= INF * 0.5:
+			continue
+		if travel_time[candidate] >= current_time - 1.0e-7:
+			continue
+		if travel_time[candidate] < best_time or (is_equal_approx(travel_time[candidate], best_time) and candidate < best_index):
+			best_time = travel_time[candidate]
+			best_index = candidate
+	return best_index
+
+
+func _smooth_shadow_scale(output, raw_shadow: PackedFloat32Array, fixed: PackedByteArray) -> void:
+	output.shadow_scale.resize(output.width * output.height)
+	output.shadow_scale.fill(0.0)
+	var current := raw_shadow
+	for _pass in shadow_smoothing_passes:
+		var next := PackedFloat32Array()
+		next.resize(output.width * output.height)
+		for z in output.height:
+			for x in output.width:
+				var index: int = z * output.width + x
+				if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+					next[index] = 0.0
+					continue
+				if fixed[index] != 0:
+					next[index] = 1.0
+					continue
+				var sum: float = current[index]
+				var samples := 1
+				for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
+					if neighbor.x < 0 or neighbor.y < 0 or neighbor.x >= output.width or neighbor.y >= output.height:
+						continue
+					var candidate: int = neighbor.y * output.width + neighbor.x
+					if output.valid_mask[candidate] == 0 or output.reached_mask[candidate] == 0:
+						continue
+					sum += current[candidate]
+					samples += 1
+				next[index] = clampf(sum / float(samples), 0.0, 1.0)
+		current = next
+	output.shadow_scale = current
 
 
 func _has_incident_line_of_sight(output, x: int, z: int, direction: Vector2) -> bool:

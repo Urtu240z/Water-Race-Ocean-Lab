@@ -44,12 +44,14 @@ func bake():
 	output.local_direction_x.resize(count)
 	output.local_direction_z.resize(count)
 	output.reached_mask.resize(count)
+	output.shadow_scale.resize(count)
 	var cg_deep: float = 0.5 * output.omega_ref_rad_s / output.k0_rad_m
 	for index in count:
 		var depth: float = bathymetry_data.depth_m[index]
 		var is_valid: bool = bathymetry_data.land_water_mask[index] != 0 and depth >= min_valid_depth_m
 		output.depth_m[index] = depth
 		output.valid_mask[index] = 1 if is_valid else 0
+		output.shadow_scale[index] = 1.0 if is_valid else 0.0
 		if not is_valid:
 			output.local_k[index] = output.k0_rad_m
 			output.wavelength_m[index] = reference_wavelength_m

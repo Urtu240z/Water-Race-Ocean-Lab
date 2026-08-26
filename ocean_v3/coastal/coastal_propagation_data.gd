@@ -31,6 +31,7 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export_storage var local_direction_x := PackedFloat32Array()
 @export_storage var local_direction_z := PackedFloat32Array()
 @export_storage var reached_mask := PackedByteArray()
+@export_storage var shadow_scale := PackedFloat32Array()
 
 var _field_texture: ImageTexture
 var _metrics_texture: ImageTexture
@@ -47,8 +48,8 @@ func world_max_xz() -> Vector2:
 
 
 func approximate_memory_bytes() -> int:
-	# Doce float32 + dos máscaras CPU.
-	return width * height * (12 * 4 + 2)
+	# Trece float32 + dos máscaras CPU. shadow_scale aún no se sube a GPU.
+	return width * height * (13 * 4 + 2)
 
 
 func approximate_gpu_memory_bytes() -> int:
@@ -60,6 +61,7 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	var result = reuse if reuse != null else SampleScript.new()
 	if width < 2 or height < 2 or cell_size_m <= 0.0:
 		return result.set_invalid()
+	var count: int = width * height
 	var grid := (world_xz - world_origin_xz) / cell_size_m
 	result.in_bounds = grid.x >= 0.0 and grid.y >= 0.0 and grid.x <= float(width - 1) and grid.y <= float(height - 1)
 	grid.x = clampf(grid.x, 0.0, float(width - 1))
@@ -86,6 +88,10 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	var nearest := clampi(int(round(grid.y)), 0, height - 1) * width + clampi(int(round(grid.x)), 0, width - 1)
 	result.reached = reached_mask[nearest] != 0
 	result.valid = valid_mask[nearest] != 0 and result.reached
+	if shadow_scale.size() == count:
+		result.shadow_scale = _bilinear(shadow_scale, i00, i10, i01, i11, tx, tz)
+	else:
+		result.shadow_scale = 1.0 if result.valid else 0.0
 	return result
 
 

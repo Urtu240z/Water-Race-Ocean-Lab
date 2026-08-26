@@ -9,9 +9,11 @@ por defecto es `lambda_ref = 16 m`, dentro del borde de la banda LONG, con
 `omega_ref = sqrt(g*k0)`; es una representación V1 configurable, no un
 cambio de H0 ni una reconstrucción del espectro.
 
-No hay refracción 2D, curvatura de rayos, sombras por islas, breaking, runup,
-shoreline dinámica, foam ni cambios a OceanQuery. MID y SHORT permanecen de
-mar abierto. La física de vehículos continúa usando el backend de Fase 2C.
+3B.1 añade un solve Eikonal CPU offline para curvatura local alrededor de
+obstáculos y una escala de sombra suave derivada de línea de vista y detour de
+ruta. No hay breaking, runup, shoreline dinámica, foam ni cambios a
+OceanQuery. MID y SHORT permanecen de mar abierto. La física de vehículos
+continúa usando el backend de Fase 2C.
 
 ## Arquitectura y fuente única
 
@@ -23,7 +25,8 @@ CoastalPropagationBaker
         ▼
 CoastalPropagationData
   ├─ CPU sample_propagation(world_xz)
-  └─ dos RGBA32F GPU en 3B (mismo grid/mapping)
+  ├─ shadow_scale CPU (legacy fallback; no se sube a GPU)
+  └─ tres RGBA32F GPU en 3B.1 (mismo grid/mapping)
         │
 OceanClipmapSurface: sólo LONG
   phase coordinate + shoaling; modo mono analítico opcional
@@ -39,9 +42,10 @@ uv = (world_xz - origin_xz) / ((width-1, height-1) * cell_size_m)
 
 Fuera de UV, la transformación se desactiva y LONG queda abierto. El payload
 es campo `(phase_offset, shoaling, local_k, valid)` y métricas
-`(depth, lambda, c, Cg)`: en 3B.1 se añade un tercer RGBA32F de
+`(depth, lambda, c, Cg)`: 3B.1 mantiene un tercer RGBA32F de
 `(phase, dir_x, dir_z, reached)`, total 48 B/nodo de VRAM, sin mipmaps ni
-readbacks.
+readbacks. `shadow_scale` permanece en CPU para no alterar el contrato GPU de
+esta fase.
 
 ## Modelo físico
 
@@ -73,6 +77,14 @@ El sweep cuesta `O(N log N)` por el orden determinista y no afecta el coste
 por frame. Un orden por buckets podría justificar optimización posterior si
 los bakes de producción lo necesitan, pero no es necesario para 3B.
 
+En 3B.1, las celdas de agua válidas y finitas conservan `reached_mask` aunque
+la línea directa quede bloqueada por tierra. `shadow_scale` vale 1 en línea de
+vista, y en oclusión usa `0.70 * exp(-detour / 32 m)`, acotado por 0.15 y
+suavizado en dos pasadas sobre vecinos 4-conectados alcanzados. La ruta se
+reconstruye en orden creciente de `travel_time`; no difunde por LAND ni por
+agua no alcanzada. Straight Baker inicializa el campo a 1 en agua y 0 en
+LAND; samples de recursos legacy sin el array aplican el mismo fallback.
+
 ## Visualización y debug
 
 `OpenOceanFFTModule` expone parámetros de inspector:
@@ -83,6 +95,8 @@ los bakes de producción lo necesitan, pero no es necesario para 3B.
   `A*S*cos(k0 dot(x,d)+phase_offset-omega*t)`;
 - `set_coastal_debug_field()` para DEPTH, WAVELENGTH, PHASE_SPEED,
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
+- `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
+  `LOCAL_DIRECTION` y `SHADOW_SCALE`; no toca shaders ni el render final.
 
 En modo normal LONG conserva el FFT y se desplaza/multiplica de forma
 coherente. Las normales LONG se escalan con el desplazamiento de muestra; la
@@ -96,14 +110,20 @@ aproximación explícita en 3B, no una normal costeña final.
 1. residual de dispersión y límites profundo/somero;
 2. RAMP: lambda/c/Cg/phase y shoaling;
 3. BANK: incremento de amplitud y memoria de fase tras recuperar profundidad;
-4. dirección diagonal, mapping con origen negativo, bounds y payload GPU;
+4. dirección diagonal, mapping con origen negativo, bounds, payload GPU y
+   compatibilidad de `shadow_scale` interpolado/legacy;
 5. determinismo byte a byte de campos derivados.
+
+`tests/phase_3b_1_eikonal_validation.gd` cubre agua plana (shadow neutro),
+un obstáculo aislado, dos islas con canal, agua leeward alcanzada, giro de
+dirección local, sombra suave y determinismo del solve.
 
 `lab/benchmark/phase_3b_coastal_propagation_benchmark.gd` mide build, sample
 CPU y submit de texturas. No crea dispatches extra ni readbacks: OFF y ON
 tienen cero compute passes adicionales al FFT/clipmap; 3B añade dos fetches
 RGBA32F a LONG y 32 B/nodo. 3B.1 conserva ese camino y suma una tercera
-textura (48 B/nodo) exclusivamente para su diagnóstico mono eikonal. El
+textura (48 B/nodo) exclusivamente para su diagnóstico mono eikonal; la
+sombra blanda es CPU-only y no añade fetches. El
 benchmark headless informa ese incremento de GPU estructural, no pretende ser
 un tiempo de GPU de Steam Deck; ese frame time requiere ejecutar el mismo
 perfil de clipmap en hardware objetivo.
@@ -116,7 +136,8 @@ para N=64–1024. El payload de ese caso es 135,200 B de VRAM.
 
 1. sweep por buckets O(N) / tiled bake para grids grandes, si los perfiles lo
    justifican;
-2. ray bending/refracción 2D y zonas de sombra;
+2. validación visual de `shadow_scale` sobre el render y posible integración
+   explícita en un modelo futuro de amplitud, si se encarga;
 3. propagación multibanda/espectral y conservation energética más completa;
 4. breaking, foam, costa y normales con regla de cadena completa;
 5. integrar el mismo modelo a cualquier query física sólo cuando se encargue
