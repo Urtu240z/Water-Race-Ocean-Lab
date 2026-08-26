@@ -37,6 +37,10 @@ var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
 var _crest_foam_compute_enabled := true
 var _crest_foam_update_hz := 60.0
+var _crest_transition_alpha := 0.0
+var _crest_effective_whitecap := 0.0
+var _crest_current_whitecap := 0.0
+var _crest_target_whitecap := 0.0
 var _crest_foam_accumulator := 0.0
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
@@ -155,6 +159,11 @@ func diagnostic_state() -> Dictionary:
 		"crest_foam_compute_enabled": _crest_foam_compute_enabled,
 		"crest_updates_total": _crest_updates_total,
 		"crest_updates_per_second": _crest_updates_per_second,
+		"crest_transition_active": _h0_target.is_valid(),
+		"crest_transition_alpha": _crest_transition_alpha,
+		"effective_whitecap": _crest_effective_whitecap,
+		"current_whitecap": _crest_current_whitecap,
+		"target_whitecap": _crest_target_whitecap,
 		"crest_snapshot_count": 2 if _foam_advection_enabled else 0,
 		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2,
 		"surface_foam_gpu_bytes": 0,
@@ -213,6 +222,13 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 	_rd.compute_list_bind_uniform_set(compute_list, _evolve_set, 0)
 	var alpha := transition_alpha if _h0_target.is_valid() else 0.0
 	var target_config := _transition_target_config if _transition_target_config != null else _config
+	var current_whitecap: float = _config.foam_whitecap
+	var target_whitecap: float = target_config.foam_whitecap
+	var effective_whitecap: float = lerpf(current_whitecap, target_whitecap, alpha)
+	_crest_transition_alpha = alpha
+	_crest_current_whitecap = current_whitecap
+	_crest_target_whitecap = target_whitecap
+	_crest_effective_whitecap = effective_whitecap
 	var evolution_depth_or_choppiness := lerpf(_config.choppiness, target_config.choppiness, alpha)
 	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, evolution_depth_or_choppiness, _config.domain_size_m, alpha])
 	_rd.compute_list_set_push_constant(compute_list, evolve_push.to_byte_array(), 20)
@@ -243,7 +259,7 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 		spatial_normalization,
 		_config.domain_size_m / float(_config.resolution),
 		7.5,
-		lerpf(_config.foam_whitecap, target_config.foam_whitecap, alpha),
+		effective_whitecap,
 		maxf(delta_s, 0.0) * lerpf(_config.foam_amount, target_config.foam_amount, alpha) * 7.5,
 		maxf(delta_s, 0.0) * maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5) * 1.15,
 		lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
@@ -263,14 +279,14 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 			crest_delta = _crest_foam_accumulator
 			_crest_foam_accumulator = fmod(_crest_foam_accumulator, crest_period)
 	if crest_update_due:
-		# Fresh whitecaps are born from current J; both inherited foam channels are
-		# advected by update_foam before that current-frame source is applied.
+		# Fresh whitecaps are born from current J; inherited history is advected, then
+		# transition-only crest support releases foam without a current host crest.
 		_rd.compute_list_bind_compute_pipeline(compute_list, _pipelines[3])
 		_rd.compute_list_bind_uniform_set(compute_list, _foam_sets[_previous_displacement_read_index * 2 + _foam_read_index], 0)
 		# update_foam receives rates per second and accumulated simulation delta; the shader
 		# applies the exponential attack/release and residual decay internally.
 		var foam_push := PackedFloat32Array([
-			lerpf(_config.foam_whitecap, target_config.foam_whitecap, alpha),
+			effective_whitecap,
 			maxf(lerpf(_config.foam_amount, target_config.foam_amount, alpha), 0.0) * 7.5,
 			lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
 			_foam_deposit_strength,
@@ -278,10 +294,12 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 			crest_delta,
 			1.0 if _foam_advection_enabled else 0.0,
 			_foam_advection_strength,
+			# update_foam Params.domain ABI: x=domain metres, y=transition alpha,
+			# z=signed target-current whitecap delta, w=transition active flag.
 			_config.domain_size_m,
 			alpha,
-			maxf(target_config.foam_whitecap - _config.foam_whitecap, 0.0),
-			0.0,
+			target_whitecap - current_whitecap,
+			1.0 if _h0_target.is_valid() else 0.0,
 		])
 		_rd.compute_list_set_push_constant(compute_list, foam_push.to_byte_array(), 48)
 		_rd.compute_list_dispatch(compute_list, foam_groups, foam_groups, 1)
