@@ -539,12 +539,6 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 		var kx_arr := cascade.kx
 		var ky_arr := cascade.ky
 		var om_arr := cascade.omega
-		var a1_arr := cascade.a1
-		var a2_arr := cascade.a2
-		var c11_arr := cascade.c11
-		var c12_arr := cascade.c12
-		var c21_arr := cascade.c21
-		var c22_arr := cascade.c22
 		var par_arr := cascade.parity
 		var w_arr := cascade.weight
 		var h0r_arr := cascade.h0_re

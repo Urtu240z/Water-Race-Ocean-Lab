@@ -203,7 +203,13 @@ func _ready() -> void:
 	var split: Dictionary = SpectrumScript.split_h0_rgba32f(long_config, h0_datas[0], coastal_split_inner_deg, coastal_split_outer_deg)
 	_coastal_energy_metrics = split["coastal_energy_metrics"]
 	_current_h0_datas = h0_datas
-	_current_render_h0_datas = [split["coastal"], split["remainder"], h0_datas[1], h0_datas[2]]
+	var render_h0: Array[PackedByteArray] = [
+		split["coastal"] as PackedByteArray,
+		split["remainder"] as PackedByteArray,
+		h0_datas[1],
+		h0_datas[2],
+	]
+	_current_render_h0_datas = render_h0
 	_cascades.append(_make_cascade(long_config, split["coastal"], "Ocean2B.LONG_COASTAL"))
 	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
 	for index in [1, 2]:
@@ -398,13 +404,19 @@ func transition_to_wave_spectrum_settings(target_configs: Array[OpenOceanFFTConf
 	if _wave_transition_active:
 		_promote_wave_transition_to_current()
 
-	var target_h0_datas := _build_h0_datas(target_configs, SimulationClock.simulation_seed)
+	var target_h0_datas: Array[PackedByteArray] = _build_h0_datas(target_configs, SimulationClock.simulation_seed)
 	var target_split := SpectrumScript.split_h0_rgba32f(
 		target_configs[0], target_h0_datas[0], coastal_split_inner_deg, coastal_split_outer_deg
 	)
 	_wave_transition_target_configs = target_configs
 	_wave_transition_target_h0_datas = target_h0_datas
-	_wave_transition_target_render_h0_datas = [target_split["coastal"], target_split["remainder"], target_h0_datas[1], target_h0_datas[2]]
+	var target_render_h0_datas: Array[PackedByteArray] = [
+		target_split["coastal"] as PackedByteArray,
+		target_split["remainder"] as PackedByteArray,
+		target_h0_datas[1],
+		target_h0_datas[2],
+	]
+	_wave_transition_target_render_h0_datas = target_render_h0_datas
 	_wave_transition_target_energy_metrics = target_split["coastal_energy_metrics"]
 	_wave_transition_duration_s = maxf(duration_seconds, 0.001)
 	_wave_transition_elapsed_s = 0.0
@@ -1406,12 +1418,17 @@ func _rebuild_h0_all(simulation_seed: int) -> void:
 		# endpoint H0 generated from the previous seed.
 		_reset_wave_transition_state()
 		_wave_transition_cancelled = true
-	var h0_datas := _build_h0_datas(configs, simulation_seed)
+	var h0_datas: Array[PackedByteArray] = _build_h0_datas(configs, simulation_seed)
 	var long_config: OpenOceanFFTConfig = configs[0]
 	var split: Dictionary = SpectrumScript.split_h0_rgba32f(long_config, h0_datas[0], coastal_split_inner_deg, coastal_split_outer_deg)
 	_coastal_energy_metrics = split["coastal_energy_metrics"]
 	_update_breaking_energy_model()
-	var render_h0 := [split["coastal"], split["remainder"], h0_datas[1], h0_datas[2]]
+	var render_h0: Array[PackedByteArray] = [
+		split["coastal"] as PackedByteArray,
+		split["remainder"] as PackedByteArray,
+		h0_datas[1],
+		h0_datas[2],
+	]
 	_current_h0_datas = h0_datas
 	_current_render_h0_datas = render_h0
 	for index in _cascades.size():
@@ -1466,8 +1483,8 @@ func _complete_wave_transition() -> void:
 
 func _promote_wave_transition_to_current() -> void:
 	var effective_configs := _interpolated_configs(configs, _wave_transition_target_configs, _wave_transition_alpha)
-	var effective_h0 := _mix_h0_datas(_current_h0_datas, _wave_transition_target_h0_datas, _wave_transition_alpha)
-	var effective_render_h0 := _mix_h0_datas(_current_render_h0_datas, _wave_transition_target_render_h0_datas, _wave_transition_alpha)
+	var effective_h0: Array[PackedByteArray] = _mix_h0_datas(_current_h0_datas, _wave_transition_target_h0_datas, _wave_transition_alpha)
+	var effective_render_h0: Array[PackedByteArray] = _mix_h0_datas(_current_render_h0_datas, _wave_transition_target_render_h0_datas, _wave_transition_alpha)
 	for index in _cascades.size():
 		var current_config := effective_configs[0] if index < 2 else effective_configs[index - 1]
 		RenderingServer.call_on_render_thread(_cascades[index].solver.replace_current_h0.bind(
