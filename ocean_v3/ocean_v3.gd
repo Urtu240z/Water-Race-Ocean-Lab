@@ -737,9 +737,9 @@ var _wave_transition_start_short_geometry := 0.25
 		_request_visual_sync()
 
 @export_category("Whitecaps Foam Debug")
-@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD", "CREST_FILIGREE_SOURCE", "CREST_FILIGREE_MASK", "CREST_FRESH_WEBBED", "CREST_RESIDUAL_WEBBED") var foam_debug_mode: int = 0:
+@export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD", "CREST_FILIGREE_SOURCE", "CREST_FILIGREE_MASK", "CREST_FRESH_WEBBED", "CREST_RESIDUAL_WEBBED", "CREST_FRESH_RAW", "CREST_RESIDUAL_RAW") var foam_debug_mode: int = 0:
 	set(value):
-		foam_debug_mode = clampi(value, 0, 13)
+		foam_debug_mode = clampi(value, 0, 15)
 		_request_visual_sync()
 
 

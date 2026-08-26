@@ -1507,13 +1507,14 @@ func foam_render_diagnostics() -> Dictionary:
 	var cascades_state: Array[Dictionary] = []
 	for cascade in _cascades:
 		var state: Dictionary = cascade.solver.diagnostic_state()
-		cascades_state.append({
-			"id": cascade.config.id,
-			"resolution": state.get("foam_resolution", 0),
-			"updates_total": state.get("crest_updates_total", 0),
-			"updates_per_second": state.get("crest_updates_per_second", 0.0),
-			"snapshots": state.get("crest_snapshot_count", 0),
-		})
+		# Preserve the solver's dispatch-derived crest transition state verbatim for
+		# the Lab HUD; this remains CPU-side instrumentation only.
+		state["id"] = cascade.config.id
+		state["resolution"] = state.get("foam_resolution", 0)
+		state["updates_total"] = state.get("crest_updates_total", 0)
+		state["updates_per_second"] = state.get("crest_updates_per_second", 0.0)
+		state["snapshots"] = state.get("crest_snapshot_count", 0)
+		cascades_state.append(state)
 	var surface_state: Dictionary = _surface_foam_solver.diagnostic_state() if _surface_foam_solver != null else {}
 	return {
 		"crest": cascades_state,

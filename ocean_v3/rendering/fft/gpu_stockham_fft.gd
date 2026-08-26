@@ -41,6 +41,17 @@ var _crest_transition_alpha := 0.0
 var _crest_effective_whitecap := 0.0
 var _crest_current_whitecap := 0.0
 var _crest_target_whitecap := 0.0
+var _crest_current_foam_enabled := false
+var _crest_target_foam_enabled := false
+var _crest_current_foam_amount := 0.0
+var _crest_effective_foam_amount := 0.0
+var _crest_target_foam_amount := 0.0
+var _crest_current_foam_decay := 0.0
+var _crest_effective_foam_decay := 0.0
+var _crest_target_foam_decay := 0.0
+var _crest_current_foam_cascade_weight := 0.0
+var _crest_effective_foam_cascade_weight := 0.0
+var _crest_target_foam_cascade_weight := 0.0
 var _crest_foam_accumulator := 0.0
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
@@ -164,6 +175,17 @@ func diagnostic_state() -> Dictionary:
 		"effective_whitecap": _crest_effective_whitecap,
 		"current_whitecap": _crest_current_whitecap,
 		"target_whitecap": _crest_target_whitecap,
+		"current_foam_enabled": _crest_current_foam_enabled,
+		"target_foam_enabled": _crest_target_foam_enabled,
+		"current_foam_amount": _crest_current_foam_amount,
+		"effective_foam_amount": _crest_effective_foam_amount,
+		"target_foam_amount": _crest_target_foam_amount,
+		"current_foam_decay": _crest_current_foam_decay,
+		"effective_foam_decay": _crest_effective_foam_decay,
+		"target_foam_decay": _crest_target_foam_decay,
+		"current_foam_cascade_weight": _crest_current_foam_cascade_weight,
+		"effective_foam_cascade_weight": _crest_effective_foam_cascade_weight,
+		"target_foam_cascade_weight": _crest_target_foam_cascade_weight,
 		"crest_snapshot_count": 2 if _foam_advection_enabled else 0,
 		"foam_gpu_bytes": _foam_resolution * _foam_resolution * 4 * 2,
 		"surface_foam_gpu_bytes": 0,
@@ -225,10 +247,33 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 	var current_whitecap: float = _config.foam_whitecap
 	var target_whitecap: float = target_config.foam_whitecap
 	var effective_whitecap: float = lerpf(current_whitecap, target_whitecap, alpha)
+	var current_foam_enabled: bool = _config.foam_enabled
+	var target_foam_enabled: bool = target_config.foam_enabled
+	var current_foam_amount: float = _config.foam_amount
+	var target_foam_amount: float = target_config.foam_amount
+	var blended_foam_amount: float = lerpf(current_foam_amount, target_foam_amount, alpha)
+	var effective_foam_amount: float = maxf(blended_foam_amount, 0.0)
+	var current_foam_decay: float = maxf(_config.foam_decay, 0.5)
+	var target_foam_decay: float = maxf(target_config.foam_decay, 0.5)
+	var effective_foam_decay: float = maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5)
+	var current_foam_cascade_weight: float = _config.foam_cascade_weight if current_foam_enabled else 0.0
+	var target_foam_cascade_weight: float = target_config.foam_cascade_weight if target_foam_enabled else 0.0
+	var effective_foam_cascade_weight: float = lerpf(current_foam_cascade_weight, target_foam_cascade_weight, alpha)
 	_crest_transition_alpha = alpha
 	_crest_current_whitecap = current_whitecap
 	_crest_target_whitecap = target_whitecap
 	_crest_effective_whitecap = effective_whitecap
+	_crest_current_foam_enabled = current_foam_enabled
+	_crest_target_foam_enabled = target_foam_enabled
+	_crest_current_foam_amount = current_foam_amount
+	_crest_effective_foam_amount = effective_foam_amount
+	_crest_target_foam_amount = target_foam_amount
+	_crest_current_foam_decay = current_foam_decay
+	_crest_effective_foam_decay = effective_foam_decay
+	_crest_target_foam_decay = target_foam_decay
+	_crest_current_foam_cascade_weight = current_foam_cascade_weight
+	_crest_effective_foam_cascade_weight = effective_foam_cascade_weight
+	_crest_target_foam_cascade_weight = target_foam_cascade_weight
 	var evolution_depth_or_choppiness := lerpf(_config.choppiness, target_config.choppiness, alpha)
 	var evolve_push := PackedFloat32Array([render_time, _config.gravity_mps2, evolution_depth_or_choppiness, _config.domain_size_m, alpha])
 	_rd.compute_list_set_push_constant(compute_list, evolve_push.to_byte_array(), 20)
@@ -260,9 +305,9 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 		_config.domain_size_m / float(_config.resolution),
 		7.5,
 		effective_whitecap,
-		maxf(delta_s, 0.0) * lerpf(_config.foam_amount, target_config.foam_amount, alpha) * 7.5,
-		maxf(delta_s, 0.0) * maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5) * 1.15,
-		lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
+		maxf(delta_s, 0.0) * blended_foam_amount * 7.5,
+		maxf(delta_s, 0.0) * effective_foam_decay * 1.15,
+		effective_foam_cascade_weight,
 	])
 	_rd.compute_list_set_push_constant(compute_list, assemble_push.to_byte_array(), 32)
 	_rd.compute_list_dispatch(compute_list, groups, groups, 1)
@@ -271,7 +316,7 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 	var foam_groups = ceili(float(_foam_resolution) / 8.0)
 	var crest_update_due := false
 	var crest_delta := 0.0
-	if (_config.foam_enabled or target_config.foam_enabled) and _crest_foam_compute_enabled:
+	if (current_foam_enabled or target_foam_enabled) and _crest_foam_compute_enabled:
 		_crest_foam_accumulator += maxf(delta_s, 0.0)
 		var crest_period := 1.0 / _crest_foam_update_hz
 		if _crest_foam_accumulator >= crest_period:
@@ -287,10 +332,10 @@ func dispatch(render_time: float, delta_s: float = 0.0, transition_alpha := 0.0)
 		# applies the exponential attack/release and residual decay internally.
 		var foam_push := PackedFloat32Array([
 			effective_whitecap,
-			maxf(lerpf(_config.foam_amount, target_config.foam_amount, alpha), 0.0) * 7.5,
-			lerpf(_config.foam_cascade_weight if _config.foam_enabled else 0.0, target_config.foam_cascade_weight if target_config.foam_enabled else 0.0, alpha),
+			effective_foam_amount * 7.5,
+			effective_foam_cascade_weight,
 			_foam_deposit_strength,
-			maxf(lerpf(_config.foam_decay, target_config.foam_decay, alpha), 0.5) * 1.15 * _foam_residual_decay_multiplier,
+			effective_foam_decay * 1.15 * _foam_residual_decay_multiplier,
 			crest_delta,
 			1.0 if _foam_advection_enabled else 0.0,
 			_foam_advection_strength,

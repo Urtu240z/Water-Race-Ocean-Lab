@@ -217,7 +217,8 @@ uniform float foam_detail_contribution : hint_range(0.0, 1.0, 0.01) = 0.35;
 // 4 SURFACE_FINAL, 5 SURFACE_DIRECT_RAW, 6 SURFACE_DEPERIODIZED_RAW,
 // 7 SURFACE_PLUS_CREST, 8 FOAM_NORMAL, 9 SURFACE_MID_FOLD,
 // 10 CREST_FILIGREE_SOURCE, 11 CREST_FILIGREE_MASK,
-// 12 CREST_FRESH_WEBBED, 13 CREST_RESIDUAL_WEBBED.
+// 12 CREST_FRESH_WEBBED, 13 CREST_RESIDUAL_WEBBED,
+// 14 CREST_FRESH_RAW, 15 CREST_RESIDUAL_RAW.
 uniform int foam_debug_mode = 0;
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
@@ -1213,6 +1214,10 @@ void fragment() {
 		color = vec3(crest_fresh_webbed);
 	} else if (foam_debug_mode == 13) {
 		color = vec3(crest_residual_webbed);
+	} else if (foam_debug_mode == 14) {
+		color = vec3(raw_foam_channels.g);
+	} else if (foam_debug_mode == 15) {
+		color = vec3(raw_foam_channels.r);
 	}
 
 	bool unlit = foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

@@ -56,6 +56,7 @@ func _process(_delta: float) -> void:
 		],
 		fft_line,
 		_foam_line(fft_module),
+		_crest_transition_lines(fft_module),
 		_foam_debug_line(fft_module),
 		_breaker_line(fft_module),
 		"Clipmap: ON | Levels: %d | Near spacing: %.2f m | Extent: %.0f m | Triangles: %d" % [
@@ -119,7 +120,53 @@ func _foam_debug_name(mode: int) -> String:
 			return "SURFACE_PLUS_CREST"
 		11:
 			return "FILIGREE"
+		14:
+			return "CREST_FRESH_RAW"
+		15:
+			return "CREST_RESIDUAL_RAW"
 	return "OFF"
+
+
+func _crest_transition_lines(fft_module) -> String:
+	if fft_module == null or not fft_module.has_method(&"foam_render_diagnostics"):
+		return "Crest transition: unavailable"
+	var diagnostics: Dictionary = fft_module.foam_render_diagnostics()
+	var cascades: Array = diagnostics.get("crest", [])
+	var transition_active := false
+	for cascade in cascades:
+		if bool(cascade.get("h0_transition_active", false)):
+			transition_active = true
+			break
+	if not transition_active:
+		return "Crest transition: inactive"
+
+	var lines: PackedStringArray = []
+	for cascade in cascades:
+		lines.append("CREST %s" % cascade.get("id", "?"))
+		lines.append("H0Target %s | a %.2f | Enabled %s/%s | %.1f Hz" % [
+			"YES" if bool(cascade.get("h0_transition_active", false)) else "NO",
+			float(cascade.get("crest_transition_alpha", 0.0)),
+			"YES" if bool(cascade.get("current_foam_enabled", false)) else "NO",
+			"YES" if bool(cascade.get("target_foam_enabled", false)) else "NO",
+			float(cascade.get("crest_updates_per_second", 0.0)),
+		])
+		lines.append("W %.3f > %.3f > %.3f | Amt %.3f > %.3f > %.3f" % [
+			float(cascade.get("current_whitecap", 0.0)),
+			float(cascade.get("effective_whitecap", 0.0)),
+			float(cascade.get("target_whitecap", 0.0)),
+			float(cascade.get("current_foam_amount", 0.0)),
+			float(cascade.get("effective_foam_amount", 0.0)),
+			float(cascade.get("target_foam_amount", 0.0)),
+		])
+		lines.append("Decay %.3f > %.3f > %.3f | Weight %.3f > %.3f > %.3f" % [
+			float(cascade.get("current_foam_decay", 0.0)),
+			float(cascade.get("effective_foam_decay", 0.0)),
+			float(cascade.get("target_foam_decay", 0.0)),
+			float(cascade.get("current_foam_cascade_weight", 0.0)),
+			float(cascade.get("effective_foam_cascade_weight", 0.0)),
+			float(cascade.get("target_foam_cascade_weight", 0.0)),
+		])
+	return "\n".join(lines)
 
 
 func _breaker_line(fft_module) -> String:

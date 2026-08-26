@@ -3,7 +3,7 @@ extends Node3D
 const CALM_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/calm.tres")
 const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/race.tres")
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
-const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11]
+const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
