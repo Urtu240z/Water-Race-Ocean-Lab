@@ -107,7 +107,7 @@ func _update_preview_mode() -> void:
 		preview.mode = _debug_mode_for_preview()
 
 
-func _debug_mode_for_preview() -> int:
+func _debug_mode_for_preview() -> BathymetryDebug.Mode:
 	match preview_mode:
 		PreviewMode.DEPTH:
 			return BathymetryDebug.Mode.DEPTH
