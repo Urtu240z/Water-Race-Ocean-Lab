@@ -10,8 +10,8 @@ var incoming_direction_xz := Vector2.RIGHT
 var reference_wavelength_m := 16.0
 var gravity_mps2 := 9.81
 var min_valid_depth_m := 0.25
-var max_sweeps := 96
-var convergence_tolerance_s := 1.0e-6
+var max_sweep_cycles := 16
+var convergence_tolerance_s := 1.0e-4
 var shadow_min_scale := 0.15
 var shadow_occlusion_entry_scale := 0.70
 var shadow_detour_length_m := 32.0
@@ -20,6 +20,9 @@ var last_base_metrics_ms := 0.0
 var last_eikonal_sweep_ms := 0.0
 var last_phase_populate_ms := 0.0
 var last_shadow_ms := 0.0
+var last_cycles_used := 0
+var last_directional_sweeps_used := 0
+var last_final_max_change := 0.0
 
 
 func bake():
@@ -88,16 +91,26 @@ func _is_upstream_boundary(output, x: int, z: int, direction: Vector2) -> bool:
 
 
 func _sweep_travel_time(output, travel_time: PackedFloat32Array, fixed: PackedByteArray) -> void:
-	var sweep_count := 0
-	for _iteration in max_sweeps:
+	var cycle_count := 0
+	var directional_sweep_count := 0
+	var final_max_change := INF
+	for _iteration in max_sweep_cycles:
 		var max_change := 0.0
 		for sx in [-1, 1]:
 			for sz in [-1, 1]:
 				max_change = maxf(max_change, _sweep_once(output, travel_time, fixed, sx, sz))
-		sweep_count += 4
+		directional_sweep_count += 4
+		cycle_count += 1
+		final_max_change = max_change
 		if max_change <= convergence_tolerance_s:
 			break
-	output.eikonal_sweeps = sweep_count
+	output.eikonal_sweeps = directional_sweep_count
+	output.eikonal_cycles = cycle_count
+	output.eikonal_directional_sweeps = directional_sweep_count
+	output.eikonal_final_max_change_s = final_max_change
+	last_cycles_used = cycle_count
+	last_directional_sweeps_used = directional_sweep_count
+	last_final_max_change = final_max_change
 
 
 func _sweep_once(output, travel_time: PackedFloat32Array, fixed: PackedByteArray, sx: int, sz: int) -> float:

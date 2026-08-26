@@ -73,16 +73,17 @@ offset tras un banco. El shader aplica exactamente
 el modo mono valida que `k_local = k0 + d(phase_offset)/ds`, por tanto las
 crestas se comprimen donde sube `k`.
 
-El sweep cuesta `O(N log N)` por el orden determinista y no afecta el coste
-por frame. Un orden por buckets podría justificar optimización posterior si
-los bakes de producción lo necesitan, pero no es necesario para 3B.
+El solve Fast Sweeping usa como máximo 16 ciclos de cuatro barridos
+direccionales (64 barridos direccionales), con tolerancia de convergencia
+`1e-4 s`; el resultado registra ciclos usados, barridos direccionales y cambio
+máximo final. El bake es offline y no afecta al coste por frame.
 
 En 3B.1, las celdas de agua válidas y finitas conservan `reached_mask` aunque
 la línea directa quede bloqueada por tierra. `shadow_scale` vale 1 en línea de
 vista, y en oclusión usa `0.70 * exp(-detour / 32 m)`, acotado por 0.15 y
-suavizado en dos pasadas sobre vecinos 4-conectados alcanzados. La ruta se
-reconstruye en orden creciente de `travel_time`; no difunde por LAND ni por
-agua no alcanzada. Straight Baker inicializa el campo a 1 en agua y 0 en
+suavizado en dos pasadas sobre vecinos 4-conectados alcanzados. El campo de
+tiempo se resuelve con Fast Sweeping; la visibilidad no difunde por LAND ni
+por agua no alcanzada. Straight Baker inicializa el campo a 1 en agua y 0 en
 LAND; samples de recursos legacy sin el array aplican el mismo fallback.
 
 ## Visualización y debug
@@ -96,11 +97,17 @@ LAND; samples de recursos legacy sin el array aplican el mismo fallback.
 - `set_coastal_debug_field()` para DEPTH, WAVELENGTH, PHASE_SPEED,
   GROUP_VELOCITY, SHOALING y PHASE_OFFSET.
 - `CoastalEikonalDebug` es un overlay aislado CPU con modos `REACHED`,
-  `LOCAL_DIRECTION` y `SHADOW_SCALE`; no toca shaders ni el render final.
+  `LOCAL_DIRECTION` y `SHADOW_SCALE`; no toca shaders ni el render final. Su
+  geometría es siempre un único `PlaneMesh` horizontal de dos triángulos y una
+  `ImageTexture` RGBA8 de un píxel por celda; cambiar el modo sólo regenera esa
+  textura.
 - `CoastalEikonalPreviewBaker` es tooling `@tool` reutilizable: se asigna el
   `BathymetryBaker` existente, `BAKE COASTAL PREVIEW` ejecuta el bake real de
-  bathymetry y el solve Eikonal en memoria, y `CLEAR PREVIEW` elimina sólo su
-  overlay temporal. Cambiar `Preview Mode` reconstruye únicamente el debug.
+  bathymetry en el hilo principal y el solve Eikonal CPU en un worker, y
+  `CLEAR PREVIEW` elimina sólo su overlay temporal. Cambiar `Preview Mode`
+  reconstruye únicamente la textura debug. Sus estados son `IDLE`, `BAKING
+  BATHYMETRY`, `SOLVING EIKONAL`, `BUILDING DEBUG`, `DONE` y `ERROR`; bloquea
+  un segundo bake y espera el worker al salir del árbol.
   El overlay usa `BathymetryData.sea_level_y + preview_vertical_offset_m`.
 
 `CoastalEikonalBaker` consume `CoastalPropagationBaker.bake_base_fields()`:
@@ -108,7 +115,8 @@ reutiliza una única implementación de dispersión/metrics, pero evita la fase
 rectilínea y su ordenamiento completo. La visibilidad incidente y la distancia
 ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
 `sort_custom` del grid. El preview imprime tiempos de bathymetry, metrics,
-sweep Eikonal, fase, shadow, debug mesh y total.
+sweep Eikonal, fase, shadow, debug mesh y total, además de ciclos y cambio
+final.
 
 En modo normal LONG conserva el FFT y se desplaza/multiplica de forma
 coherente. Las normales LONG se escalan con el desplazamiento de muestra; la
@@ -128,7 +136,13 @@ aproximación explícita en 3B, no una normal costeña final.
 
 `tests/phase_3b_1_eikonal_validation.gd` cubre agua plana (shadow neutro),
 un obstáculo aislado, dos islas con canal, agua leeward alcanzada, giro de
-dirección local, sombra suave y determinismo del solve.
+dirección local, sombra suave, comparación con solve estricto y determinismo
+del solve. También valida grids 512×512 y 1024×1024 y que el debug conserve
+dos triángulos, no una malla por celda.
+
+`tests/phase_3b_coastal_preview_validation.gd` cubre la máquina de estados,
+worker, doble bake bloqueado, cierre durante solve, rebake, eliminación
+selectiva del overlay y cambio de modo sin rebake.
 
 `lab/benchmark/phase_3b_coastal_propagation_benchmark.gd` mide build, sample
 CPU y submit de texturas. No crea dispatches extra ni readbacks: OFF y ON

@@ -3,6 +3,7 @@ extends SceneTree
 
 const BathymetryDataScript := preload("res://ocean_v3/bathymetry/bathymetry_data.gd")
 const EikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
+const DebugScript := preload("res://ocean_v3/coastal/coastal_eikonal_debug.gd")
 
 var _failures := 0
 
@@ -13,6 +14,7 @@ func _initialize() -> void:
 	_validate_bank_and_determinism()
 	_validate_island_shadow()
 	_validate_two_island_channel()
+	_validate_convergence_quality()
 	_validate_visibility_sweep()
 	_validate_large_grid_scaling()
 	_validate_eikonal_path_complexity()
@@ -38,7 +40,7 @@ func _validate_flat_plane() -> void:
 			var gradient_k := Vector2(propagation.phase_gradient_x[index], propagation.phase_gradient_z[index]).length()
 			max_k_error = maxf(max_k_error, absf(gradient_k - propagation.local_k[index]))
 			max_shadow_error = maxf(max_shadow_error, absf(propagation.shadow_scale[index] - 1.0))
-	print("3B.1 FLAT max_angle_deg=%.6f max_k_error=%.8f max_shadow_error=%.8f residual=%.8f sweeps=%d" % [max_angle_deg, max_k_error, max_shadow_error, propagation.eikonal_max_residual_rad_m, propagation.eikonal_sweeps])
+	print("3B.1 FLAT max_angle_deg=%.6f max_k_error=%.8f max_shadow_error=%.8f residual=%.8f cycles=%d directional_sweeps=%d final_change=%.8f" % [max_angle_deg, max_k_error, max_shadow_error, propagation.eikonal_max_residual_rad_m, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(max_angle_deg < 0.25, "flat: dirección local coincide con incoming")
 	_check(max_k_error < 1.0e-4, "flat: |grad(phi)| coincide con k")
 	_check(max_shadow_error < 1.0e-6, "flat: shadow_scale neutral")
@@ -90,7 +92,7 @@ func _validate_bank_and_determinism() -> void:
 		var local_direction := Vector2(first.local_direction_x[index], first.local_direction_z[index])
 		max_angle_deg = maxf(max_angle_deg, rad_to_deg(acos(clampf(local_direction.dot(direction), -1.0, 1.0))))
 		max_residual = maxf(max_residual, absf(Vector2(first.phase_gradient_x[index], first.phase_gradient_z[index]).length() - first.local_k[index]))
-	print("3B.1 BANK max_angle_deg=%.4f max_residual=%.6f reached=%d/%d sweeps=%d" % [max_angle_deg, max_residual, reached, first.width * first.height, first.eikonal_sweeps])
+	print("3B.1 BANK max_angle_deg=%.4f max_residual=%.6f reached=%d/%d cycles=%d directional_sweeps=%d final_change=%.8f" % [max_angle_deg, max_residual, reached, first.width * first.height, first.eikonal_cycles, first.eikonal_directional_sweeps, first.eikonal_final_max_change_s])
 	_check(max_angle_deg > 1.0, "bank: dirección local curva físicamente")
 	_check(max_residual < 0.12, "bank: residual Eikonal acotado a resolución de grid")
 	_check(first.phase_rad == second.phase_rad and first.local_direction_x == second.local_direction_x and first.reached_mask == second.reached_mask, "bank: solve determinista")
@@ -130,7 +132,7 @@ func _validate_two_island_channel() -> void:
 	var channel: int = 40 * propagation.width + 78
 	var lower_lee: int = 48 * propagation.width + 78
 	var open: int = 12 * propagation.width + 78
-	print("3B.1 CHANNEL upper_reached=%d upper_scale=%.4f channel_reached=%d channel_scale=%.4f lower_reached=%d lower_scale=%.4f open_scale=%.4f" % [propagation.reached_mask[upper_lee], propagation.shadow_scale[upper_lee], propagation.reached_mask[channel], propagation.shadow_scale[channel], propagation.reached_mask[lower_lee], propagation.shadow_scale[lower_lee], propagation.shadow_scale[open]])
+	print("3B.1 CHANNEL upper_reached=%d upper_scale=%.4f channel_reached=%d channel_scale=%.4f lower_reached=%d lower_scale=%.4f open_scale=%.4f cycles=%d directional_sweeps=%d final_change=%.8f" % [propagation.reached_mask[upper_lee], propagation.shadow_scale[upper_lee], propagation.reached_mask[channel], propagation.shadow_scale[channel], propagation.reached_mask[lower_lee], propagation.shadow_scale[lower_lee], propagation.shadow_scale[open], propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s])
 	_check(propagation.reached_mask[upper_lee] != 0 and propagation.reached_mask[lower_lee] != 0, "channel: ambos leewards alcanzados")
 	_check(propagation.reached_mask[channel] != 0, "channel: paso entre islas alcanzado")
 	_check(propagation.shadow_scale[channel] > propagation.shadow_scale[upper_lee] and propagation.shadow_scale[channel] > propagation.shadow_scale[lower_lee], "channel: canal conserva más luz que los leewards")
@@ -155,6 +157,35 @@ func _validate_visibility_sweep() -> void:
 	_check(visibility[lee_index] < 0.01 and visibility[open_index] > 0.99, "visibility: isla bloquea lee pero conserva agua abierta")
 
 
+func _validate_convergence_quality() -> void:
+	var data = _make_data(61, 41, func(x: int, z: int) -> float:
+		var dx := float(x - 30)
+		var dz := float(z - 20)
+		return -1.0 if dx * dx + dz * dz < 7.0 * 7.0 else 18.0)
+	var direction := Vector2(1.0, 0.65).normalized()
+	var fast = _bake_with_settings(data, direction, 16, 1.0e-4)
+	var strict = _bake_with_settings(data, direction, 96, 1.0e-6)
+	var max_phase_error := 0.0
+	var max_direction_error_deg := 0.0
+	var max_shadow_error := 0.0
+	var reached_mismatch := 0
+	for index in fast.width * fast.height:
+		if fast.valid_mask[index] == 0:
+			continue
+		if fast.reached_mask[index] != strict.reached_mask[index]:
+			reached_mismatch += 1
+		if fast.reached_mask[index] == 0 or strict.reached_mask[index] == 0:
+			continue
+		max_phase_error = maxf(max_phase_error, absf(fast.phase_rad[index] - strict.phase_rad[index]))
+		var fast_direction := Vector2(fast.local_direction_x[index], fast.local_direction_z[index])
+		var strict_direction := Vector2(strict.local_direction_x[index], strict.local_direction_z[index])
+		max_direction_error_deg = maxf(max_direction_error_deg, rad_to_deg(acos(clampf(fast_direction.dot(strict_direction), -1.0, 1.0))))
+		max_shadow_error = maxf(max_shadow_error, absf(fast.shadow_scale[index] - strict.shadow_scale[index]))
+	print("3B.1 STRICT_COMPARE fast_cycles=%d strict_cycles=%d phase_error=%.8f direction_error_deg=%.6f shadow_error=%.8f reached_mismatch=%d" % [fast.eikonal_cycles, strict.eikonal_cycles, max_phase_error, max_direction_error_deg, max_shadow_error, reached_mismatch])
+	_check(reached_mismatch == 0, "quality: fast/strict conserva reached")
+	_check(max_phase_error < 0.05 and max_direction_error_deg < 2.0 and max_shadow_error < 0.10, "quality: error frente a solve estricto acotado")
+
+
 func _visibility_mismatch(baker, data, direction: Vector2) -> int:
 	var propagation = _bake(data, direction)
 	var visibility: PackedFloat32Array = baker._build_incident_visibility_field(propagation, direction)
@@ -171,24 +202,33 @@ func _visibility_mismatch(baker, data, direction: Vector2) -> int:
 
 
 func _validate_large_grid_scaling() -> void:
-	var start := Time.get_ticks_usec()
-	var baker = EikonalBakerScript.new()
-	baker.bathymetry_data = _make_data(512, 512, func(_x: int, _z: int) -> float: return 18.0)
-	baker.incoming_direction_xz = Vector2.RIGHT
-	baker.reference_wavelength_m = 16.0
-	baker.min_valid_depth_m = 0.25
-	var propagation = baker.bake()
-	var elapsed_ms := float(Time.get_ticks_usec() - start) / 1000.0
-	if propagation == null:
-		_check(false, "large: grid 512x512 completa con data válida")
-		return
-	var reached := 0
-	for index in propagation.width * propagation.height:
-		if propagation.reached_mask[index] != 0:
-			reached += 1
-	print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, reached])
-	_check(propagation.is_valid(), "large: grid 512x512 completa con data válida")
-	_check(reached == 512 * 512, "large: flat water reached completo")
+	for resolution in [512, 1024]:
+		var start := Time.get_ticks_usec()
+		var baker = EikonalBakerScript.new()
+		baker.bathymetry_data = _make_data(resolution, resolution, func(_x: int, _z: int) -> float: return 18.0)
+		baker.incoming_direction_xz = Vector2.RIGHT
+		baker.reference_wavelength_m = 16.0
+		baker.min_valid_depth_m = 0.25
+		var propagation = baker.bake()
+		var elapsed_ms := float(Time.get_ticks_usec() - start) / 1000.0
+		if propagation == null:
+			_check(false, "large: grid %dx%d completa con data válida" % [resolution, resolution])
+			continue
+		var reached := 0
+		for index in propagation.width * propagation.height:
+			if propagation.reached_mask[index] != 0:
+				reached += 1
+		var debug := DebugScript.new()
+		get_root().add_child(debug)
+		var debug_start := Time.get_ticks_usec()
+		debug.data = propagation
+		var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
+		var plane := debug.mesh as PlaneMesh
+		print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f debug_texture=%.3f triangles=%d cycles=%d directional_sweeps=%d final_change=%.8f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, debug_ms, debug.last_debug_triangle_count, propagation.eikonal_cycles, propagation.eikonal_directional_sweeps, propagation.eikonal_final_max_change_s, reached])
+		_check(propagation.is_valid(), "large: grid %dx%d completa con data válida" % [resolution, resolution])
+		_check(reached == resolution * resolution, "large: flat water %dx%d reached completo" % [resolution, resolution])
+		_check(plane != null and debug.last_debug_triangle_count == 2 and plane.size == Vector2(resolution - 1, resolution - 1), "large: debug %dx%d es un plano de dos triángulos" % [resolution, resolution])
+		debug.free()
 
 
 func _validate_eikonal_path_complexity() -> void:
@@ -216,11 +256,17 @@ func _make_data(width: int, height: int, depth_fn: Callable):
 
 
 func _bake(data, direction: Vector2):
+	return _bake_with_settings(data, direction, 16, 1.0e-4)
+
+
+func _bake_with_settings(data, direction: Vector2, max_cycles: int, tolerance: float):
 	var baker = EikonalBakerScript.new()
 	baker.bathymetry_data = data
 	baker.incoming_direction_xz = direction
 	baker.reference_wavelength_m = 16.0
 	baker.min_valid_depth_m = 0.25
+	baker.max_sweep_cycles = max_cycles
+	baker.convergence_tolerance_s = tolerance
 	return baker.bake()
 
 

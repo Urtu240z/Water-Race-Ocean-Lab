@@ -15,6 +15,9 @@ const SampleScript := preload("res://ocean_v3/coastal/coastal_propagation_sample
 @export var min_valid_depth_m := 0.25
 @export var propagation_kind := 0 # 0 STRAIGHT_3B, 1 EIKONAL_2D_3B1.
 @export var eikonal_sweeps := 0
+@export var eikonal_cycles := 0
+@export var eikonal_directional_sweeps := 0
+@export var eikonal_final_max_change_s := 0.0
 @export var eikonal_max_residual_rad_m := 0.0
 
 @export_storage var depth_m := PackedFloat32Array()
