@@ -156,6 +156,7 @@ var _next_active_crest_tracking_time := 0.0
 var _active_tracking_queries_last_tick := 0
 var _active_tracking_points_last_tick := 0
 var _skip_next_structural_energy_update := false
+var _diagnostic_visible := true
 
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
@@ -191,12 +192,22 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 	_ensure_material()
 	set_energy_model(long_hs_m, coastal_fraction)
 	_sync_uniforms()
-	visible = true
+	visible = _diagnostic_visible
 
 
 func set_query_source(callable: Callable) -> void:
 	## 4C-S4: Callable batch de OceanQuery (sample_water_batch_at_time del módulo).
 	_query_batch = callable
+
+
+func set_diagnostic_visible(value: bool) -> void:
+	## Instrumentación del Lab: sólo oculta el Node3D; no altera pool ni scheduler.
+	_diagnostic_visible = value
+	visible = _diagnostic_visible and _propagation != null and _propagation.is_valid()
+
+
+func diagnostic_visible() -> bool:
+	return _diagnostic_visible
 
 
 func set_energy_model(long_hs_m: float, coastal_fraction: float) -> void:

@@ -1086,6 +1086,15 @@ func set_breakers_enabled(enabled: bool) -> void:
 	_configure_breaker_pool()
 
 
+func toggle_breaker_ribbons_diagnostic_visibility() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_diagnostic_visible(not _breaker_pool.diagnostic_visible())
+
+
+func breaker_ribbons_diagnostic_visible() -> bool:
+	return _breaker_pool != null and _breaker_pool.diagnostic_visible()
+
+
 func set_breaker_debug(mode: int) -> void:
 	if _breaker_pool != null:
 		_breaker_pool.set_debug_mode(mode)

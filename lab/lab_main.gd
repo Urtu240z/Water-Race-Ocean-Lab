@@ -3,6 +3,7 @@ extends Node3D
 const CALM_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/calm.tres")
 const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/race.tres")
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
+const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11]
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -13,13 +14,15 @@ const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves
 
 var _using_race_camera := false
 var _query_probe_tool: Node3D
+var _foam_debug_index := 0
 
 
 func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo | F1: HUD"
+	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
+	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F1: HUD\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -76,6 +79,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_Y:
 			if _query_probe_tool:
 				_query_probe_tool.call("toggle_snapshot")
+		KEY_F2:
+			var fft_module_breakers := get_tree().get_first_node_in_group(&"ocean_fft")
+			if fft_module_breakers and fft_module_breakers.has_method(&"toggle_breaker_ribbons_diagnostic_visibility"):
+				fft_module_breakers.call(&"toggle_breaker_ribbons_diagnostic_visibility")
+		KEY_F3:
+			_foam_debug_index = (_foam_debug_index + 1) % FOAM_DEBUG_MODES.size()
+			ocean_v3.foam_debug_mode = FOAM_DEBUG_MODES[_foam_debug_index]
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET

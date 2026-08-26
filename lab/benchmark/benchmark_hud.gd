@@ -56,6 +56,8 @@ func _process(_delta: float) -> void:
 		],
 		fft_line,
 		_foam_line(fft_module),
+		_foam_debug_line(fft_module),
+		_breaker_line(fft_module),
 		"Clipmap: ON | Levels: %d | Near spacing: %.2f m | Extent: %.0f m | Triangles: %d" % [
 			fft_module.clipmap_level_count() if fft_module else 0,
 			fft_module.clipmap_near_spacing_m() if fft_module else 0.0,
@@ -95,6 +97,45 @@ func _foam_line(fft_module) -> String:
 		surface.get("passes_per_second", 0.0),
 		diagnostics.get("surface_fft_resolution", 0),
 		diagnostics.get("surface_field_resolution", 0),
+	]
+
+
+func _foam_debug_line(fft_module) -> String:
+	if fft_module == null:
+		return "Foam Debug: unavailable"
+	var ocean_v3: Node = fft_module.get_parent()
+	if ocean_v3 == null:
+		return "Foam Debug: unavailable"
+	return "Foam Debug: %s" % _foam_debug_name(int(ocean_v3.get("foam_debug_mode")))
+
+
+func _foam_debug_name(mode: int) -> String:
+	match mode:
+		1:
+			return "CREST_FINAL"
+		4:
+			return "SURFACE_FINAL"
+		7:
+			return "SURFACE_PLUS_CREST"
+		11:
+			return "FILIGREE"
+	return "OFF"
+
+
+func _breaker_line(fft_module) -> String:
+	if fft_module == null or not fft_module.has_method(&"breaker_pool_summary"):
+		return "Breaker Ribbons: unavailable"
+	var diagnostics: Dictionary = fft_module.breaker_pool_summary()
+	if diagnostics.is_empty():
+		return "Breaker Ribbons: unavailable"
+	return "Breaker Ribbons: %s | Breakers: TRANS %s %.2f | anchors %d | active %d | track %d/%d" % [
+		"ON" if fft_module.breaker_ribbons_diagnostic_visible() else "OFF",
+		"ON" if bool(diagnostics.get("transition_active", false)) else "OFF",
+		float(diagnostics.get("transition_alpha", 0.0)),
+		int(diagnostics.get("transition_anchor_count", diagnostics.get("slots", 0))),
+		int(diagnostics.get("active_breaker_count", 0)),
+		int(diagnostics.get("active_tracking_queries_last_tick", 0)),
+		int(diagnostics.get("active_tracking_points_last_tick", 0)),
 	]
 
 
