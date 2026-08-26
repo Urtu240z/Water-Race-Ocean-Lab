@@ -12,7 +12,7 @@ var gravity_mps2 := 9.81
 var min_valid_depth_m := 0.25
 
 
-func bake():
+func bake_base_fields():
 	if bathymetry_data == null or not bathymetry_data.is_valid():
 		push_error("CoastalPropagationBaker requiere BathymetryData válido.")
 		return null
@@ -59,14 +59,25 @@ func bake():
 			output.group_velocity_mps[index] = cg_deep
 			output.shoaling_scale[index] = 1.0
 			continue
-		var properties: Dictionary = MathScript.solve_properties(output.omega_ref_rad_s, depth, gravity_mps2)
-		output.local_k[index] = properties["local_k"]
-		output.wavelength_m[index] = properties["wavelength_m"]
-		output.phase_speed_mps[index] = properties["phase_speed_mps"]
-		output.group_velocity_mps[index] = properties["group_velocity_mps"]
+		# Igual matemática que solve_properties(), sin crear un Dictionary por
+		# nodo durante grids grandes. La única implementación numérica sigue en
+		# FiniteDepthWaveMath.
+		var local_k: float = MathScript.solve_wavenumber(output.omega_ref_rad_s, depth, gravity_mps2)
+		output.local_k[index] = local_k
+		output.wavelength_m[index] = MathScript.wavelength(local_k)
+		output.phase_speed_mps[index] = MathScript.phase_speed(output.omega_ref_rad_s, local_k)
+		output.group_velocity_mps[index] = MathScript.group_velocity(output.omega_ref_rad_s, local_k, depth)
 		# Conservación de flujo de energía lineal. El clamp evita una reducción
 		# visual marginal en profundidades intermedias y conserva deep≈1.
 		output.shoaling_scale[index] = maxf(1.0, sqrt(cg_deep / maxf(output.group_velocity_mps[index], 1.0e-6)))
+	return output
+
+
+func bake():
+	var output = bake_base_fields()
+	if output == null:
+		return null
+	var direction: Vector2 = output.incoming_direction_xz
 	_integrate_straight_ray_phase(output, direction)
 	_populate_straight_phase_fields(output, direction)
 	return output

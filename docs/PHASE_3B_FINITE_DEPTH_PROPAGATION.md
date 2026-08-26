@@ -103,6 +103,13 @@ LAND; samples de recursos legacy sin el array aplican el mismo fallback.
   overlay temporal. Cambiar `Preview Mode` reconstruye únicamente el debug.
   El overlay usa `BathymetryData.sea_level_y + preview_vertical_offset_m`.
 
+`CoastalEikonalBaker` consume `CoastalPropagationBaker.bake_base_fields()`:
+reutiliza una única implementación de dispersión/metrics, pero evita la fase
+rectilínea y su ordenamiento completo. La visibilidad incidente y la distancia
+ocludida se construyen con sweeps direccionales O(N), sin raymarch por celda ni
+`sort_custom` del grid. El preview imprime tiempos de bathymetry, metrics,
+sweep Eikonal, fase, shadow, debug mesh y total.
+
 En modo normal LONG conserva el FFT y se desplaza/multiplica de forma
 coherente. Las normales LONG se escalan con el desplazamiento de muestra; la
 regla de cadena completa para un `phase_offset` espacialmente variable es una

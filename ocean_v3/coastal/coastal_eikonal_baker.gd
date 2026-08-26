@@ -16,6 +16,10 @@ var shadow_min_scale := 0.15
 var shadow_occlusion_entry_scale := 0.70
 var shadow_detour_length_m := 32.0
 var shadow_smoothing_passes := 2
+var last_base_metrics_ms := 0.0
+var last_eikonal_sweep_ms := 0.0
+var last_phase_populate_ms := 0.0
+var last_shadow_ms := 0.0
 
 
 func bake():
@@ -23,23 +27,34 @@ func bake():
 	if bathymetry_data == null or not bathymetry_data.is_valid() or direction.length_squared() <= 1.0e-8:
 		push_error("CoastalEikonalBaker requiere BathymetryData y dirección válidos.")
 		return null
-	# Reutiliza exactamente la dispersión, Cg y shoaling de 3B. Sólo sustituye
-	# el campo de fase longitudinal por un solve eikonal bidimensional.
+	# Reutiliza exactamente la dispersión, Cg y shoaling de 3B, pero no paga la
+	# integración de fase rectilínea que el solve Eikonal sustituirá.
 	var straight = StraightBakerScript.new()
 	straight.bathymetry_data = bathymetry_data
 	straight.incoming_direction_xz = direction
 	straight.reference_wavelength_m = reference_wavelength_m
 	straight.gravity_mps2 = gravity_mps2
 	straight.min_valid_depth_m = min_valid_depth_m
-	var output = straight.bake()
+	print("COASTAL PREVIEW: computing base metrics...")
+	var base_start := Time.get_ticks_usec()
+	var output = straight.bake_base_fields()
+	last_base_metrics_ms = float(Time.get_ticks_usec() - base_start) / 1000.0
 	if output == null:
 		return null
 	output.propagation_kind = 1
 	var travel_time := _initialize_travel_time(output, direction)
 	var fixed := _build_upstream_boundary(output, travel_time, direction)
+	print("COASTAL PREVIEW: solving eikonal...")
+	var sweep_start := Time.get_ticks_usec()
 	_sweep_travel_time(output, travel_time, fixed)
+	last_eikonal_sweep_ms = float(Time.get_ticks_usec() - sweep_start) / 1000.0
+	var phase_start := Time.get_ticks_usec()
 	_populate_phase_fields(output, travel_time, direction)
-	_build_shadow_scale(output, travel_time, fixed, direction)
+	last_phase_populate_ms = float(Time.get_ticks_usec() - phase_start) / 1000.0
+	print("COASTAL PREVIEW: building shadow...")
+	var shadow_start := Time.get_ticks_usec()
+	_build_shadow_scale(output, fixed, direction)
+	last_shadow_ms = float(Time.get_ticks_usec() - shadow_start) / 1000.0
 	return output
 
 
@@ -187,62 +202,126 @@ func _minimum_projection(output, direction: Vector2) -> float:
 	return minimum_s
 
 
-func _build_shadow_scale(output, travel_time: PackedFloat32Array, fixed: PackedByteArray, direction: Vector2) -> void:
-	var count: int = output.width * output.height
-	var route_distance := PackedFloat32Array()
-	route_distance.resize(count)
-	route_distance.fill(INF)
+func _build_shadow_scale(output, fixed: PackedByteArray, direction: Vector2) -> void:
+	var visibility := _build_incident_visibility_field(output, direction)
+	var occluded_distance := _build_occluded_distance_field(output, visibility, direction)
 	var raw_shadow := PackedFloat32Array()
-	raw_shadow.resize(count)
-	var order := []
-	for index in count:
-		if output.valid_mask[index] != 0 and output.reached_mask[index] != 0 and travel_time[index] < INF * 0.5:
-			order.append(index)
-	order.sort_custom(func(a: int, b: int) -> bool:
-			if not is_equal_approx(travel_time[a], travel_time[b]):
-				return travel_time[a] < travel_time[b]
-			return a < b
-	)
-	var minimum_s := _minimum_projection(output, direction)
-	for current in order:
-		var x: int = current % output.width
-		var z: int = current / output.width
-		var point: Vector2 = output.world_origin_xz + Vector2(float(x), float(z)) * output.cell_size_m
-		var direct_distance: float = maxf(0.0, point.dot(direction) - minimum_s)
-		if fixed[current] != 0:
-			route_distance[current] = direct_distance
-		else:
-			var parent := _best_route_parent(output, travel_time, route_distance, x, z)
-			if parent >= 0 and route_distance[parent] < INF * 0.5:
-				route_distance[current] = route_distance[parent] + output.cell_size_m
-			else:
-				route_distance[current] = direct_distance
-		if _has_incident_line_of_sight(output, x, z, direction):
-			raw_shadow[current] = 1.0
-		else:
-			var detour: float = maxf(0.0, route_distance[current] - direct_distance)
-			var decay_length: float = maxf(shadow_detour_length_m, 1.0e-6)
-			raw_shadow[current] = clampf(shadow_occlusion_entry_scale * exp(-detour / decay_length), shadow_min_scale, 1.0)
+	raw_shadow.resize(output.width * output.height)
+	var decay_length: float = maxf(shadow_detour_length_m, 1.0e-6)
+	for index in raw_shadow.size():
+		if output.valid_mask[index] == 0 or output.reached_mask[index] == 0:
+			raw_shadow[index] = 0.0
+			continue
+		if fixed[index] != 0 or visibility[index] >= 0.999:
+			raw_shadow[index] = 1.0
+			continue
+		var occluded_shadow: float = clampf(shadow_occlusion_entry_scale * exp(-occluded_distance[index] / decay_length), shadow_min_scale, 1.0)
+		raw_shadow[index] = clampf(lerpf(occluded_shadow, 1.0, visibility[index]), shadow_min_scale, 1.0)
 	_smooth_shadow_scale(output, raw_shadow, fixed)
 
 
-func _best_route_parent(output, travel_time: PackedFloat32Array, route_distance: PackedFloat32Array, x: int, z: int) -> int:
-	var current: int = z * output.width + x
-	var current_time: float = travel_time[current]
-	var best_index := -1
-	var best_time := INF
-	for neighbor in [Vector2i(x - 1, z), Vector2i(x + 1, z), Vector2i(x, z - 1), Vector2i(x, z + 1)]:
-		if neighbor.x < 0 or neighbor.y < 0 or neighbor.x >= output.width or neighbor.y >= output.height:
-			continue
-		var candidate: int = neighbor.y * output.width + neighbor.x
-		if output.valid_mask[candidate] == 0 or output.reached_mask[candidate] == 0 or route_distance[candidate] >= INF * 0.5:
-			continue
-		if travel_time[candidate] >= current_time - 1.0e-7:
-			continue
-		if travel_time[candidate] < best_time or (is_equal_approx(travel_time[candidate], best_time) and candidate < best_index):
-			best_time = travel_time[candidate]
-			best_index = candidate
-	return best_index
+func _build_incident_visibility_field(output, direction: Vector2) -> PackedFloat32Array:
+	## O(N) semi-Lagrangian directional sweep. Cada celda consulta sólo la
+	## slice inmediatamente upstream; no ray-marcha ni ordena el grid.
+	var visibility := PackedFloat32Array()
+	visibility.resize(output.width * output.height)
+	var axis_x := absf(direction.x) >= absf(direction.y)
+	var step_x: int = 0
+	var step_z: int = 0
+	var dominant_abs: float
+	if axis_x:
+		step_x = 1 if direction.x > 0.0 else -1
+		dominant_abs = absf(direction.x)
+	else:
+		step_z = 1 if direction.y > 0.0 else -1
+		dominant_abs = absf(direction.y)
+	var slice_step: float = 1.0 / maxf(dominant_abs, 1.0e-6)
+	var slice_length: int = output.width if axis_x else output.height
+	var slice_direction: int = step_x if axis_x else step_z
+	var slice_start: int = 0 if slice_direction > 0 else slice_length - 1
+	var slice_end: int = slice_length if slice_direction > 0 else -1
+	for slice_index in range(slice_start, slice_end, slice_direction):
+		if axis_x:
+			for z in output.height:
+				var index: int = z * output.width + slice_index
+				if output.valid_mask[index] == 0:
+					visibility[index] = 0.0
+					continue
+				var upstream := Vector2(float(slice_index), float(z)) - direction * slice_step
+				visibility[index] = _sample_visibility_slice(visibility, output, upstream, true)
+		else:
+			for x in output.width:
+				var index: int = slice_index * output.width + x
+				if output.valid_mask[index] == 0:
+					visibility[index] = 0.0
+					continue
+				var upstream := Vector2(float(x), float(slice_index)) - direction * slice_step
+				visibility[index] = _sample_visibility_slice(visibility, output, upstream, false)
+	return visibility
+
+
+func _build_occluded_distance_field(output, visibility: PackedFloat32Array, direction: Vector2) -> PackedFloat32Array:
+	var distance := PackedFloat32Array()
+	distance.resize(output.width * output.height)
+	distance.fill(0.0)
+	var axis_x := absf(direction.x) >= absf(direction.y)
+	var step_x: int = 0
+	var step_z: int = 0
+	var dominant_abs: float
+	if axis_x:
+		step_x = 1 if direction.x > 0.0 else -1
+		dominant_abs = absf(direction.x)
+	else:
+		step_z = 1 if direction.y > 0.0 else -1
+		dominant_abs = absf(direction.y)
+	var slice_step: float = 1.0 / maxf(dominant_abs, 1.0e-6)
+	var step_distance_m: float = output.cell_size_m * slice_step
+	var slice_length: int = output.width if axis_x else output.height
+	var slice_direction: int = step_x if axis_x else step_z
+	var slice_start: int = 0 if slice_direction > 0 else slice_length - 1
+	var slice_end: int = slice_length if slice_direction > 0 else -1
+	for slice_index in range(slice_start, slice_end, slice_direction):
+		if axis_x:
+			for z in output.height:
+				var index: int = z * output.width + slice_index
+				if output.valid_mask[index] == 0:
+					distance[index] = 0.0
+					continue
+				var upstream := Vector2(float(slice_index), float(z)) - direction * slice_step
+				var upstream_distance := _sample_scalar_slice(distance, output, upstream, true)
+				var upstream_visibility := _sample_visibility_slice(visibility, output, upstream, true)
+				distance[index] = 0.0 if upstream_visibility >= 0.999 else upstream_distance + step_distance_m
+		else:
+			for x in output.width:
+				var index: int = slice_index * output.width + x
+				if output.valid_mask[index] == 0:
+					distance[index] = 0.0
+					continue
+				var upstream := Vector2(float(x), float(slice_index)) - direction * slice_step
+				var upstream_distance := _sample_scalar_slice(distance, output, upstream, false)
+				var upstream_visibility := _sample_visibility_slice(visibility, output, upstream, false)
+				distance[index] = 0.0 if upstream_visibility >= 0.999 else upstream_distance + step_distance_m
+	return distance
+
+
+func _sample_visibility_slice(values: PackedFloat32Array, output, grid: Vector2, axis_x: bool) -> float:
+	if grid.x < 0.0 or grid.y < 0.0 or grid.x > float(output.width - 1) or grid.y > float(output.height - 1):
+		return 1.0
+	if axis_x:
+		var x: int = clampi(int(round(grid.x)), 0, output.width - 1)
+		var z0: int = clampi(int(floor(grid.y)), 0, output.height - 1)
+		var z1: int = mini(z0 + 1, output.height - 1)
+		var tz: float = grid.y - float(z0)
+		return lerpf(values[z0 * output.width + x], values[z1 * output.width + x], tz)
+	var z: int = clampi(int(round(grid.y)), 0, output.height - 1)
+	var x0: int = clampi(int(floor(grid.x)), 0, output.width - 1)
+	var x1: int = mini(x0 + 1, output.width - 1)
+	var tx: float = grid.x - float(x0)
+	return lerpf(values[z * output.width + x0], values[z * output.width + x1], tx)
+
+
+func _sample_scalar_slice(values: PackedFloat32Array, output, grid: Vector2, axis_x: bool) -> float:
+	return _sample_visibility_slice(values, output, grid, axis_x)
 
 
 func _smooth_shadow_scale(output, raw_shadow: PackedFloat32Array, fixed: PackedByteArray) -> void:
@@ -276,7 +355,7 @@ func _smooth_shadow_scale(output, raw_shadow: PackedFloat32Array, fixed: PackedB
 	output.shadow_scale = current
 
 
-func _has_incident_line_of_sight(output, x: int, z: int, direction: Vector2) -> bool:
+func _has_incident_line_of_sight_reference(output, x: int, z: int, direction: Vector2) -> bool:
 	var position := Vector2(float(x), float(z))
 	var step := direction * 0.5
 	var maximum_steps := 4 * maxi(output.width, output.height)

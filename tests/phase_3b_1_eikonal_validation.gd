@@ -13,6 +13,9 @@ func _initialize() -> void:
 	_validate_bank_and_determinism()
 	_validate_island_shadow()
 	_validate_two_island_channel()
+	_validate_visibility_sweep()
+	_validate_large_grid_scaling()
+	_validate_eikonal_path_complexity()
 	if _failures == 0:
 		print("PHASE_3B_1_EIKONAL: PASS")
 		quit(0)
@@ -39,6 +42,17 @@ func _validate_flat_plane() -> void:
 	_check(max_angle_deg < 0.25, "flat: dirección local coincide con incoming")
 	_check(max_k_error < 1.0e-4, "flat: |grad(phi)| coincide con k")
 	_check(max_shadow_error < 1.0e-6, "flat: shadow_scale neutral")
+	for flat_direction in [Vector2.RIGHT, Vector2.LEFT, Vector2(1.0, 1.0).normalized(), Vector2(-1.0, 0.4).normalized()]:
+		var flat = _bake(_make_data(37, 29, func(_x: int, _z: int) -> float: return 100.0), flat_direction)
+		var flat_max_angle := 0.0
+		var flat_shadow_error := 0.0
+		for index in flat.width * flat.height:
+			if flat.valid_mask[index] == 0 or flat.reached_mask[index] == 0:
+				continue
+			var local_direction := Vector2(flat.local_direction_x[index], flat.local_direction_z[index])
+			flat_max_angle = maxf(flat_max_angle, rad_to_deg(acos(clampf(local_direction.dot(flat_direction), -1.0, 1.0))))
+			flat_shadow_error = maxf(flat_shadow_error, absf(flat.shadow_scale[index] - 1.0))
+		_check(flat_max_angle < 0.5 and flat_shadow_error < 1.0e-6, "flat: dirección %s conserva reached/dirección/shadow" % flat_direction)
 
 
 func _validate_oblique_snell() -> void:
@@ -121,6 +135,65 @@ func _validate_two_island_channel() -> void:
 	_check(propagation.reached_mask[channel] != 0, "channel: paso entre islas alcanzado")
 	_check(propagation.shadow_scale[channel] > propagation.shadow_scale[upper_lee] and propagation.shadow_scale[channel] > propagation.shadow_scale[lower_lee], "channel: canal conserva más luz que los leewards")
 	_check(propagation.shadow_scale[open] > 0.999, "channel: agua abierta sin sombra")
+
+
+func _validate_visibility_sweep() -> void:
+	var data = _make_data(61, 41, func(x: int, z: int) -> float:
+		var dx := float(x - 30)
+		var dz := float(z - 20)
+		return -1.0 if dx * dx + dz * dz < 8.0 * 8.0 else 18.0)
+	var baker = EikonalBakerScript.new()
+	var cardinal_mismatch := _visibility_mismatch(baker, data, Vector2.RIGHT)
+	var diagonal_mismatch := _visibility_mismatch(baker, data, Vector2(1.0, 0.65).normalized())
+	print("3B.1 VISIBILITY cardinal_mismatch=%d diagonal_mismatch=%d" % [cardinal_mismatch, diagonal_mismatch])
+	_check(cardinal_mismatch == 0, "visibility: sweep cardinal equivalente a referencia")
+	_check(diagonal_mismatch <= 160, "visibility: sweep diagonal sólo difiere en silueta local")
+	var propagation = _bake(data, Vector2.RIGHT)
+	var visibility: PackedFloat32Array = baker._build_incident_visibility_field(propagation, Vector2.RIGHT)
+	var lee_index: int = 20 * propagation.width + 45
+	var open_index: int = 8 * propagation.width + 45
+	_check(visibility[lee_index] < 0.01 and visibility[open_index] > 0.99, "visibility: isla bloquea lee pero conserva agua abierta")
+
+
+func _visibility_mismatch(baker, data, direction: Vector2) -> int:
+	var propagation = _bake(data, direction)
+	var visibility: PackedFloat32Array = baker._build_incident_visibility_field(propagation, direction)
+	var mismatch := 0
+	for index in propagation.width * propagation.height:
+		if propagation.valid_mask[index] == 0:
+			continue
+		var x: int = index % propagation.width
+		var z: int = index / propagation.width
+		var expected := 1.0 if baker._has_incident_line_of_sight_reference(propagation, x, z, direction) else 0.0
+		if absf(visibility[index] - expected) > 0.25:
+			mismatch += 1
+	return mismatch
+
+
+func _validate_large_grid_scaling() -> void:
+	var start := Time.get_ticks_usec()
+	var baker = EikonalBakerScript.new()
+	baker.bathymetry_data = _make_data(512, 512, func(_x: int, _z: int) -> float: return 18.0)
+	baker.incoming_direction_xz = Vector2.RIGHT
+	baker.reference_wavelength_m = 16.0
+	baker.min_valid_depth_m = 0.25
+	var propagation = baker.bake()
+	var elapsed_ms := float(Time.get_ticks_usec() - start) / 1000.0
+	if propagation == null:
+		_check(false, "large: grid 512x512 completa con data válida")
+		return
+	var reached := 0
+	for index in propagation.width * propagation.height:
+		if propagation.reached_mask[index] != 0:
+			reached += 1
+	print("3B.1 LARGE grid=%dx%d elapsed=%.3f ms base=%.3f sweep=%.3f phase=%.3f shadow=%.3f reached=%d" % [propagation.width, propagation.height, elapsed_ms, baker.last_base_metrics_ms, baker.last_eikonal_sweep_ms, baker.last_phase_populate_ms, baker.last_shadow_ms, reached])
+	_check(propagation.is_valid(), "large: grid 512x512 completa con data válida")
+	_check(reached == 512 * 512, "large: flat water reached completo")
+
+
+func _validate_eikonal_path_complexity() -> void:
+	var source := FileAccess.get_file_as_string("res://ocean_v3/coastal/coastal_eikonal_baker.gd")
+	_check(not source.contains("Array[Dictionary]") and not source.contains("order.sort_custom") and not source.contains("_has_incident_line_of_sight(output"), "complexity: Eikonal no conserva sort/raymarch patológicos")
 
 
 func _make_data(width: int, height: int, depth_fn: Callable):

@@ -45,6 +45,8 @@ var _coastal_data: CoastalPropagationData = null
 
 
 func bake_coastal_preview() -> void:
+	var total_start := Time.get_ticks_usec()
+	print("COASTAL PREVIEW START")
 	if bathymetry_baker == null:
 		push_error("CoastalEikonalPreviewBaker: asigna Bathymetry Baker antes de BAKE COASTAL PREVIEW.")
 		return
@@ -52,7 +54,10 @@ func bake_coastal_preview() -> void:
 	if direction.length_squared() <= 1.0e-8:
 		push_error("CoastalEikonalPreviewBaker: Incoming Direction XZ no puede ser Vector2.ZERO.")
 		return
+	print("COASTAL PREVIEW: baking bathymetry...")
+	var bathymetry_start := Time.get_ticks_usec()
 	var bathymetry_data = bathymetry_baker.bake()
+	var bathymetry_ms := float(Time.get_ticks_usec() - bathymetry_start) / 1000.0
 	if bathymetry_data == null or not bathymetry_data.is_valid():
 		push_error("CoastalEikonalPreviewBaker: BathymetryBaker no produjo BathymetryData válida.")
 		return
@@ -68,7 +73,9 @@ func bake_coastal_preview() -> void:
 	eikonal_baker.shadow_occlusion_entry_scale = shadow_occlusion_entry_scale
 	eikonal_baker.shadow_detour_length_m = shadow_detour_length_m
 	eikonal_baker.shadow_smoothing_passes = shadow_smoothing_passes
+	var eikonal_start := Time.get_ticks_usec()
 	var coastal_data = eikonal_baker.bake()
+	var eikonal_ms := float(Time.get_ticks_usec() - eikonal_start) / 1000.0
 	if coastal_data == null or not coastal_data.is_valid():
 		push_error("CoastalEikonalPreviewBaker: CoastalEikonalBaker no produjo CoastalPropagationData válida.")
 		return
@@ -88,10 +95,22 @@ func bake_coastal_preview() -> void:
 	_preview = preview
 	_bathymetry_data = bathymetry_data
 	_coastal_data = coastal_data
-	_update_preview_transform()
-	preview.data = coastal_data
+	preview.base_y = bathymetry_data.sea_level_y
+	preview.y_offset_m = preview_vertical_offset_m
 	preview.mode = preview_mode as CoastalEikonalDebug.Mode
+	print("COASTAL PREVIEW: building debug mesh...")
+	var debug_start := Time.get_ticks_usec()
+	preview.data = coastal_data
+	var debug_ms := float(Time.get_ticks_usec() - debug_start) / 1000.0
 	_print_statistics(coastal_data)
+	print("bathymetry = %.3f ms" % bathymetry_ms)
+	print("base metrics = %.3f ms" % eikonal_baker.last_base_metrics_ms)
+	print("eikonal sweep = %.3f ms" % eikonal_baker.last_eikonal_sweep_ms)
+	print("phase populate = %.3f ms" % eikonal_baker.last_phase_populate_ms)
+	print("shadow field = %.3f ms" % eikonal_baker.last_shadow_ms)
+	print("eikonal total = %.3f ms" % eikonal_ms)
+	print("debug mesh = %.3f ms" % debug_ms)
+	print("total = %.3f ms" % (float(Time.get_ticks_usec() - total_start) / 1000.0))
 
 
 func clear_preview() -> void:
