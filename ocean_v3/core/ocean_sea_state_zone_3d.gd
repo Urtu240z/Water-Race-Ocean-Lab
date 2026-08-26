@@ -24,6 +24,10 @@ const ZONE_GROUP := &"ocean_sea_state_zone"
 	set(value):
 		choppiness_multiplier = clampf(value, 0.0, 2.0)
 		_mark_zone_dirty()
+@export_range(0.0, 2.0, 0.01) var foam_generation_multiplier: float = 1.0:
+	set(value):
+		foam_generation_multiplier = clampf(value, 0.0, 2.0)
+		_mark_zone_dirty()
 @export_range(0.0, 1.0, 0.01) var strength: float = 1.0:
 	set(value):
 		strength = clampf(value, 0.0, 1.0)
@@ -90,6 +94,7 @@ func descriptor() -> Dictionary:
 		"feather": feather_distance_m,
 		"strength": strength,
 		"target": Vector4(long_amplitude_multiplier, mid_amplitude_multiplier, short_amplitude_multiplier, choppiness_multiplier),
+		"foam_generation_multiplier": foam_generation_multiplier,
 		"priority": priority,
 		"path_key": str(get_path()),
 	}

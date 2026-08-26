@@ -23,6 +23,9 @@
 //          coastal_warp_extent_m, breaking_depth_ratio_range,
 //          breaking_steepness_range, breaking_crest_spacing_lambda_range_m
 //   vec3   band_mask
+//   int    sea_state_zone_count
+//   vec4   sea_state_zone_data0[8], sea_state_zone_data1[8],
+//          sea_state_zone_data2[8]
 //   bool   module_enabled, coastal_propagation_enabled,
 //          coastal_transform_enabled, coastal_monochromatic_debug,
 //          coastal_warp_enabled
@@ -90,13 +93,59 @@ vec4 coastal_long_state(vec2 world_xz) {
 	return vec4(warp.xy, warp.z, shoaling);
 }
 
+void breaking_zone_sdf(vec2 point, vec2 center, vec2 axis, vec2 half_extents,
+		out float sdf) {
+	vec2 safe_axis = dot(axis, axis) > 0.000001 ? normalize(axis) : vec2(1.0, 0.0);
+	vec2 tangent = vec2(-safe_axis.y, safe_axis.x);
+	vec2 local_point = vec2(dot(point - center, safe_axis), dot(point - center, tangent));
+	vec2 q = abs(local_point) - half_extents;
+	vec2 outside = max(q, vec2(0.0));
+	sdf = length(outside) + min(max(q.x, q.y), 0.0);
+}
+
+// Same sequential zone composition as OceanQuery/ocean_surface, restricted to
+// the LONG amplitude and choppiness that physically drive PREBREAK.
+void breaking_zone_state(vec2 point, out float long_amplitude, out float choppiness) {
+	long_amplitude = 1.0;
+	choppiness = 1.0;
+	for (int index = 0; index < 8; index++) {
+		if (index >= sea_state_zone_count) break;
+		vec4 zone0 = sea_state_zone_data0[index];
+		vec4 zone1 = sea_state_zone_data1[index];
+		vec4 target = sea_state_zone_data2[index];
+		float sdf;
+		breaking_zone_sdf(point, zone0.xy, zone0.zw, zone1.xy, sdf);
+		float feather = max(zone1.z, 0.0);
+		float local_weight = 0.0;
+		if (feather <= 0.000001 || sdf <= 0.0) {
+			local_weight = 1.0;
+		} else if (sdf < feather) {
+			local_weight = 1.0 - smoothstep(0.0, 1.0, sdf / feather);
+		}
+		float weight = clamp(local_weight * clamp(zone1.w, 0.0, 1.0), 0.0, 1.0);
+		if (weight <= 0.0) continue;
+		long_amplitude = mix(long_amplitude, target.x, weight);
+		choppiness = mix(choppiness, target.w, weight);
+	}
+}
+
+float breaking_zone_activity(vec2 world_xz) {
+	float long_amplitude;
+	float choppiness;
+	breaking_zone_state(world_xz, long_amplitude, choppiness);
+	return clamp(long_amplitude * (0.5 + 0.5 * choppiness), 0.0, 1.0);
+}
+
 float long_height_at(vec2 world_xz) {
 	vec4 state = coastal_long_state(world_xz);
 	float coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).y;
 	float coastal_deep = textureLod(displacement_long_coastal, spectrum_uv(state.xy, domain_long_coastal_m), 0.0).y;
 	float coastal_height = mix(coastal_open, coastal_deep, state.z) * state.w;
 	float remainder_height = textureLod(displacement_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).y;
-	return coastal_height + remainder_height;
+	float local_long_amplitude;
+	float local_choppiness;
+	breaking_zone_state(world_xz, local_long_amplitude, local_choppiness);
+	return (coastal_height + remainder_height) * local_long_amplitude;
 }
 
 // 4B: estado escalar local del modelo de energía de 4A, sin muestras de cresta.
@@ -107,6 +156,10 @@ vec4 breaking_local_state_at(vec2 world_xz, vec2 coast_uv, vec4 field_data) {
 	float confidence = coastal_long_state(world_xz).z;
 	float shoaling = mix(1.0, field_data.g, confidence);
 	float local_hs = breaking_long_hs_m * sqrt(max(0.0, (1.0 - coastal_fraction) + coastal_fraction * shoaling * shoaling));
+	float local_long_amplitude;
+	float local_choppiness;
+	breaking_zone_state(world_xz, local_long_amplitude, local_choppiness);
+	local_hs *= local_long_amplitude;
 	float amplitude = max(0.5 * local_hs, 0.01);
 	float k_deep = max(coastal_k0_rad_m, 0.0001);
 	float k_coastal = max(field_data.b, k_deep);
@@ -128,10 +181,13 @@ vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 met
 	float wavelength = local_state.y;
 	float local_k = local_state.z;
 	float local_hs = local_state.w;
+	float local_long_amplitude;
+	float local_choppiness;
+	breaking_zone_state(world_xz, local_long_amplitude, local_choppiness);
 	float depth_m = max(metrics_data.r, 0.001);
 	float depth_ratio = local_hs / max(breaking_depth_gamma * depth_m, 0.001);
 	float depth_pressure = smoothstep(breaking_depth_ratio_range.x, breaking_depth_ratio_range.y, depth_ratio);
-	float steepness_pressure = smoothstep(breaking_steepness_range.x, breaking_steepness_range.y, local_k * amplitude);
+	float steepness_pressure = smoothstep(breaking_steepness_range.x, breaking_steepness_range.y, local_k * amplitude * local_choppiness);
 
 	// La cresta sí procede de las muestras dinámicas del FFT real LONG:
 	// LONG_COASTAL warped + shoaled, más LONG_REMAINDER open. MID/SHORT no entran.
@@ -164,6 +220,7 @@ vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 met
 
 	// Sólo pre-break costero en 4A: steepness modula el potencial de profundidad,
 	// pero no habilita whitecaps en mar profundo.
-	float prebreak = crestness * depth_pressure * mix(0.35, 1.0, steepness_pressure);
+	float prebreak = crestness * depth_pressure * mix(0.35, 1.0, steepness_pressure)
+		* breaking_zone_activity(world_xz);
 	return vec4(depth_pressure, steepness_pressure, crestness, prebreak);
 }

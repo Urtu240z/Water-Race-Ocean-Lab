@@ -949,6 +949,8 @@ func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
 	_sea_state_zone_descriptors = descriptors.duplicate()
 	if _query_reduced != null:
 		_query_reduced.set_sea_state_zones(_sea_state_zone_descriptors)
+	if _breaker_pool != null:
+		_breaker_pool.set_sea_state_zones(_sea_state_zone_descriptors)
 
 
 func _native_query_can_sample_coastal() -> bool:
@@ -1091,6 +1093,7 @@ func _configure_breaker_pool() -> void:
 		surface.clipmap_config.sea_level_y,
 		surface.get_surface_material(),
 	)
+	_breaker_pool.set_sea_state_zones(_sea_state_zone_descriptors)
 	# 4C-S4: el pool resuelve la batch de tracking con el MISMO evaluador OceanQuery.
 	_breaker_pool.set_query_source(Callable(self, &"sample_water_batch_at_time"))
 

@@ -749,6 +749,7 @@ var _sea_state_zone_descriptors: Array[Dictionary] = []
 var _sea_state_zone_uniform_data0 := PackedVector4Array()
 var _sea_state_zone_uniform_data1 := PackedVector4Array()
 var _sea_state_zone_uniform_data2 := PackedVector4Array()
+var _sea_state_zone_uniform_data3 := PackedVector4Array()
 var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 
@@ -807,10 +808,12 @@ func _refresh_sea_state_zones() -> void:
 	_sea_state_zone_uniform_data0.resize(8)
 	_sea_state_zone_uniform_data1.resize(8)
 	_sea_state_zone_uniform_data2.resize(8)
+	_sea_state_zone_uniform_data3.resize(8)
 	for index in 8:
 		_sea_state_zone_uniform_data0[index] = Vector4.ZERO
 		_sea_state_zone_uniform_data1[index] = Vector4.ZERO
 		_sea_state_zone_uniform_data2[index] = Vector4.ZERO
+		_sea_state_zone_uniform_data3[index] = Vector4.ZERO
 	var active_index := 0
 	for zone in live_zones:
 		if not zone.enabled or active_index >= 8:
@@ -824,10 +827,11 @@ func _refresh_sea_state_zones() -> void:
 		_sea_state_zone_uniform_data0[active_index] = Vector4(center.x, center.y, axis.x, axis.y)
 		_sea_state_zone_uniform_data1[active_index] = Vector4(half_extents.x, half_extents.y, float(descriptor["feather"]), float(descriptor["strength"]))
 		_sea_state_zone_uniform_data2[active_index] = target
+		_sea_state_zone_uniform_data3[active_index] = Vector4(float(descriptor["foam_generation_multiplier"]), 0.0, 0.0, 0.0)
 		active_index += 1
 	_sea_state_zones = live_zones
 	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
-	if fft_module != null:
+	if fft_module != null and not Engine.is_editor_hint():
 		fft_module.set_sea_state_zones(_sea_state_zone_descriptors)
 	_request_visual_sync()
 
@@ -1183,6 +1187,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"sea_state_zone_data0", _sea_state_zone_uniform_data0)
 	material.set_shader_parameter(&"sea_state_zone_data1", _sea_state_zone_uniform_data1)
 	material.set_shader_parameter(&"sea_state_zone_data2", _sea_state_zone_uniform_data2)
+	material.set_shader_parameter(&"sea_state_zone_data3", _sea_state_zone_uniform_data3)
 	material.set_shader_parameter(&"sea_state_zone_debug", _sea_state_zone_debug)
 	material.set_shader_parameter(&"short_geometry_strength", short_geometry_strength)
 

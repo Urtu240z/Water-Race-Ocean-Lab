@@ -132,6 +132,7 @@ func _create_demo_sea_state_zone() -> void:
 	_demo_sea_state_zone.mid_amplitude_multiplier = 0.10
 	_demo_sea_state_zone.short_amplitude_multiplier = 0.03
 	_demo_sea_state_zone.choppiness_multiplier = 0.45
+	_demo_sea_state_zone.foam_generation_multiplier = 0.10
 	_demo_sea_state_zone.strength = 1.0
 	_demo_sea_state_zone.priority = 0
 	add_child(_demo_sea_state_zone)

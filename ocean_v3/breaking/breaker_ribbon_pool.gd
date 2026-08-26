@@ -19,6 +19,7 @@ extends Node3D
 ##     datos horneados + el reloj (vía texturas FFT), nunca del frame.
 
 const LipShader := preload("res://ocean_v3/rendering/shaders/breaker_lip.gdshader")
+const SeaStateZoneMathScript := preload("res://ocean_v3/core/sea_state_zone_math.gd")
 ## 4C-S1: LUT de cross-section horneada (ocean_v3 autocontenido; sin depender de lab/).
 const LutTexture := preload("res://ocean_v3/breaking/data/breaker_cross_section_lut.res")
 
@@ -113,6 +114,11 @@ const _UNIFORMS_TO_COPY: PackedStringArray = [
 	&"mid_fade_range_m",
 	&"long_fade_range_m",
 	&"band_mask",
+	&"sea_state_zone_count",
+	&"sea_state_zone_data0",
+	&"sea_state_zone_data1",
+	&"sea_state_zone_data2",
+	&"sea_state_zone_data3",
 	&"coastal_composition_debug",
 	&"coastal_debug_gain",
 	&"camera_world_xz",
@@ -123,6 +129,7 @@ var _warp = null
 var _long_hs_m := 0.5
 var _coastal_fraction := 0.5
 var _sea_level_y := 0.0
+var _sea_state_zone_descriptors: Array[Dictionary] = []
 var _surface_material: ShaderMaterial = null
 var _material: ShaderMaterial = null
 var _template_mesh: ArrayMesh = null
@@ -198,6 +205,35 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 func set_query_source(callable: Callable) -> void:
 	## 4C-S4: Callable batch de OceanQuery (sample_water_batch_at_time del módulo).
 	_query_batch = callable
+
+
+func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
+	var copied: Array[Dictionary] = []
+	for descriptor in descriptors:
+		copied.append(descriptor.duplicate())
+	_sea_state_zone_descriptors = copied
+	for anchor in _anchors:
+		anchor["zone_breaking_activity"] = _local_breaking_activity(Vector2(anchor.get("xz", Vector2.ZERO)))
+
+
+func _local_breaking_activity(point: Vector2) -> float:
+	var long_amplitude := 1.0
+	var choppiness := 1.0
+	for descriptor in _sea_state_zone_descriptors:
+		var zone_weight := SeaStateZoneMathScript.weight_and_gradient(
+			point,
+			Vector2(descriptor.get("center", Vector2.ZERO)),
+			Vector2(descriptor.get("axis", Vector2.RIGHT)),
+			Vector2(descriptor.get("half_extents", Vector2.ZERO)),
+			float(descriptor.get("feather", 0.0))
+		).x
+		zone_weight *= clampf(float(descriptor.get("strength", 1.0)), 0.0, 1.0)
+		if zone_weight <= 0.0:
+			continue
+		var target: Vector4 = descriptor.get("target", Vector4.ONE)
+		long_amplitude = lerpf(long_amplitude, target.x, zone_weight)
+		choppiness = lerpf(choppiness, target.w, zone_weight)
+	return clampf(long_amplitude * (0.5 + 0.5 * choppiness), 0.0, 1.0)
 
 
 func set_diagnostic_visible(value: bool) -> void:
@@ -750,6 +786,7 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	var alpha: float = fade_in * fade_out
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	var breaker_xz := _predicted_breaker_xz(entry, render_time) + Vector2(entry.get("crest_correction_xz", Vector2.ZERO))
+	alpha *= _local_breaking_activity(breaker_xz)
 	var host_crest_fade_start: float = float(entry.get("host_crest_fade_start", -1.0))
 	if host_crest_fade_start >= 0.0:
 		var host_fade := 1.0 - _smoothstep(0.0, ACTIVE_CREST_FADE_DURATION_S, render_time - host_crest_fade_start)
@@ -1033,6 +1070,7 @@ func _place_anchors_for_energy(long_hs_m: float, coastal_fraction: float) -> Arr
 				"local_k": maxf(k_arr[index], k0),
 				"shoaling": shoal_arr[index],
 				"phase_speed_mps": phase_speed_arr[index],
+				"zone_breaking_activity": _local_breaking_activity(propagation.world_origin_xz + Vector2(float(x), float(z)) * propagation.cell_size_m),
 				"current_eligibility": _anchor_eligibility_for_pressure(pressure),
 				"target_eligibility": _anchor_eligibility_for_pressure(pressure),
 				"retire_when_idle": false,
@@ -1071,9 +1109,10 @@ func _anchor_eligibility_for_energy(anchor: Dictionary, long_hs_m: float, coasta
 
 func _anchor_runtime_eligibility(anchor: Dictionary) -> float:
 	var current: float = float(anchor.get("current_eligibility", 1.0))
+	var zone_activity: float = float(anchor.get("zone_breaking_activity", 1.0))
 	if not _wave_transition_active:
-		return current
-	return lerpf(current, float(anchor.get("target_eligibility", current)), _wave_transition_alpha)
+		return current * zone_activity
+	return lerpf(current, float(anchor.get("target_eligibility", current)), _wave_transition_alpha) * zone_activity
 
 
 func _find_matching_anchor(anchors: Array[Dictionary], candidate: Dictionary) -> int:

@@ -41,6 +41,8 @@ uniform int sea_state_zone_count = 0;
 uniform vec4 sea_state_zone_data0[8];
 uniform vec4 sea_state_zone_data1[8];
 uniform vec4 sea_state_zone_data2[8];
+// data3.x = local Crest/Surface foam birth and presentation multiplier.
+uniform vec4 sea_state_zone_data3[8];
 uniform bool sea_state_zone_debug = false;
 uniform int debug_mode = 0;
 uniform bool module_enabled = true;
@@ -307,7 +309,8 @@ void sea_state_zone_sdf(vec2 point, vec2 center, vec2 axis, vec2 half_extents,
 
 void sea_state_zone_state(vec2 point, out float long_amplitude, out float mid_amplitude,
 		out float short_amplitude, out float choppiness, out vec2 grad_long,
-		out vec2 grad_mid, out vec2 grad_short, out vec2 grad_chop) {
+		out vec2 grad_mid, out vec2 grad_short, out vec2 grad_chop,
+		out float foam_multiplier) {
 	long_amplitude = 1.0;
 	mid_amplitude = 1.0;
 	short_amplitude = 1.0;
@@ -316,11 +319,13 @@ void sea_state_zone_state(vec2 point, out float long_amplitude, out float mid_am
 	grad_mid = vec2(0.0);
 	grad_short = vec2(0.0);
 	grad_chop = vec2(0.0);
+	foam_multiplier = 1.0;
 	for (int index = 0; index < 8; index++) {
 		if (index >= sea_state_zone_count) break;
 		vec4 zone0 = sea_state_zone_data0[index];
 		vec4 zone1 = sea_state_zone_data1[index];
 		vec4 target = sea_state_zone_data2[index];
+		float target_foam = sea_state_zone_data3[index].x;
 		float sdf;
 		vec2 sdf_gradient;
 		sea_state_zone_sdf(point, zone0.xy, zone0.zw, zone1.xy, sdf, sdf_gradient);
@@ -341,15 +346,28 @@ void sea_state_zone_state(vec2 point, out float long_amplitude, out float mid_am
 		float old_mid = mid_amplitude;
 		float old_short = short_amplitude;
 		float old_chop = choppiness;
+		float old_foam = foam_multiplier;
 		long_amplitude = mix(old_long, target.x, weight);
 		mid_amplitude = mix(old_mid, target.y, weight);
 		short_amplitude = mix(old_short, target.z, weight);
 		choppiness = mix(old_chop, target.w, weight);
+		foam_multiplier = mix(old_foam, clamp(target_foam, 0.0, 2.0), weight);
 		grad_long = grad_long * (1.0 - weight) + (target.x - old_long) * grad_weight;
 		grad_mid = grad_mid * (1.0 - weight) + (target.y - old_mid) * grad_weight;
 		grad_short = grad_short * (1.0 - weight) + (target.z - old_short) * grad_weight;
 		grad_chop = grad_chop * (1.0 - weight) + (target.w - old_chop) * grad_weight;
 	}
+}
+
+float sea_state_zone_foam_activity(float long_amplitude, float mid_amplitude,
+		float short_amplitude, float choppiness, float foam_multiplier) {
+	// Long owns the broad crest energy; the shorter bands and choppiness add
+	// detail without allowing a calm-zone multiplier to create foam by itself.
+	float band_activity = clamp(
+		0.65 * long_amplitude + 0.25 * mid_amplitude + 0.10 * short_amplitude,
+		0.0, 2.0);
+	float chop_activity = clamp(0.5 + 0.5 * choppiness, 0.0, 1.5);
+	return clamp(foam_multiplier * band_activity * chop_activity, 0.0, 1.0);
 }
 
 vec3 sea_state_zone_displacement(vec3 value, float amplitude, float choppiness) {
@@ -454,9 +472,10 @@ void vertex() {
 	vec2 zone_grad_mid;
 	vec2 zone_grad_short;
 	vec2 zone_grad_chop;
+	float zone_foam_multiplier;
 	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
 		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
-		zone_grad_short, zone_grad_chop);
+		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
 	float long_coastal_height = long_coastal.y;
 	float long_remainder_height = long_remainder.y;
 	float mid_height = mid_displacement.y;
@@ -640,9 +659,10 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec2 zone_grad_mid;
 	vec2 zone_grad_short;
 	vec2 zone_grad_chop;
+	float zone_foam_multiplier;
 	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
 		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
-		zone_grad_short, zone_grad_chop);
+		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
 	float pixel_long_coastal_height = mix(
 		textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).y,
 		textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).y,
@@ -710,6 +730,18 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
 	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+	float zone_long_amplitude;
+	float zone_mid_amplitude;
+	float zone_short_amplitude;
+	float zone_choppiness;
+	vec2 zone_grad_long;
+	vec2 zone_grad_mid;
+	vec2 zone_grad_short;
+	vec2 zone_grad_chop;
+	float zone_foam_multiplier;
+	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
+		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
+		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
 
 	vec2 coast_uv = coastal_uv(world_xz);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
@@ -732,6 +764,9 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 	vec2 remainder = textureLod(foam_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rg;
 	vec2 mid = textureLod(foam_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rg;
 	vec2 short = textureLod(foam_short, spectrum_uv(world_xz, domain_short_m), 0.0).rg;
+	float zone_foam_activity = sea_state_zone_foam_activity(
+		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
+		zone_choppiness, zone_foam_multiplier);
 
 	vec2 long_base = clamp(coastal * coastal_weight + remainder * remainder_weight, 0.0, 1.0);
 	// MID and SHORT remain physical contributors, but their addition is
@@ -740,6 +775,9 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 	vec2 short_detail = short * (short_weight * mid_short_weight) * foam_detail_contribution * 0.30;
 	vec2 detail_foam = 1.0 - (1.0 - mid_detail) * (1.0 - short_detail);
 	vec2 combined = 1.0 - (1.0 - long_base) * (1.0 - detail_foam);
+	// Existing residual is allowed a longer tail than fresh birth, while both
+	// remain attached to the same local wave-state activity.
+	combined *= vec2(mix(zone_foam_activity, 1.0, 0.25), zone_foam_activity);
 	return vec4(clamp(combined, 0.0, 1.0), 0.5, 1.0);
 }
 
@@ -1123,6 +1161,23 @@ void fragment() {
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
 	vec2 surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	float zone_long_amplitude;
+	float zone_mid_amplitude;
+	float zone_short_amplitude;
+	float zone_choppiness;
+	vec2 zone_grad_long;
+	vec2 zone_grad_mid;
+	vec2 zone_grad_short;
+	vec2 zone_grad_chop;
+	float zone_foam_multiplier;
+	sea_state_zone_state(ocean_base_xz, zone_long_amplitude, zone_mid_amplitude,
+		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
+		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
+	float zone_foam_activity = sea_state_zone_foam_activity(
+		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
+		zone_choppiness, zone_foam_multiplier);
+	// Keep Surface Foam's independent history/topology intact; only its
+	// presentation contribution is locally attenuated by the zone state.
 	float surface_foam_raw_topology = 0.0;
 	float surface_foam_macro = 0.0;
 	float crest_filigree_raw_topology = 0.0;
@@ -1160,6 +1215,8 @@ void fragment() {
 			crest_filigree_raw_topology,
 			surface_foam_field_unweighted.x
 		);
+		surface_foam_macro *= zone_foam_activity;
+		crest_filigree_macro *= zone_foam_activity;
 	}
 	if (foam_enabled) {
 		float visual_threshold = clamp(foam_threshold, 0.0, 0.999);
@@ -1320,9 +1377,10 @@ void fragment() {
 		vec2 zone_grad_mid;
 		vec2 zone_grad_short;
 		vec2 zone_grad_chop;
+		float zone_foam_multiplier;
 		sea_state_zone_state(ocean_base_xz, zone_long_amplitude, zone_mid_amplitude,
 			zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
-			zone_grad_short, zone_grad_chop);
+			zone_grad_short, zone_grad_chop, zone_foam_multiplier);
 		float value = clamp(zone_long_amplitude / 2.0, 0.0, 1.0);
 		color = mix(vec3(0.02, 0.04, 0.16), vec3(0.08, 0.85, 0.95), smoothstep(0.0, 0.5, value));
 		color = mix(color, vec3(1.0, 0.25, 0.05), smoothstep(0.5, 1.0, value));
