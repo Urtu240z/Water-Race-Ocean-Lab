@@ -125,13 +125,15 @@ func _create_demo_sea_state_zone() -> void:
 		return
 	_demo_sea_state_zone = SEA_STATE_ZONE_SCRIPT.new() as OceanSeaStateZone3D
 	_demo_sea_state_zone.name = "DemoSeaStateZone"
-	_demo_sea_state_zone.position = Vector3(0.0, 0.0, 30.0)
+	_demo_sea_state_zone.position = Vector3(0.0, 0.0, -80.0)
 	_demo_sea_state_zone.box_size_m = Vector2(120.0, 160.0)
-	_demo_sea_state_zone.feather_distance_m = 20.0
-	_demo_sea_state_zone.long_amplitude_multiplier = 1.35
-	_demo_sea_state_zone.mid_amplitude_multiplier = 1.15
-	_demo_sea_state_zone.short_amplitude_multiplier = 0.90
-	_demo_sea_state_zone.choppiness_multiplier = 1.10
+	_demo_sea_state_zone.feather_distance_m = 30.0
+	_demo_sea_state_zone.long_amplitude_multiplier = 0.35
+	_demo_sea_state_zone.mid_amplitude_multiplier = 0.10
+	_demo_sea_state_zone.short_amplitude_multiplier = 0.03
+	_demo_sea_state_zone.choppiness_multiplier = 0.45
+	_demo_sea_state_zone.strength = 1.0
+	_demo_sea_state_zone.priority = 0
 	add_child(_demo_sea_state_zone)
 	ocean_v3.register_sea_state_zone(_demo_sea_state_zone)
 
