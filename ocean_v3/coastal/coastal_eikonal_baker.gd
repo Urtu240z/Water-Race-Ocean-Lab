@@ -431,9 +431,9 @@ func _build_cut_locus_render_direction(output, incoming_direction: Vector2) -> v
 		last_cut_locus_modified_count = 0
 		_initialize_render_phase(output)
 		last_render_phase_regularization_ms = 0.0
-		var phase_gradient_start := Time.get_ticks_usec()
+		var disabled_phase_gradient_start := Time.get_ticks_usec()
 		_compute_render_phase_gradient(output, incoming_direction)
-		last_render_phase_gradient_ms = float(Time.get_ticks_usec() - phase_gradient_start) / 1000.0
+		last_render_phase_gradient_ms = float(Time.get_ticks_usec() - disabled_phase_gradient_start) / 1000.0
 		return
 	var detection_start := Time.get_ticks_usec()
 	var core_mask := _detect_cut_locus_core(output)
