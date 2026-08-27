@@ -186,6 +186,10 @@ uniform mat4 planar_reflection_view_projection = mat4(1.0);
 uniform float planar_reflection_plane_y = 0.0;
 uniform int planar_reflection_anchor_mode = 0;
 uniform int planar_reflection_uv_orientation = 0;
+// External Mirror Geometry is captured by the normal main camera and already
+// occupies screen space; the regular planar path continues using the matrix.
+uniform bool planar_reflection_screen_space = false;
+uniform bool planar_reflection_screen_space_distortion = false;
 uniform float planar_reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
 uniform float planar_reflection_distortion_strength : hint_range(0.0, 0.2, 0.001) = 0.035;
 uniform float planar_reflection_edge_fade : hint_range(0.001, 0.5, 0.005) = 0.08;
@@ -1629,33 +1633,50 @@ void fragment() {
 	float planar_reflection_validity = 0.0;
 	float planar_reflection_weight = 0.0;
 	if (planar_reflection_enabled) {
-		vec3 planar_world_position = ocean_world_position;
-		if (planar_reflection_anchor_mode == 1) {
-			planar_world_position = vec3(
-				ocean_world_position.x,
-				planar_reflection_plane_y,
-				ocean_world_position.z
-			);
-		} else if (planar_reflection_anchor_mode == 2) {
-			planar_world_position = vec3(
-				ocean_base_xz.x,
-				planar_reflection_plane_y,
-				ocean_base_xz.y
-			);
-		}
-		vec4 reflection_clip = planar_reflection_view_projection * vec4(planar_world_position, 1.0);
-		if (reflection_clip.w > 0.0001) {
-			vec2 projected_uv = reflection_clip.xy / reflection_clip.w;
-			projected_uv = projected_uv * 0.5 + 0.5;
-			// Orientation is a LAB diagnostic and must precede all bounds,
-			// edge-fade, distortion, and texture sampling operations below.
-			if (planar_reflection_uv_orientation == 0) {
-				projected_uv.y = 1.0 - projected_uv.y;
-			} else if (planar_reflection_uv_orientation == 2) {
-				projected_uv.x = 1.0 - projected_uv.x;
-			} else if (planar_reflection_uv_orientation == 3) {
-				projected_uv = vec2(1.0 - projected_uv.x, 1.0 - projected_uv.y);
+		vec2 projected_uv = vec2(0.0);
+		float perspective_compensation = 1.0;
+		bool projection_valid = true;
+		if (planar_reflection_screen_space) {
+			// The Mirror Geometry camera copies the normal main camera, so this
+			// texture is already aligned with the current screen pixel.
+			projected_uv = SCREEN_UV;
+		} else {
+			vec3 planar_world_position = ocean_world_position;
+			if (planar_reflection_anchor_mode == 1) {
+				planar_world_position = vec3(
+					ocean_world_position.x,
+					planar_reflection_plane_y,
+					ocean_world_position.z
+				);
+			} else if (planar_reflection_anchor_mode == 2) {
+				planar_world_position = vec3(
+					ocean_base_xz.x,
+					planar_reflection_plane_y,
+					ocean_base_xz.y
+				);
 			}
+			vec4 reflection_clip = planar_reflection_view_projection * vec4(planar_world_position, 1.0);
+			if (reflection_clip.w <= 0.0001) {
+				projection_valid = false;
+			} else {
+				projected_uv = reflection_clip.xy / reflection_clip.w;
+				projected_uv = projected_uv * 0.5 + 0.5;
+				// Orientation is a LAB diagnostic and must precede all bounds,
+				// edge-fade, distortion, and texture sampling operations below.
+				if (planar_reflection_uv_orientation == 0) {
+					projected_uv.y = 1.0 - projected_uv.y;
+				} else if (planar_reflection_uv_orientation == 2) {
+					projected_uv.x = 1.0 - projected_uv.x;
+				} else if (planar_reflection_uv_orientation == 3) {
+					projected_uv = vec2(1.0 - projected_uv.x, 1.0 - projected_uv.y);
+				}
+				perspective_compensation = clamp(32.0 / max(abs(reflection_clip.w), 32.0), 0.04, 1.0);
+			}
+		}
+		if (!projection_valid) {
+			projected_uv = vec2(0.0);
+		}
+		if (projection_valid) {
 			planar_reflection_uv = projected_uv;
 			vec2 inside_uv = step(vec2(0.0), projected_uv) * step(projected_uv, vec2(1.0));
 			float inside_mask = inside_uv.x * inside_uv.y;
@@ -1664,12 +1685,14 @@ void fragment() {
 				min(projected_uv.y, 1.0 - projected_uv.y)
 			);
 			float edge_fade = smoothstep(0.0, max(planar_reflection_edge_fade, 0.001), edge_distance);
-			// UVs are normalized, so resolution changes do not change distortion
-			// amplitude. Perspective compensation suppresses horizon-scale shifts.
-			float perspective_compensation = clamp(32.0 / max(abs(reflection_clip.w), 32.0), 0.04, 1.0);
-			vec2 distortion = final_visual_normal_world.xz
-				* planar_reflection_distortion_strength
-				* perspective_compensation;
+			// The first Mirror Geometry diagnostic is pure screen-space. Its
+			// existing wave distortion can be enabled independently afterward.
+			vec2 distortion = vec2(0.0);
+			if (!planar_reflection_screen_space || planar_reflection_screen_space_distortion) {
+				distortion = final_visual_normal_world.xz
+					* planar_reflection_distortion_strength
+					* perspective_compensation;
+			}
 			vec2 sample_uv = projected_uv + distortion;
 			vec2 sample_inside_uv = step(vec2(0.0), sample_uv) * step(sample_uv, vec2(1.0));
 			float sample_inside_mask = sample_inside_uv.x * sample_inside_uv.y;

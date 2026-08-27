@@ -12,6 +12,10 @@ const MIRROR_LAYER_MASK := 1 << (MIRROR_LAYER - 1)
 const MIN_VIEWPORT_SIZE := Vector2i(2, 2)
 const REFLECTION_SCALE := 0.25
 const SAFE_EPSILON_M := 0.001
+# This source is captured by a normal main-camera perspective, so its texture
+# is already in main-screen coordinates. Keep the first comparison undistorted.
+const MIRROR_SCREEN_SPACE_SAMPLING := true
+const MIRROR_SCREEN_SPACE_DISTORTION := false
 
 var _lab_root: Node3D
 var _ocean_root: Node3D
@@ -60,7 +64,7 @@ func _exit_tree() -> void:
 		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw)
 	if _planar_reflection != null and is_instance_valid(_planar_reflection):
 		if _planar_reflection.has_method(&"set_external_reflection_source"):
-			_planar_reflection.call(&"set_external_reflection_source", false, null, Projection())
+			_planar_reflection.call(&"set_external_reflection_source", false, null, Projection(), false, false)
 
 
 func _process(_delta: float) -> void:
@@ -198,7 +202,14 @@ func _publish_external_source() -> void:
 	if _planar_reflection == null or not is_instance_valid(_planar_reflection):
 		return
 	if _planar_reflection.has_method(&"set_external_reflection_source"):
-		_planar_reflection.call(&"set_external_reflection_source", true, _reflection_viewport.get_texture(), _capture_view_projection)
+		_planar_reflection.call(
+			&"set_external_reflection_source",
+			true,
+			_reflection_viewport.get_texture(),
+			_capture_view_projection,
+			MIRROR_SCREEN_SPACE_SAMPLING,
+			MIRROR_SCREEN_SPACE_DISTORTION
+		)
 
 
 func _find_sea_level_y() -> float:
@@ -213,7 +224,7 @@ func get_reflection_texture() -> Texture2D:
 
 
 func reflection_projection_label() -> String:
-	return "MIRROR GEOMETRY / PERSPECTIVE"
+	return "MIRROR GEOMETRY / SCREEN UV"
 
 
 func source_mesh_count() -> int:

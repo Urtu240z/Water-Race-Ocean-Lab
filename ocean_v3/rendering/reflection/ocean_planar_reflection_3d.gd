@@ -61,6 +61,8 @@ var _active_projection_label := "PERSPECTIVE"
 var _external_source_enabled := false
 var _external_source_texture: Texture2D
 var _external_source_view_projection := Projection()
+var _external_source_screen_space := false
+var _external_source_screen_space_distortion := false
 
 
 func _exit_tree() -> void:
@@ -511,6 +513,8 @@ func _sync_material_state(active: bool) -> void:
 	_surface_material.set_shader_parameter(&"planar_reflection_plane_y", _sea_plane_world_y())
 	_surface_material.set_shader_parameter(&"planar_reflection_anchor_mode", _sampling_anchor_mode)
 	_surface_material.set_shader_parameter(&"planar_reflection_uv_orientation", _uv_orientation)
+	_surface_material.set_shader_parameter(&"planar_reflection_screen_space", _external_source_screen_space)
+	_surface_material.set_shader_parameter(&"planar_reflection_screen_space_distortion", _external_source_screen_space_distortion)
 	if _external_source_enabled:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _external_source_texture)
 		_surface_material.set_shader_parameter(&"planar_reflection_view_projection", _external_source_view_projection)
@@ -518,10 +522,12 @@ func _sync_material_state(active: bool) -> void:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
 
 
-func set_external_reflection_source(enabled: bool, texture: Texture2D, view_projection: Projection) -> void:
+func set_external_reflection_source(enabled: bool, texture: Texture2D, view_projection: Projection, screen_space: bool = false, screen_space_distortion: bool = false) -> void:
 	_external_source_enabled = enabled and texture != null
 	_external_source_texture = texture
 	_external_source_view_projection = view_projection
+	_external_source_screen_space = _external_source_enabled and screen_space
+	_external_source_screen_space_distortion = _external_source_screen_space and screen_space_distortion
 	_capture_matrix_pending = false
 	_pending_capture_sequence = 0
 	_capture_ready = _external_source_enabled
