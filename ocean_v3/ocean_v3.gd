@@ -382,9 +382,9 @@ var _wave_transition_start_short_geometry := 0.25
 		planar_reflection_overscan = clampf(value, 1.0, 2.0)
 		_request_visual_sync()
 
-@export_enum("Mirrored Perspective:0", "Off-Axis Frustum:1") var planar_reflection_projection_mode: int = 0:
+@export_enum("Mirrored Perspective:0", "Off-Axis Frustum:1", "True Oblique:2") var planar_reflection_projection_mode: int = 0:
 	set(value):
-		planar_reflection_projection_mode = clampi(value, 0, 1)
+		planar_reflection_projection_mode = clampi(value, 0, 2)
 		_request_visual_sync()
 
 @export_range(0.0, 1.0, 0.01) var planar_reflection_clip_bias_m: float = 0.10:
@@ -1053,6 +1053,12 @@ func planar_reflection_projection_label() -> String:
 	if _planar_reflection != null and is_instance_valid(_planar_reflection):
 		return str(_planar_reflection.call("projection_mode_label"))
 	return "PERSPECTIVE"
+
+
+func planar_reflection_oblique_engine_available() -> bool:
+	if _planar_reflection != null and is_instance_valid(_planar_reflection):
+		return bool(_planar_reflection.call("oblique_engine_available"))
+	return false
 
 
 func _refresh_sea_state_zones() -> void:

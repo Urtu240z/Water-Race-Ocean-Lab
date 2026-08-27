@@ -11,6 +11,7 @@ const USER_RENDER_LAYER_MASK := (1 << 20) - 1
 const MIN_VIEWPORT_SIZE := Vector2i(2, 2)
 const PROJECTION_MODE_MIRRORED_PERSPECTIVE := 0
 const PROJECTION_MODE_OFF_AXIS_FRUSTUM := 1
+const PROJECTION_MODE_TRUE_OBLIQUE := 2
 const SAFE_CAMERA_EPSILON_M := 0.001
 const MAX_FRUSTUM_OFFSET_RATIO := 8.0
 
@@ -84,7 +85,7 @@ func set_settings(enabled: bool, resolution_scale: float, overscan: float, proje
 	_enabled = enabled
 	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
 	_overscan = clampf(overscan, 1.0, 2.0)
-	_projection_mode = clampi(projection_mode, PROJECTION_MODE_MIRRORED_PERSPECTIVE, PROJECTION_MODE_OFF_AXIS_FRUSTUM)
+	_projection_mode = clampi(projection_mode, PROJECTION_MODE_MIRRORED_PERSPECTIVE, PROJECTION_MODE_TRUE_OBLIQUE)
 	_clip_bias_m = clampf(clip_bias_m, 0.0, 1.0)
 	var previous_update_hz := _update_hz
 	_update_hz = 0 if update_hz <= 0 else 15 if update_hz <= 15 else 30 if update_hz <= 30 else 60
@@ -98,6 +99,8 @@ func set_settings(enabled: bool, resolution_scale: float, overscan: float, proje
 	if previous_update_hz != _update_hz:
 		_scheduler_elapsed_s = 0.0
 	if _initialized:
+		if previous_projection_mode != _projection_mode:
+			_disable_oblique_camera()
 		if previous_enabled != _enabled or not is_equal_approx(previous_overscan, _overscan) or previous_projection_mode != _projection_mode or not is_equal_approx(previous_clip_bias_m, _clip_bias_m) or not is_equal_approx(previous_max_distance_m, _max_distance_m):
 			_invalidate_capture_state()
 		_reflection_camera.cull_mask = _cull_mask
@@ -197,6 +200,17 @@ func _resize_to_main_viewport() -> void:
 
 
 func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
+	if _projection_mode == PROJECTION_MODE_TRUE_OBLIQUE:
+		var oblique_available := _oblique_engine_supported()
+		if _sync_true_oblique(main_camera, plane_y):
+			_active_projection_label = "TRUE OBLIQUE"
+			return
+		_disable_oblique_camera()
+		_sync_mirrored_perspective(main_camera, plane_y)
+		_active_projection_label = "TRUE OBLIQUE (%s -> PERSPECTIVE)" % ("UNAVAILABLE" if not oblique_available else "GUARDED")
+		return
+
+	_disable_oblique_camera()
 	if _projection_mode == PROJECTION_MODE_OFF_AXIS_FRUSTUM and main_camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
 		if _sync_off_axis_frustum(main_camera, plane_y):
 			_active_projection_label = "OFF-AXIS FRUSTUM"
@@ -209,6 +223,48 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 		_active_projection_label = "PERSPECTIVE (FALLBACK)"
 	else:
 		_active_projection_label = "MIRRORED (FALLBACK)"
+
+
+func _sync_true_oblique(main_camera: Camera3D, plane_y: float) -> bool:
+	if not _oblique_engine_supported() or main_camera.projection != Camera3D.PROJECTION_PERSPECTIVE:
+		return false
+	var main_position := main_camera.global_position
+	if not main_position.is_finite() or not is_finite(plane_y):
+		return false
+	if main_position.y - plane_y <= SAFE_CAMERA_EPSILON_M:
+		return false
+	_disable_oblique_camera()
+	_sync_mirrored_perspective(main_camera, plane_y)
+	_reflection_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	var plane_position := Vector3(main_position.x, plane_y, main_position.z)
+	# The custom engine keeps the positive half-space. A negative offset moves
+	# the boundary above the datum, preventing below-water geometry leakage.
+	_reflection_camera.call(&"set_oblique_plane_normal", Vector3.UP)
+	_reflection_camera.call(&"set_oblique_plane_position", plane_position)
+	_reflection_camera.call(&"set_oblique_plane_offset", -_clip_bias_m)
+	_reflection_camera.call(&"set_use_oblique_near_plane", true)
+	return bool(_reflection_camera.call(&"get_use_oblique_near_plane"))
+
+
+func _oblique_engine_supported() -> bool:
+	if _reflection_camera == null or not is_instance_valid(_reflection_camera):
+		return false
+	return _reflection_camera.has_method(&"set_use_oblique_near_plane") \
+			and _reflection_camera.has_method(&"set_oblique_plane_normal") \
+			and _reflection_camera.has_method(&"set_oblique_plane_position") \
+			and _reflection_camera.has_method(&"set_oblique_plane_offset") \
+			and _reflection_camera.has_method(&"get_use_oblique_near_plane")
+
+
+func oblique_engine_available() -> bool:
+	return _oblique_engine_supported()
+
+
+func _disable_oblique_camera() -> void:
+	if _reflection_camera == null or not is_instance_valid(_reflection_camera):
+		return
+	if _reflection_camera.has_method(&"set_use_oblique_near_plane"):
+		_reflection_camera.call(&"set_use_oblique_near_plane", false)
 
 
 func _sync_mirrored_perspective(main_camera: Camera3D, plane_y: float) -> void:

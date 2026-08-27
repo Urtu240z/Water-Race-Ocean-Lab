@@ -1,16 +1,16 @@
 # Ocean V3 planar reflection clipping investigation
 
-Status: 2026-08-27, Godot 4.7 stable.
+Status: 2026-08-27, custom Godot Water Race 4.7.2 integration.
 
 ## Decision
 
-**OBLIQUE CLIPPING: BLOCKED BY GODOT 4.7 PUBLIC RENDER API**
+**TRUE OBLIQUE: AVAILABLE WITH THE CUSTOM GODOT WATER RACE ENGINE**
 
 Reflection 2D keeps its shared `World3D`, mirrored `Camera3D`, `SubViewport`,
 `UPDATE_ONCE` scheduler, and `RenderingServer.frame_post_draw` matrix/texture
-synchronization. The production default remains mirrored perspective. A
-selectable off-axis frustum experiment is also available for LAB A/B testing;
-it does not replace the default and does not require changes to the shader.
+synchronization. The production default remains mirrored perspective. Off-axis
+frustum and true oblique are selectable LAB A/B/C modes; neither replaces the
+default and neither requires changes to the shader.
 
 ## APIs and engine source reviewed
 
@@ -35,6 +35,11 @@ it does not replace the default and does not require changes to the shader.
   was checked for the bound camera methods, `frame_post_draw`, and
   `call_on_render_thread`. A render-thread callback does not add a public
   camera projection override; it only changes where code executes.
+- Custom Godot Water Race 4.7.2 (`2ff0e6450a24185ef9dbfcfd265ae5601304faa8`)
+  adds `Camera3D.set_use_oblique_near_plane()`,
+  `set_oblique_plane_normal()`, `set_oblique_plane_position()`, and
+  `set_oblique_plane_offset()`, plus matching getters. Ocean V3 detects these
+  methods dynamically so stock Godot remains loadable.
 - The renderer scene interface
   [`servers/rendering/renderer_scene_render.h`](https://github.com/godotengine/godot/blob/4.7-stable/servers/rendering/renderer_scene_render.h)
   exposes compositor-effect plumbing, not a supported per-camera arbitrary
@@ -42,7 +47,7 @@ it does not replace the default and does not require changes to the shader.
 - `SubViewport` keeps the documented `UPDATE_ONCE` behavior:
   [`class_subviewport.html`](https://docs.godotengine.org/en/4.7/classes/class_subviewport.html).
 
-## Oblique projection assessment
+## TRUE OBLIQUE — Custom Godot 4.7.2
 
 The required safe algorithm was reviewed: transform the authoritative
 world-space plane from `_sea_plane_world_y()` into reflection-camera space,
@@ -52,21 +57,31 @@ renderer convention. Godot Forward+ uses reverse-Z, and Vulkan NDC depth is
 [internal rendering architecture](https://docs.godotengine.org/en/4.7/engine_details/architecture/internal_rendering_architecture.html)
 and [spatial shader reference](https://docs.godotengine.org/en/4.7/tutorials/shaders/shader_reference/spatial_shader.html).
 
-That mathematics is not installed in runtime code because the final modified
-`Projection` cannot be passed to the actual `Camera3D`/RID renderer path using
-the supported Godot 4.7 API. A hand-written OpenGL-style matrix would risk
-wrong reverse-Z depth, handedness, culling, and near/far behavior.
+The custom engine installs the oblique near plane in the actual camera
+projection while retaining the regular perspective projection for lighting and
+shadow culling. Ocean V3 therefore keeps the original mirrored perspective
+camera transform, perspective FOV/overscan, near/far values, environment, and
+cull mask, then configures the authoritative sea datum as the camera's
+world-space oblique plane.
+
+The capture matrix remains the direct
+`reflection_camera.get_camera_projection() * Projection(reflection_camera.get_camera_transform().affine_inverse())`
+value. With the custom engine, `get_camera_projection()` includes the oblique
+projection that was used for the capture; no second matrix is constructed.
 
 The authoritative sea plane remains the existing `_sea_plane_world_y()` datum;
 no `Y = 0` assumption is made. Therefore:
 
-- oblique clipping: not implemented;
-- clip bias control: the off-axis experiment uses
-  `planar_reflection_clip_bias_m` to move its near plane away from the water;
-  this is not an oblique clip-plane bias;
-- discarded half-space: not applicable;
-- current fallback: reflection cull mask for whole-object exclusions plus the
-  existing `planar_reflection_max_distance_m` far-plane limit.
+- oblique clipping: implemented only when the custom Camera3D API is present;
+- plane normal: `Vector3.UP`;
+- plane position: `(main_camera.x, _sea_plane_world_y(), main_camera.z)`;
+- clip bias: Ocean V3 passes `-planar_reflection_clip_bias_m`. The custom
+  engine keeps the positive half-space; with the mirrored camera below the
+  datum, this places the effective boundary slightly above the datum and
+  prevents below-water geometry leakage;
+- stock fallback: if any required method is absent, the requested mode falls
+  back to mirrored perspective and the HUD reports
+  `TRUE OBLIQUE (UNAVAILABLE -> PERSPECTIVE)`.
 
 ## Off-Axis Frustum Workaround
 
@@ -110,14 +125,16 @@ camera a finite, water-plane-derived capture footprint, but it cannot exactly
 discard arbitrary triangles that cross the sea plane; geometry crossing or
 appearing outside the fitted frustum may still require asset/layer handling.
 Orthographic and custom-frustum main cameras, cameras at/below the water, and
-invalid ray footprints use the safe mirrored fallback. K in the Ocean Lab
-toggles the two modes and the HUD reports the active mode and clip-bias value.
+invalid ray footprints use the safe mirrored fallback. K in the Ocean Lab cycles
+the three modes and the HUD reports the active mode, engine availability, and
+clip-bias value.
 
 ## Alternatives
 
 | Alternative | Cuts a mesh crossing water | Materials | Duplicate geometry | Arbitrary GLB | Cost / complexity / risk |
 |---|---:|---:|---:|---:|---|
 | RenderingServer camera RID custom projection | No | No | No | Yes | Low apparent cost, but unavailable API; unsafe to fake |
+| Custom Camera3D oblique near plane | Yes | No | No | Yes | Available only in the pinned Water Race engine |
 | CompositorEffect/custom render path | Potentially, with renderer control | Usually no | No | Potentially yes | High / high / high; not a stock per-camera clip-plane hook |
 | Reflection-specific geometry layers | No, only whole objects | No | No | Yes | Low / low / low; current safe fallback |
 | Reflection proxy meshes above water | No for the original crossing mesh | No | Yes | No | Medium / medium / medium; asset authoring burden |
