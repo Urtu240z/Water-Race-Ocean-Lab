@@ -5,7 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F8: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+F8: slot 0..7/ALL | Ctrl+F8: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | U: RAW Planar Capture | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 const PLANAR_AB_WARMUP_S := 0.5
 const PLANAR_AB_MEASURE_S := 4.0
@@ -23,6 +23,12 @@ const PLANAR_AB_RESULT := 5
 @onready var metric_references: Node3D = $MetricReferences
 @onready var ocean_v3: OceanV3 = $OceanV3Mount/OceanV3
 
+var _raw_planar_layer: CanvasLayer
+var _raw_planar_panel: PanelContainer
+var _raw_planar_texture_rect: TextureRect
+var _raw_planar_projection_label: Label
+var _raw_planar_viewport: SubViewport
+var _raw_planar_visible := false
 var _using_race_camera := false
 var _query_probe_tool: Node3D
 var _demo_sea_state_zone: OceanSeaStateZone3D
@@ -42,6 +48,7 @@ func _ready() -> void:
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
+	_create_raw_planar_capture_view()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
 	_smoothed_frame_ms = 1000.0 / maxf(float(Engine.get_frames_per_second()), 1.0)
 	_update_coastal_hud()
@@ -91,7 +98,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_query_probe_tool.call("toggle_snapshot")
 		KEY_F2:
 			ocean_v3.toggle_breaker_ribbons_diagnostic_visibility()
-		KEY_F8:
+		KEY_J:
 			if event.ctrl_pressed:
 				ocean_v3.force_spawn_selected_breaker()
 			elif event.shift_pressed:
@@ -113,6 +120,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_start_planar_ab_measurement()
 		KEY_K:
 			_toggle_planar_projection_mode()
+		KEY_U:
+			_toggle_raw_planar_capture()
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET
@@ -145,6 +154,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _process(delta: float) -> void:
 	_smoothed_frame_ms = lerpf(_smoothed_frame_ms, delta * 1000.0, 0.12)
 	_update_planar_ab_measurement(delta)
+	_update_raw_planar_capture()
 
 
 func _toggle_planar_reflection() -> void:
@@ -172,6 +182,85 @@ func _toggle_planar_projection_mode() -> void:
 		return
 	ocean_v3.planar_reflection_projection_mode = (ocean_v3.planar_reflection_projection_mode + 1) % 3
 	_update_coastal_hud()
+
+
+func _toggle_raw_planar_capture() -> void:
+	_raw_planar_visible = not _raw_planar_visible
+	if _raw_planar_panel != null:
+		_raw_planar_panel.visible = _raw_planar_visible
+	_update_raw_planar_capture()
+
+
+func _create_raw_planar_capture_view() -> void:
+	_raw_planar_layer = CanvasLayer.new()
+	_raw_planar_layer.name = "RawPlanarCaptureDebug"
+	_raw_planar_layer.layer = 10
+	add_child(_raw_planar_layer)
+
+	_raw_planar_panel = PanelContainer.new()
+	_raw_planar_panel.name = "RawPlanarCapturePanel"
+	_raw_planar_panel.visible = false
+	_raw_planar_panel.anchor_left = 0.52
+	_raw_planar_panel.anchor_top = 0.50
+	_raw_planar_panel.anchor_right = 0.98
+	_raw_planar_panel.anchor_bottom = 0.97
+	_raw_planar_panel.offset_left = 0.0
+	_raw_planar_panel.offset_top = 0.0
+	_raw_planar_panel.offset_right = 0.0
+	_raw_planar_panel.offset_bottom = 0.0
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.015, 0.03, 0.05, 0.94)
+	panel_style.border_color = Color(0.35, 0.75, 0.9, 0.9)
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(5)
+	_raw_planar_panel.add_theme_stylebox_override("panel", panel_style)
+	_raw_planar_layer.add_child(_raw_planar_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 8)
+	_raw_planar_panel.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.text = "RAW PLANAR CAPTURE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+
+	_raw_planar_projection_label = Label.new()
+	_raw_planar_projection_label.text = "Projection: unavailable"
+	_raw_planar_projection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_raw_planar_projection_label)
+
+	_raw_planar_texture_rect = TextureRect.new()
+	_raw_planar_texture_rect.name = "RawPlanarTexture"
+	_raw_planar_texture_rect.custom_minimum_size = Vector2(320.0, 180.0)
+	_raw_planar_texture_rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_raw_planar_texture_rect.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_raw_planar_texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_raw_planar_texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_raw_planar_texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	box.add_child(_raw_planar_texture_rect)
+
+
+func _update_raw_planar_capture() -> void:
+	if not _raw_planar_visible or _raw_planar_texture_rect == null:
+		return
+	if _raw_planar_viewport == null or not is_instance_valid(_raw_planar_viewport):
+		_raw_planar_viewport = ocean_v3.get_node_or_null(^"PlanarReflectionViewport") as SubViewport
+	if _raw_planar_viewport == null:
+		_raw_planar_texture_rect.texture = null
+		_raw_planar_projection_label.text = "Projection: unavailable"
+		return
+	# This is the exact ViewportTexture consumed by OceanPlanarReflection3D's
+	# surface material; no second camera, viewport, or render pass is created.
+	_raw_planar_texture_rect.texture = _raw_planar_viewport.get_texture()
+	_raw_planar_projection_label.text = "Projection: %s" % ocean_v3.planar_reflection_projection_label()
 
 
 func _update_planar_ab_measurement(delta: float) -> void:
