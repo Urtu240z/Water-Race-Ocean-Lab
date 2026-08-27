@@ -237,11 +237,12 @@ func _sync_true_oblique(main_camera: Camera3D, plane_y: float) -> bool:
 	_sync_mirrored_perspective(main_camera, plane_y)
 	_reflection_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 	var plane_position := Vector3(main_position.x, plane_y, main_position.z)
-	# The custom engine keeps the positive half-space. A negative offset moves
-	# the boundary above the datum, preventing below-water geometry leakage.
+	# The custom engine clips the camera side and keeps the opposite half-space.
+	# A positive offset moves the boundary slightly below the datum, preventing
+	# below-water geometry leakage without clipping the water surface itself.
 	_reflection_camera.call(&"set_oblique_plane_normal", Vector3.UP)
 	_reflection_camera.call(&"set_oblique_plane_position", plane_position)
-	_reflection_camera.call(&"set_oblique_plane_offset", -_clip_bias_m)
+	_reflection_camera.call(&"set_oblique_plane_offset", _clip_bias_m)
 	_reflection_camera.call(&"set_use_oblique_near_plane", true)
 	return bool(_reflection_camera.call(&"get_use_oblique_near_plane"))
 

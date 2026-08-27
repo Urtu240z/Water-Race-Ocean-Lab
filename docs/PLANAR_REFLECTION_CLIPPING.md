@@ -75,10 +75,10 @@ no `Y = 0` assumption is made. Therefore:
 - oblique clipping: implemented only when the custom Camera3D API is present;
 - plane normal: `Vector3.UP`;
 - plane position: `(main_camera.x, _sea_plane_world_y(), main_camera.z)`;
-- clip bias: Ocean V3 passes `-planar_reflection_clip_bias_m`. The custom
-  engine keeps the positive half-space; with the mirrored camera below the
-  datum, this places the effective boundary slightly above the datum and
-  prevents below-water geometry leakage;
+- clip bias: Ocean V3 passes `+planar_reflection_clip_bias_m`. The custom
+  engine clips the camera side and keeps the opposite half-space; with the
+  mirrored camera below the datum, this places the effective boundary slightly
+  below the datum and prevents below-water geometry leakage;
 - stock fallback: if any required method is absent, the requested mode falls
   back to mirrored perspective and the HUD reports
   `TRUE OBLIQUE (UNAVAILABLE -> PERSPECTIVE)`.
