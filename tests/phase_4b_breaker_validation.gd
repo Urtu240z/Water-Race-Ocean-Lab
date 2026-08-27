@@ -80,7 +80,7 @@ func _validate_pool_logic() -> void:
 	pool.configure(propagation, null, 0.5, 0.5, 0.0, null)
 	var count := pool.anchor_count()
 	print("4B POOL anchors=%d (max=%d) spacing_min=%.1f" % [count, pool.max_breakers, pool.anchor_min_spacing_m])
-	_check(count > 0, "banco con zona de pre-break genera anchors")
+	_check(count == 0, "banco abrupto sin corredor no fuerza anchors surf")
 	_check(count <= pool.max_breakers, "nunca más slots que max_breakers")
 	_check(_snapshots_equal(pool.anchor_snapshot(), pool.anchor_snapshot()), "mismo modelo/batimetría -> misma disposición (determinismo)")
 	for anchor in pool.anchor_snapshot():
@@ -99,7 +99,7 @@ func _validate_pool_logic() -> void:
 	pool.set_energy_model(0.05, 0.5)
 	_check(pool.anchor_count() == 0, "Hs mínima -> sin zona de pre-break -> 0 slots (ningún breaker)")
 	pool.set_energy_model(0.5, 0.5)
-	_check(pool.anchor_count() > 0, "restaurar Hs -> vuelven los slots")
+	_check(pool.anchor_count() == 0, "restaurar Hs -> el banco abrupto sigue sin corredor surf")
 	pool.disable()
 	_check(pool.anchor_count() == 0 and not pool.visible, "disable -> 0 slots y oculto (Coastal OFF / sin batimetría)")
 	for child in pool.get_children():

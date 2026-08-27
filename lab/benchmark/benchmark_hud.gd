@@ -3,6 +3,7 @@ extends CanvasLayer
 
 @onready var metrics_label: Label = $Margin/Panel/Metrics
 @onready var lab_main: Node = get_parent()
+var _breaker_hud_verbose := false
 
 
 func _process(_delta: float) -> void:
@@ -79,6 +80,14 @@ func _process(_delta: float) -> void:
 	for planar_line in planar_lines:
 		lines.append(str(planar_line))
 	metrics_label.text = "\n".join(lines)
+
+
+func toggle_breaker_hud_verbose() -> void:
+	_breaker_hud_verbose = not _breaker_hud_verbose
+
+
+func breaker_hud_verbose() -> bool:
+	return _breaker_hud_verbose
 
 
 func _hs_line(fft_module) -> String:
@@ -186,39 +195,98 @@ func _breaker_line(fft_module) -> String:
 	if diagnostics.is_empty():
 		return "Breaker Ribbons: unavailable"
 	var breaker_backend: String = str(diagnostics.get("breaker_query_backend", "unavailable"))
-	var breaker_reason: String = str(diagnostics.get("breaker_query_backend_reason", "unavailable"))
-	var lines: PackedStringArray = []
-	lines.append("Breaker Query: %s [%s] | Ribbons: %s | Coastal runtime: %s | breaker: %s" % [
-		breaker_backend,
-		breaker_reason,
-		"ON" if fft_module.breaker_ribbons_diagnostic_visible() else "OFF",
-		"ON" if bool(diagnostics.get("coastal_runtime_enabled", false)) else "OFF",
-		"ON" if bool(diagnostics.get("breaker_enabled", false)) else "OFF",
-	])
-	lines.append("Detector: tick=%d queried=%d slots/%d pts | slope=%d/%d pts | %.3f ms | anchors=%d active=%d | no legacy track" % [
-		int(diagnostics.get("detector_tick", 0)),
-		int(diagnostics.get("queried_slots_last_tick", 0)),
-		int(diagnostics.get("queried_points_last_tick", 0)),
-		int(diagnostics.get("detector_slope_queries_last_tick", 0)),
-		int(diagnostics.get("detector_slope_points_last_tick", 0)),
-		float(diagnostics.get("detector_query_elapsed_ms_last_tick", 0.0)),
-		int(diagnostics.get("slots", 0)),
-		int(diagnostics.get("active_breaker_count", 0)),
-	])
-	lines.append("Detector gates: window -0.28..-0.06 lambda | prominence .04.. .20 * local Hs | slope .20.. .75 | weights .45/.35/.20 | probability .30.. .70 | force=%s" % str(diagnostics.get("force_spawn_last_result", "never_requested")))
 	var tracking: Array = fft_module.breaker_tracking_snapshot() if fft_module.has_method(&"breaker_tracking_snapshot") else []
-	for index in int(diagnostics.get("slots", 0)):
-		var slot: Dictionary = tracking[index] if index < tracking.size() else {}
-		var state := str(slot.get("state", "DETECT"))
-		if state == "DETECT":
-			lines.append("slot %d DETECT wave=%d s/lambda=%+.3f/%+.3f prev=%+.3f adv=%s win=%s p=%.3f ps=%.2f pc=%.2f prom=%.4f ps=%.2f pc=%.2f Hs=%.3f slope=%.3f ss=%.2f sc=%.2f raw=%.2f elig=%.2f zone=%.2f final=%.2f prob=%.2f roll=%.2f cd=%s last=%d reason=%s" % [
-				index, int(slot.get("wave", 0)), float(slot.get("candidate_s", 0.0)), float(slot.get("candidate_s_lambda", 0.0)), float(slot.get("previous_s_lambda", 0.0)), "YES" if bool(slot.get("advancing", false)) else "NO", "YES" if bool(slot.get("in_window", false)) else "NO", float(slot.get("pressure", 0.0)), float(slot.get("pressure_score", 0.0)), float(slot.get("pressure_contribution", 0.0)), float(slot.get("prominence", 0.0)), float(slot.get("prominence_score", 0.0)), float(slot.get("prominence_contribution", 0.0)), float(slot.get("local_hs", 0.0)), float(slot.get("slope_long", 0.0)), float(slot.get("steepness_score", 0.0)), float(slot.get("steepness_contribution", 0.0)), float(slot.get("raw_score", 0.0)), float(slot.get("anchor_eligibility", 0.0)), float(slot.get("zone_activity", 0.0)), float(slot.get("final_score", 0.0)), float(slot.get("probability", 0.0)), float(slot.get("roll", 0.0)), "YES" if bool(slot.get("cooldown_done", true)) else "NO", int(slot.get("last_decided_wave_serial", -1)), str(slot.get("detector_gate_reason", "pending")),
-			])
-		elif state == "ACTIVE":
-			lines.append("slot %d ACTIVE phase=%s life=%.2f stage=%.2f alpha=%.2f candidate=%+.3fm wave=%d" % [index, str(slot.get("lifecycle_phase", "ACTIVE")), float(slot.get("life_t", 0.0)), float(slot.get("stage", 0.0)), float(slot.get("alpha", 0.0)), float(slot.get("candidate_s", 0.0)), int(slot.get("wave", 0))])
+	var slots := int(diagnostics.get("slots", 0))
+	var debug_name := str(diagnostics.get("debug", "OFF"))
+	var debug_slot := int(diagnostics.get("debug_slot", 0))
+	var lines := PackedStringArray([
+		"Breaker: %s | anchors %d | active %d | Debug %s slot %s" % [
+			"ON" if bool(diagnostics.get("breaker_enabled", false)) else "OFF",
+			slots,
+			int(diagnostics.get("active_breaker_count", 0)),
+			debug_name,
+			"ALL" if debug_slot < 0 else str(debug_slot),
+		],
+		"Detector: %d Hz | %d/%d pts | slope %d/%d | %.2f ms | backend %s" % [
+			int(diagnostics.get("detector_hz", 0)),
+			int(diagnostics.get("queried_slots_last_tick", 0)),
+			int(diagnostics.get("queried_points_last_tick", 0)),
+			int(diagnostics.get("detector_slope_queries_last_tick", 0)),
+			int(diagnostics.get("detector_slope_points_last_tick", 0)),
+			float(diagnostics.get("detector_query_elapsed_ms_last_tick", 0.0)),
+			breaker_backend,
+		],
+	])
+	if debug_name == "DETECTOR":
+		if debug_slot < 0:
+			lines.append("BREAKER DETECTOR — ALL")
+			for index in slots:
+				lines.append(_breaker_slot_short(index, tracking[index] if index < tracking.size() else {}))
 		else:
-			lines.append("slot %d %s remaining=%.2fs wave=%d reason=%s" % [index, state, float(slot.get("remaining", 0.0)), int(slot.get("wave", 0)), str(slot.get("detector_gate_reason", "pending"))])
+			lines.append(_breaker_detector_detail(debug_slot, tracking[debug_slot] if debug_slot < tracking.size() else {}))
+	elif debug_slot >= 0 and debug_slot < tracking.size() and str(tracking[debug_slot].get("state", "DETECT")) == "ACTIVE":
+		lines.append(_breaker_active_detail(debug_slot, tracking[debug_slot]))
+	elif _breaker_hud_verbose:
+		lines.append("Breaker verbose: query=%s | coastal=%s | corridor eval=%d (%.2f ms) | force=%s" % [
+			str(diagnostics.get("breaker_query_backend_reason", "unavailable")),
+			"ON" if bool(diagnostics.get("coastal_runtime_enabled", false)) else "OFF",
+			int(diagnostics.get("corridor_evaluation_count", 0)),
+			float(diagnostics.get("corridor_evaluation_ms", 0.0)),
+			str(diagnostics.get("force_spawn_last_result", "never_requested")),
+		])
 	return "\n".join(lines)
+
+
+func _breaker_slot_short(index: int, slot: Dictionary) -> String:
+	var reason := str(slot.get("detector_gate_reason", "pending"))
+	if reason == "INVALID_QUERY_SAMPLE":
+		return "S%d INVALID samples=%s" % [index, str(slot.get("invalid_sample_indices", "unknown"))]
+	return "S%d %s score %.2f wave %d gate %s" % [index, str(slot.get("state", "DETECT")), float(slot.get("final_score", 0.0)), int(slot.get("wave", 0)), reason]
+
+
+func _breaker_detector_detail(index: int, slot: Dictionary) -> String:
+	return "BREAKER DETECTOR — SLOT %d\nState: %s  Wave: %d  s/lambda: %+.2f  Window: %s\nDepth: %.2f m  Pressure: %.2f  Prom: %.2f  Slope: %.2f\nScore: %.2f  Best: %.2f @ s %.2f m  Prob: %.2f  Roll: %.2f\nGate: %s\nStencil: %d valid [%d..%d]" % [
+		index,
+		str(slot.get("state", "DETECT")),
+		int(slot.get("wave", 0)),
+		float(slot.get("candidate_s_lambda", 0.0)),
+		"YES" if bool(slot.get("in_window", false)) else "NO",
+		float(slot.get("spawn_depth_m", slot.get("current_depth_m", 0.0))),
+		float(slot.get("pressure", 0.0)),
+		float(slot.get("prominence", 0.0)),
+		float(slot.get("slope_long", 0.0)),
+		float(slot.get("final_score", 0.0)),
+		float(slot.get("best_score", 0.0)),
+		float(slot.get("best_candidate_s", 0.0)),
+		float(slot.get("probability", 0.0)),
+		float(slot.get("roll", 0.0)),
+		str(slot.get("detector_gate_reason", "pending")),
+		int(slot.get("stencil_valid_count", 0)),
+		int(slot.get("stencil_valid_start", -1)),
+		int(slot.get("stencil_valid_end", -1)),
+	]
+
+
+func _breaker_active_detail(index: int, slot: Dictionary) -> String:
+	var camera := get_viewport().get_camera_3d()
+	var tracked := Vector2(slot.get("tracked_xz", Vector2.ZERO))
+	var camera_distance := 0.0
+	if camera != null:
+		camera_distance = camera.global_position.distance_to(Vector3(tracked.x, 0.0, tracked.y))
+	return "BREAKER SLOT %d — ACTIVE\nphase: %s  life %.2f  stage %.2f  alpha %.2f\nspawn depth %.2f m  current depth %.2f m\nV/H weights %.2f / %.2f  travelled %.2f m  remaining %.2f m  camera %.1f m" % [
+		index,
+		str(slot.get("lifecycle_phase", "ACTIVE")),
+		float(slot.get("life_t", 0.0)),
+		float(slot.get("stage", 0.0)),
+		float(slot.get("alpha", 0.0)),
+		float(slot.get("spawn_depth_m", 0.0)),
+		float(slot.get("current_depth_m", 0.0)),
+		float(slot.get("shore_vertical_weight", 1.0)),
+		float(slot.get("shore_horizontal_weight", 1.0)),
+		float(slot.get("distance_travelled_m", 0.0)),
+		float(slot.get("distance_remaining_in_corridor_m", 0.0)),
+		camera_distance,
+	]
 
 
 func _probe_tool_enabled() -> bool:

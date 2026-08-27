@@ -101,7 +101,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F2:
 			ocean_v3.toggle_breaker_ribbons_diagnostic_visibility()
 		KEY_J:
-			if event.ctrl_pressed:
+			if event.ctrl_pressed and event.shift_pressed:
+				if benchmark_hud != null and benchmark_hud.has_method(&"toggle_breaker_hud_verbose"):
+					benchmark_hud.toggle_breaker_hud_verbose()
+			elif event.ctrl_pressed:
 				ocean_v3.force_spawn_selected_breaker()
 			elif event.shift_pressed:
 				ocean_v3.cycle_breaker_debug_slot()
@@ -424,10 +427,10 @@ func _create_demo_sea_state_zone() -> void:
 
 func _update_coastal_hud() -> void:
 	if ocean_v3 == null:
-		controls_label.text = CONTROLS_TEXT + "\nC: Coastal unavailable | Shift+C: composition\nReflection Debug: UNAVAILABLE"
+		controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nC: Coastal unavailable | Shift+C: composition\nReflection Debug: UNAVAILABLE"
 		return
 	var state := "ON" if ocean_v3.coastal_enabled() else "OFF"
-	controls_label.text = CONTROLS_TEXT + "\nCoastal: %s | Composition: %s\nReflection Debug: %s" % [state, ocean_v3.coastal_composition_debug_name(), ocean_v3.reflection_debug_name()]
+	controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nCoastal: %s | Composition: %s\nReflection Debug: %s" % [state, ocean_v3.coastal_composition_debug_name(), ocean_v3.reflection_debug_name()]
 
 
 func _set_active_camera(use_race_camera: bool) -> void:

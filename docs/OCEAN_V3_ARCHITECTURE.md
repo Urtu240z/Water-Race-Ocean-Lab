@@ -288,6 +288,20 @@ line, spawn window, and current candidate without issuing extra queries;
 `Shift+J` selects a slot and `Ctrl+J` force-spawns that slot only after a real
 candidate exists, bypassing score/probability/roll for lifecycle isolation.
 
+Anchor placement also evaluates a cached 16-sample CPU breaking corridor along
+the signed baked render direction. It records onset/terminal positions, depth
+and pressure endpoints, available versus required development distance, and
+spawn depth/pressure plus shore vertical/horizontal weights. The spawn is
+back-solved from the plunge stage; a steep wall or insufficient shallow run is
+classified `NO_SURF_CORRIDOR` and does not create a beach breaker. A detector
+stencil may use only a contiguous valid run containing candidate neighbours;
+invalid samples are never extrapolated across land. During the spawn window the
+detector keeps the best candidate for the wave: high scores are guaranteed,
+marginal scores use one deterministic seeded roll after the window, and low
+scores do not spawn. Normal HUD output stays compact; `Ctrl+Shift+J` enables
+extra breaker diagnostics, while `DETECTOR` shows the selected slot (or a short
+table for `ALL`).
+
 ## Sea State Zones
 
 See the single canonical manual: [SEA_STATE_ZONES.md](../ocean_v3/SEA_STATE_ZONES.md).

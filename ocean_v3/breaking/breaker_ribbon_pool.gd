@@ -30,6 +30,18 @@ const BREAKER_GAMMA := 0.78
 const ANCHOR_PRESSURE_TARGET := 0.78
 const TRAJECTORY_STEP_S := 0.125
 const TRAJECTORY_MAX_STEPS := 24
+## Corridor de onset: evaluación CPU, sólo al recolocar anchors/bake/sea-state.
+## La escala se expresa en wavelengths para seguir el modelo de cada ola.
+const CORRIDOR_SAMPLE_COUNT := 16
+const CORRIDOR_OFFSHORE_LENGTH_LAMBDA := 0.75
+const CORRIDOR_SHOREWARD_LENGTH_LAMBDA := 2.0
+const CORRIDOR_TERMINAL_VERTICAL_WEIGHT := 0.05
+const CORRIDOR_ONSET_PRESSURE := 0.56
+const CORRIDOR_MAX_CANDIDATES := 64
+const CORRIDOR_MIN_PATH_SAMPLES := 3
+const CORRIDOR_MIN_SHALLOW_DISTANCE_FRACTION := 0.90
+const CORRIDOR_SPAWN_VERTICAL_WEIGHT_MIN := 0.18
+const CORRIDOR_PLUNGE_STAGE := 0.88
 
 ## 4C-S4.2: detector de eventos de ola + breaker autónomo. OceanQuery ya NO
 ## trackea continuamente: sólo detecta candidatos y decide un spawn por ola.
@@ -182,6 +194,8 @@ var _detector_slope_points_last_tick := 0
 var _detector_query_elapsed_ms_last_tick := 0.0
 var _skip_next_structural_energy_update := false
 var _diagnostic_visible := true
+var _corridor_evaluation_count := 0
+var _corridor_evaluation_usec := 0
 
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
@@ -489,6 +503,22 @@ func anchor_snapshot() -> Array:
 			"depth_m": float(anchor["depth_m"]),
 			"wavelength_m": float(anchor["wavelength_m"]),
 			"pressure": float(anchor["pressure"]),
+			"corridor_start_xz": Vector2(anchor.get("corridor_start_xz", anchor["xz"])),
+			"corridor_end_xz": Vector2(anchor.get("corridor_end_xz", anchor["xz"])),
+			"corridor_length_m": float(anchor.get("corridor_length_m", 0.0)),
+			"available_corridor_length_m": float(anchor.get("available_corridor_length_m", 0.0)),
+			"required_development_distance_m": float(anchor.get("required_development_distance_m", 0.0)),
+			"lifecycle_distance_m": float(anchor.get("lifecycle_distance_m", 0.0)),
+			"depth_start_m": float(anchor.get("depth_start_m", 0.0)),
+			"depth_end_m": float(anchor.get("depth_end_m", 0.0)),
+			"pressure_start": float(anchor.get("pressure_start", 0.0)),
+			"pressure_end": float(anchor.get("pressure_end", 0.0)),
+			"spawn_depth_m": float(anchor.get("spawn_depth_m", anchor["depth_m"])),
+			"spawn_pressure": float(anchor.get("spawn_pressure", anchor["pressure"])),
+			"spawn_shore_vertical_weight": float(anchor.get("spawn_shore_vertical_weight", 1.0)),
+			"spawn_shore_horizontal_weight": float(anchor.get("spawn_shore_horizontal_weight", 1.0)),
+			"surf_corridor_eligible": bool(anchor.get("surf_corridor_eligible", false)),
+			"corridor_reason": str(anchor.get("corridor_reason", "legacy")),
 			"direction_source": "render_direction" if _propagation != null and _propagation.has_render_direction() else "local_direction",
 		})
 	return result
@@ -512,6 +542,10 @@ func tracking_snapshot() -> Array:
 			"state": state_name,
 			"wave": int(entry.get("wave_serial", 0)),
 			"last_decided_wave_serial": int(entry.get("last_decided_wave_serial", -1)),
+			"best_wave_serial": int(entry.get("best_wave_serial", -1)),
+			"best_score": float(entry.get("best_score", 0.0)),
+			"best_candidate_s": float(entry.get("best_candidate_s", 0.0)),
+			"best_in_window": bool(entry.get("best_in_window", false)),
 			"candidate_s": float(entry.get("candidate_s", 0.0)),
 			"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
 			"previous_s": float(entry.get("detector_prev_s", 0.0)),
@@ -521,6 +555,10 @@ func tracking_snapshot() -> Array:
 			"cooldown_done": bool(entry.get("cooldown_done", true)),
 			"query_valid": bool(entry.get("query_valid", false)),
 			"candidate_valid": bool(entry.get("candidate_valid", false)),
+			"stencil_valid_count": int(entry.get("stencil_valid_count", 0)),
+			"stencil_valid_start": int(entry.get("stencil_valid_start", -1)),
+			"stencil_valid_end": int(entry.get("stencil_valid_end", -1)),
+			"invalid_sample_indices": str(entry.get("invalid_sample_indices", "")),
 			"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
 			"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
 			"pressure": float(entry.get("pressure", 0.0)),
@@ -552,9 +590,19 @@ func tracking_snapshot() -> Array:
 			"h6": float(entry.get("h6", 0.0)),
 			"current_depth_m": float(entry.get("current_depth_m", 0.0)),
 			"current_pressure": float(entry.get("current_pressure", 0.0)),
+			"spawn_depth_m": float(entry.get("spawn_depth_m", 0.0)),
+			"spawn_pressure": float(entry.get("spawn_pressure", 0.0)),
+			"spawn_shore_vertical_weight": float(entry.get("spawn_shore_vertical_weight", 1.0)),
+			"spawn_shore_horizontal_weight": float(entry.get("spawn_shore_horizontal_weight", 1.0)),
 			"shore_vertical_weight": float(entry.get("shore_vertical_weight", 1.0)),
 			"shore_horizontal_weight": float(entry.get("shore_horizontal_weight", 1.0)),
 			"distance_travelled_m": float(entry.get("distance_travelled_m", 0.0)),
+			"distance_remaining_in_corridor_m": float(entry.get("distance_remaining_in_corridor_m", entry.get("remaining", 0.0))),
+			"corridor_start_xz": Vector2(entry.get("corridor_start_xz", Vector2.ZERO)),
+			"corridor_end_xz": Vector2(entry.get("corridor_end_xz", Vector2.ZERO)),
+			"corridor_length_m": float(entry.get("corridor_length_m", 0.0)),
+			"required_development_distance_m": float(entry.get("required_development_distance_m", 0.0)),
+			"lifecycle_distance_m": float(entry.get("lifecycle_distance_m", 0.0)),
 			"direction_dot": Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized().dot(Vector2(_anchors[index].get("direction", Vector2.RIGHT)).normalized()),
 		})
 	return result
@@ -575,6 +623,7 @@ func summary() -> Dictionary:
 		"slots": _anchors.size(),
 		"max_slots": max_breakers,
 		"debug": breaker_debug_name(),
+		"debug_slot": _debug_slot,
 		"anchors": anchor_snapshot(),
 		# 5R.1F: métricas del scheduler (sin queries adicionales).
 		"detector_hz": int(round(1.0 / DETECTOR_INTERVAL)),
@@ -592,6 +641,8 @@ func summary() -> Dictionary:
 		"slope_queries_last_tick": _detector_slope_queries_last_tick,
 		"slope_points_last_tick": _detector_slope_points_last_tick,
 		"detector_query_elapsed_ms_last_tick": _detector_query_elapsed_ms_last_tick,
+		"corridor_evaluation_count": _corridor_evaluation_count,
+		"corridor_evaluation_ms": float(_corridor_evaluation_usec) * 0.001,
 		"breaker_height_source_valid": _breaker_height_batch.is_valid() or _query_batch.is_valid(),
 		"breaker_slope_source_valid": _breaker_slope_batch.is_valid(),
 		"force_spawn_last_result": _last_force_spawn_result,
@@ -673,7 +724,17 @@ func _ensure_detector_debug_visual() -> void:
 func _update_detector_debug_visual() -> void:
 	if _detector_debug_instance == null or _detector_debug_mesh == null:
 		return
-	var enabled := _debug_mode == DebugMode.DETECTOR and _diagnostic_visible and visible and not _anchors.is_empty()
+	var detector_enabled := _debug_mode == DebugMode.DETECTOR and _diagnostic_visible and visible and not _anchors.is_empty()
+	var has_active_marker := false
+	if _debug_mode != DebugMode.OFF and _diagnostic_visible and visible and not _anchors.is_empty():
+		for index in _anchors.size():
+			if _debug_slot >= 0 and index != _debug_slot:
+				continue
+			if index < _tracking.size() and bool(_tracking[index].get("active", false)):
+				has_active_marker = true
+				break
+	var active_marker_enabled := has_active_marker
+	var enabled := detector_enabled or active_marker_enabled
 	_detector_debug_instance.visible = enabled
 	if not enabled:
 		return
@@ -683,34 +744,56 @@ func _update_detector_debug_visual() -> void:
 		if _debug_slot >= 0 and index != _debug_slot:
 			continue
 		var anchor: Dictionary = _anchors[index]
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 		var origin := Vector2(anchor.get("xz", Vector2.ZERO))
 		var direction := Vector2(anchor.get("direction", Vector2.RIGHT)).normalized()
 		var side := direction.orthogonal()
 		var wavelength := maxf(float(anchor.get("wavelength_m", 1.0)), 0.001)
 		var y := _sea_level_y + 0.18
-		# Dirección física y línea longitudinal de muestreo.
-		_add_debug_line(origin - direction * wavelength * 0.50, origin + direction * wavelength * 0.50, y, Color(0.20, 0.55, 1.0, 0.95))
-		_add_debug_line(origin, origin + direction * wavelength * 0.22, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
-		_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 + side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
-		_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 - side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
-		# Anchor marker.
-		_add_debug_line(origin - side * 0.55, origin + side * 0.55, y + 0.02, Color.WHITE)
-		_add_debug_line(origin - direction * 0.55, origin + direction * 0.55, y + 0.02, Color.WHITE)
-		# Spawn window: las constantes permanecen visibles en metros reales.
-		var window_start := SPAWN_S_START_LAMBDA * wavelength
-		var window_end := SPAWN_S_END_LAMBDA * wavelength
-		var window_a := origin + direction * window_start
-		var window_b := origin + direction * window_end
-		_add_debug_line(window_a - side * 0.80, window_a + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
-		_add_debug_line(window_b - side * 0.80, window_b + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
-		_add_debug_line(window_a, window_b, y + 0.03, Color(1.0, 0.82, 0.10, 0.85))
-		# Candidate: verde sólo si la muestra está en ventana y avanzando.
-		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
-		var candidate_s := float(entry.get("candidate_s", 0.0))
-		var candidate := origin + direction * candidate_s
-		var candidate_color := Color(0.15, 1.0, 0.25, 1.0) if bool(entry.get("in_window", false)) and bool(entry.get("advancing", false)) else Color(1.0, 0.12, 0.10, 1.0)
-		_add_debug_line(candidate - side * 1.0, candidate + side * 1.0, y + 0.05, candidate_color)
-		_add_debug_line(candidate - direction * 1.0, candidate + direction * 1.0, y + 0.05, candidate_color)
+		if detector_enabled:
+			# Dirección física y línea longitudinal de muestreo.
+			_add_debug_line(origin - direction * wavelength * 0.50, origin + direction * wavelength * 0.50, y, Color(0.20, 0.55, 1.0, 0.95))
+			_add_debug_line(origin, origin + direction * wavelength * 0.22, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+			_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 + side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+			_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 - side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+			# Anchor marker.
+			_add_debug_line(origin - side * 0.55, origin + side * 0.55, y + 0.02, Color.WHITE)
+			_add_debug_line(origin - direction * 0.55, origin + direction * 0.55, y + 0.02, Color.WHITE)
+			# Spawn window: las constantes permanecen visibles en metros reales.
+			var window_start := SPAWN_S_START_LAMBDA * wavelength
+			var window_end := SPAWN_S_END_LAMBDA * wavelength
+			var window_a := origin + direction * window_start
+			var window_b := origin + direction * window_end
+			_add_debug_line(window_a - side * 0.80, window_a + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
+			_add_debug_line(window_b - side * 0.80, window_b + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
+			_add_debug_line(window_a, window_b, y + 0.03, Color(1.0, 0.82, 0.10, 0.85))
+			# Candidate: verde sólo si la muestra está en ventana y avanzando.
+			var candidate_s := float(entry.get("candidate_s", 0.0))
+			var candidate := origin + direction * candidate_s
+			var candidate_color := Color(0.15, 1.0, 0.25, 1.0) if bool(entry.get("in_window", false)) and bool(entry.get("advancing", false)) else Color(1.0, 0.12, 0.10, 1.0)
+			_add_debug_line(candidate - side * 1.0, candidate + side * 1.0, y + 0.05, candidate_color)
+			_add_debug_line(candidate - direction * 1.0, candidate + direction * 1.0, y + 0.05, candidate_color)
+		if active_marker_enabled and bool(entry.get("active", false)):
+			# Baliza magenta sobre el agua: tracked y spawn quedan distinguibles.
+			var tracked := Vector2(entry.get("tracked_xz", origin))
+			var spawn := Vector2(entry.get("spawn_xz", origin))
+			_add_debug_vertical(tracked, y - 0.15, y + 4.0, Color(1.0, 0.10, 0.80, 1.0))
+			_add_debug_line(tracked - side * 1.2, tracked + side * 1.2, y + 0.08, Color(1.0, 0.10, 0.80, 1.0))
+			_add_debug_line(tracked - direction * 1.2, tracked + direction * 1.2, y + 0.08, Color(1.0, 0.10, 0.80, 1.0))
+			_add_debug_line(spawn - side * 0.85, spawn + side * 0.85, y + 0.10, Color(0.10, 1.0, 1.0, 1.0))
+			_add_debug_line(spawn - direction * 0.85, spawn + direction * 0.85, y + 0.10, Color(0.10, 1.0, 1.0, 1.0))
+			_add_debug_line(tracked, tracked + direction * 3.0, y + 0.10, Color(1.0, 0.35, 0.90, 0.95))
+			if _debug_mode == DebugMode.REGION:
+				var half_length := maxf(float(entry.get("spawn_wavelength", wavelength)) * ribbon_length_lambda * 0.325, 0.5)
+				var half_width := maxf(ribbon_width_m * 0.5, 0.5)
+				var a := tracked - direction * half_length - side * half_width
+				var b := tracked + direction * half_length - side * half_width
+				var c := tracked + direction * half_length + side * half_width
+				var d := tracked - direction * half_length + side * half_width
+				_add_debug_line(a, b, y + 0.11, Color(1.0, 0.45, 0.10, 0.95))
+				_add_debug_line(b, c, y + 0.11, Color(1.0, 0.45, 0.10, 0.95))
+				_add_debug_line(c, d, y + 0.11, Color(1.0, 0.45, 0.10, 0.95))
+				_add_debug_line(d, a, y + 0.11, Color(1.0, 0.45, 0.10, 0.95))
 	_detector_debug_mesh.surface_set_color(Color.WHITE)
 	_detector_debug_mesh.surface_end()
 
@@ -720,6 +803,13 @@ func _add_debug_line(a: Vector2, b: Vector2, y: float, color: Color) -> void:
 	_detector_debug_mesh.surface_add_vertex(Vector3(a.x, y, a.y))
 	_detector_debug_mesh.surface_set_color(color)
 	_detector_debug_mesh.surface_add_vertex(Vector3(b.x, y, b.y))
+
+
+func _add_debug_vertical(point: Vector2, y0: float, y1: float, color: Color) -> void:
+	_detector_debug_mesh.surface_set_color(color)
+	_detector_debug_mesh.surface_add_vertex(Vector3(point.x, y0, point.y))
+	_detector_debug_mesh.surface_set_color(color)
+	_detector_debug_mesh.surface_add_vertex(Vector3(point.x, y1, point.y))
 
 
 # --- Internos. ---
@@ -855,29 +945,56 @@ func _run_detector_tick(render_time: float) -> void:
 		var anchor: Dictionary = _anchors[index]
 		var base: int = base_index[sel]
 		var heights := PackedFloat32Array()
-		var all_valid := true
+		var valid_flags := PackedByteArray()
+		var invalid_indices := PackedStringArray()
 		for k in CREST_SAMPLE_OFFSETS.size():
 			var sample: OceanQuerySample = samples[base + k]
-			if sample == null or not sample.valid or not is_finite(sample.height):
-				all_valid = false
-				break
-			heights.append(sample.height)
-		if not all_valid:
-			_update_slot_invalid(index, Vector2(anchor["xz"]), render_time)
+			var valid := sample != null and sample.valid and is_finite(sample.height)
+			valid_flags.append(1 if valid else 0)
+			heights.append(sample.height if valid else 0.0)
+			if not valid:
+				invalid_indices.append(str(k))
+		var candidate_probe := _find_valid_crest_run(valid_flags)
+		if candidate_probe.is_empty():
+			_update_slot_invalid(index, Vector2(anchor["xz"]), render_time, "INVALID_QUERY_SAMPLE", ",".join(invalid_indices))
 			continue
-		_update_slot(index, anchor, heights, samples, base, render_time)
+		_update_slot(index, anchor, heights, valid_flags, samples, base, render_time)
 		if index < _tracking.size():
 			_tracking[index]["h0"] = heights[0]
 			_tracking[index]["h3"] = heights[3]
 			_tracking[index]["h6"] = heights[6]
 
 
-func _detect_candidate(heights: PackedFloat32Array, wavelength: float, samples: Array, base: int) -> Dictionary:
-	## Detector de 7 muestras: prominencia + parábola. Devuelve candidate_s,
-	## prominence, index y el sample del candidato (para normal/steepness).
-	var best_index := 1
+func _find_valid_crest_run(valid_flags: PackedByteArray) -> Dictionary:
+	## Un stencil parcial es seguro sólo en un run contiguo con centro+vecinos:
+	## no se interpola ni se cruza un punto inválido/LAND.
+	var best_start := -1
+	var best_end := -1
+	var run_start := -1
+	for index in valid_flags.size() + 1:
+		var is_valid := index < valid_flags.size() and valid_flags[index] != 0
+		if is_valid and run_start < 0:
+			run_start = index
+		if (not is_valid or index == valid_flags.size()) and run_start >= 0:
+			var run_end := index - 1
+			if run_end - run_start + 1 >= CORRIDOR_MIN_PATH_SAMPLES and (best_start < 0 or run_end - run_start > best_end - best_start):
+				best_start = run_start
+				best_end = run_end
+			run_start = -1
+	if best_start < 0:
+		return {}
+	return {"start": best_start, "end": best_end, "count": best_end - best_start + 1}
+
+
+func _detect_candidate(heights: PackedFloat32Array, valid_flags: PackedByteArray, wavelength: float, samples: Array, base: int) -> Dictionary:
+	## Detector de stencil contiguo: prominencia + parábola. Devuelve
+	## candidate_s, prominence, índice y el sample del candidato.
+	var run := _find_valid_crest_run(valid_flags)
+	if run.is_empty():
+		return {"valid": false, "reason": "INVALID_QUERY_SAMPLE"}
+	var best_index := int(run["start"]) + 1
 	var best_prominence := -INF
-	for k in range(1, CREST_SAMPLE_OFFSETS.size() - 1):
+	for k in range(int(run["start"]) + 1, int(run["end"])):
 		var prominence: float = heights[k] - 0.5 * (heights[k - 1] + heights[k + 1])
 		if prominence > best_prominence:
 			best_prominence = prominence
@@ -888,13 +1005,16 @@ func _detect_candidate(heights: PackedFloat32Array, wavelength: float, samples: 
 		delta = 0.5 * (heights[best_index - 1] - heights[best_index + 1]) / denom
 	delta = clampf(delta, -1.0, 1.0)
 	var candidate_s: float = float(CREST_SAMPLE_OFFSETS[best_index]) * wavelength + delta * (CREST_SAMPLE_SPACING_LAMBDA * wavelength)
-	return {"s": candidate_s, "prominence": best_prominence, "index": best_index, "sample": samples[base + best_index]}
+	return {"valid": true, "s": candidate_s, "prominence": best_prominence, "index": best_index, "sample": samples[base + best_index], "valid_count": int(run["count"]), "valid_start": int(run["start"]), "valid_end": int(run["end"])}
 
 
-func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, samples: Array, base: int, render_time: float) -> void:
+func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, valid_flags: PackedByteArray, samples: Array, base: int, render_time: float) -> void:
 	var wavelength := float(anchor["wavelength_m"])
 	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
-	var candidate := _detect_candidate(heights, wavelength, samples, base)
+	var candidate := _detect_candidate(heights, valid_flags, wavelength, samples, base)
+	if not bool(candidate.get("valid", false)):
+		_update_slot_invalid(index, Vector2(anchor["xz"]), render_time, str(candidate.get("reason", "INVALID_QUERY_SAMPLE")))
+		return
 	if _breaker_slope_batch.is_valid() and not bool(entry.get("active", false)):
 		var travel_dir := Vector2(anchor["direction"]).normalized()
 		var candidate_xz := Vector2(anchor["xz"]) + travel_dir * float(candidate["s"])
@@ -952,7 +1072,8 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 	active_state["shore_vertical_weight"] = _shore_weight(float(host_sample.get("depth_m", 0.0)), true)
 	active_state["shore_horizontal_weight"] = _shore_weight(float(host_sample.get("depth_m", 0.0)), false)
 	active_state["distance_travelled_m"] = Vector2(entry.get("spawn_xz", Vector2.ZERO)).distance_to(breaker_xz)
-	active_state["remaining"] = 0.0
+	active_state["distance_remaining_in_corridor_m"] = Vector2(entry.get("corridor_end_xz", breaker_xz)).distance_to(breaker_xz) if bool(entry.get("surf_corridor_eligible", false)) else 0.0
+	active_state["remaining"] = active_state["distance_remaining_in_corridor_m"]
 	_publish_slot(index, active_state)
 
 
@@ -990,11 +1111,23 @@ func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
 
 func _sample_propagation(world_xz: Vector2) -> Dictionary:
 	if _propagation == null or not _propagation.is_valid():
-		return {"depth_m": 0.0, "shoaling": 1.0}
+		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
 	var sample = _propagation.sample_propagation(world_xz)
-	if sample == null or not sample.valid:
-		return {"depth_m": 0.0, "shoaling": 1.0}
-	return {"depth_m": float(sample.depth_m), "shoaling": float(sample.shoaling_scale)}
+	if sample == null:
+		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
+	var direction := Vector2(sample.render_direction_xz).normalized() if _propagation.has_render_direction() else Vector2(sample.local_direction_xz).normalized()
+	if direction.length_squared() < 0.5:
+		direction = Vector2.RIGHT
+	return {
+		"valid": bool(sample.valid),
+		"in_bounds": bool(sample.in_bounds),
+		"depth_m": float(sample.depth_m),
+		"shoaling": float(sample.shoaling_scale),
+		"local_k": float(sample.local_k),
+		"wavelength_m": float(sample.wavelength_m),
+		"phase_speed_mps": float(sample.phase_speed_mps),
+		"direction": direction,
+	}
 
 
 func _shore_weight(depth_m: float, vertical: bool) -> float:
@@ -1027,13 +1160,21 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 		initial_state["tracked_xz"] = Vector2(anchor["xz"])
 		initial_state["candidate_s"] = candidate_s
 		initial_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+		_apply_anchor_diagnostics(initial_state, anchor)
+		initial_state["stencil_valid_count"] = int(candidate.get("valid_count", 0))
+		initial_state["stencil_valid_start"] = int(candidate.get("valid_start", -1))
+		initial_state["stencil_valid_end"] = int(candidate.get("valid_end", -1))
 		_apply_detector_diagnostics(initial_state, score_details, candidate_s, candidate_s, false, candidate_s >= s_start and candidate_s <= s_end, render_time >= next_spawn_time, wave_serial, "INITIALIZED", wavelength)
+		initial_state["best_wave_serial"] = wave_serial
+		initial_state["best_score"] = float(score_details["final_score"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_candidate_s"] = candidate_s if candidate_s >= s_start and candidate_s <= s_end else 0.0
 		_publish_slot(index, initial_state)
 		return
 
 	# Identificar nueva ola: wrap shoreward -> offshore.
 	if candidate_s < detector_prev_s - NEW_WAVE_WRAP_LAMBDA * wavelength:
 		wave_serial += 1
+	var new_wave := wave_serial != int(entry.get("wave_serial", 0))
 	var advancing: bool = candidate_s > detector_prev_s
 	detector_prev_s = candidate_s
 
@@ -1051,24 +1192,47 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	candidate_state["tracked_xz"] = Vector2(anchor["xz"])
 	candidate_state["candidate_s"] = candidate_s
 	candidate_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
-	var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, float(score_details["final_score"]))
+	_apply_anchor_diagnostics(candidate_state, anchor)
+	candidate_state["stencil_valid_count"] = int(candidate.get("valid_count", 0))
+	candidate_state["stencil_valid_start"] = int(candidate.get("valid_start", -1))
+	candidate_state["stencil_valid_end"] = int(candidate.get("valid_end", -1))
+	if new_wave or int(entry.get("best_wave_serial", -1)) != wave_serial:
+		candidate_state["best_wave_serial"] = wave_serial
+		candidate_state["best_score"] = 0.0
+		candidate_state["best_candidate_s"] = 0.0
+	if in_window and advancing and float(score_details["final_score"]) > float(candidate_state.get("best_score", 0.0)):
+		candidate_state["best_score"] = float(score_details["final_score"])
+		candidate_state["best_candidate_s"] = candidate_s
+	var best_score := float(candidate_state.get("best_score", 0.0))
+	var best_candidate_s := float(candidate_state.get("best_candidate_s", 0.0))
+	var best_in_window := best_candidate_s >= s_start and best_candidate_s <= s_end
+	var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, best_score)
 	var roll: float = _deterministic_roll(index, wave_serial)
 	_apply_detector_diagnostics(candidate_state, score_details, candidate_s, detector_prev_s, advancing, in_window, cooldown_done, wave_serial, "PENDING", wavelength)
 	candidate_state["probability"] = probability
 	candidate_state["roll"] = roll
+	candidate_state["best_in_window"] = best_in_window
+	candidate_state["best_score"] = best_score
+	candidate_state["best_candidate_s"] = best_candidate_s
 
-	if in_window and advancing and wave_serial != last_decided and cooldown_done:
+	var passed_spawn_window := candidate_s > s_end and best_in_window
+	var guaranteed := best_score >= SPAWN_PROB_SOFT_HI
+	if best_in_window and advancing and wave_serial != last_decided and cooldown_done and (passed_spawn_window or guaranteed):
 		candidate_state["last_decided_wave_serial"] = wave_serial
 		candidate_state["detector_gate_reason"] = "ROLL_REJECTED"
-		if roll < probability:
+		if guaranteed or roll < probability:
 			candidate_state["detector_gate_reason"] = "SPAWNED"
-			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, float(score_details["final_score"]), render_time, candidate_state)
+			_spawn_breaker(index, anchor, best_candidate_s, travel_dir, wavelength, best_score, render_time, candidate_state)
 			return
 	else:
 		if not advancing:
 			candidate_state["detector_gate_reason"] = "NOT_ADVANCING"
-		elif not in_window:
+		elif not best_in_window and candidate_s <= s_end:
 			candidate_state["detector_gate_reason"] = "OUTSIDE_WINDOW"
+		elif not best_in_window:
+			candidate_state["detector_gate_reason"] = "NO_BEST_SCORE"
+		elif not passed_spawn_window and not guaranteed:
+			candidate_state["detector_gate_reason"] = "BEST_SCORE_PENDING"
 		elif wave_serial == last_decided:
 			candidate_state["detector_gate_reason"] = "WAVE_ALREADY_DECIDED"
 		elif not cooldown_done:
@@ -1107,6 +1271,17 @@ func _apply_detector_diagnostics(state: Dictionary, score_details: Dictionary, c
 	state["detector_gate_reason"] = reason
 
 
+func _apply_anchor_diagnostics(state: Dictionary, anchor: Dictionary) -> void:
+	for key in [
+		"corridor_start_xz", "corridor_end_xz", "corridor_length_m", "available_corridor_length_m",
+		"required_development_distance_m", "lifecycle_distance_m", "depth_start_m", "depth_end_m",
+		"pressure_start", "pressure_end", "spawn_depth_m", "spawn_pressure",
+		"spawn_shore_vertical_weight", "spawn_shore_horizontal_weight", "surf_corridor_eligible", "corridor_reason",
+	]:
+		if anchor.has(key):
+			state[key] = anchor[key]
+
+
 func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_dir: Vector2, wavelength: float, score: float, render_time: float, state: Dictionary) -> void:
 	var phase_speed: float = maxf(float(anchor.get("phase_speed_mps", 0.1)), 0.1)
 	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
@@ -1118,6 +1293,12 @@ func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_d
 	state["valid"] = 1.0
 	state["spawn_time"] = render_time
 	state["spawn_xz"] = Vector2(anchor["xz"]) + travel_dir * candidate_s
+	var spawn_sample := _sample_propagation(Vector2(state["spawn_xz"]))
+	if bool(spawn_sample.get("valid", false)):
+		state["spawn_depth_m"] = float(spawn_sample.get("depth_m", 0.0))
+		state["spawn_pressure"] = estimate_depth_pressure(_long_hs_m, _coastal_fraction, float(spawn_sample.get("shoaling", 1.0)), maxf(float(spawn_sample.get("depth_m", 0.0)), 0.001))
+		state["spawn_shore_vertical_weight"] = _shore_weight(float(spawn_sample.get("depth_m", 0.0)), true)
+		state["spawn_shore_horizontal_weight"] = _shore_weight(float(spawn_sample.get("depth_m", 0.0)), false)
 	state["spawn_direction"] = travel_dir
 	state["spawn_wavelength"] = wavelength
 	state["spawn_phase_speed"] = phase_speed
@@ -1139,7 +1320,7 @@ func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2
 
 
 func _break_score_details(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2) -> Dictionary:
-	var pressure := estimate_depth_pressure(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)), float(anchor.get("depth_m", 1.0)))
+	var pressure := float(anchor.get("spawn_pressure", estimate_depth_pressure(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)), float(anchor.get("depth_m", 1.0)))))
 	var pressure_score: float = _smoothstep(anchor_min_depth_pressure, minf(anchor_max_depth_pressure, 1.15), pressure)
 	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
 	var prominence: float = maxf(float(candidate.get("prominence", 0.0)), 0.0)
@@ -1196,12 +1377,20 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"spawn_phase_speed": float(entry.get("spawn_phase_speed", 0.1)),
 		"spawn_local_hs": float(entry.get("spawn_local_hs", 0.0)),
 		"spawn_strength": float(entry.get("spawn_strength", 0.0)),
+		"spawn_depth_m": float(entry.get("spawn_depth_m", 0.0)),
+		"spawn_pressure": float(entry.get("spawn_pressure", 0.0)),
+		"spawn_shore_vertical_weight": float(entry.get("spawn_shore_vertical_weight", 1.0)),
+		"spawn_shore_horizontal_weight": float(entry.get("spawn_shore_horizontal_weight", 1.0)),
 		"lifecycle_duration": float(entry.get("lifecycle_duration", 1.0)),
 		"next_spawn_time": float(entry.get("next_spawn_time", 0.0)),
 		"detector_initialized": bool(entry.get("detector_initialized", false)),
 		"detector_prev_s": float(entry.get("detector_prev_s", 0.0)),
 		"wave_serial": int(entry.get("wave_serial", 0)),
 		"last_decided_wave_serial": int(entry.get("last_decided_wave_serial", -1)),
+		"best_wave_serial": int(entry.get("best_wave_serial", -1)),
+		"best_score": float(entry.get("best_score", 0.0)),
+		"best_candidate_s": float(entry.get("best_candidate_s", 0.0)),
+		"best_in_window": bool(entry.get("best_in_window", false)),
 		"candidate_s": float(entry.get("candidate_s", 0.0)),
 		"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
 		"previous_s": float(entry.get("previous_s", entry.get("detector_prev_s", 0.0))),
@@ -1211,6 +1400,10 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"cooldown_done": bool(entry.get("cooldown_done", true)),
 		"query_valid": bool(entry.get("query_valid", false)),
 		"candidate_valid": bool(entry.get("candidate_valid", false)),
+		"stencil_valid_count": int(entry.get("stencil_valid_count", 0)),
+		"stencil_valid_start": int(entry.get("stencil_valid_start", -1)),
+		"stencil_valid_end": int(entry.get("stencil_valid_end", -1)),
+		"invalid_sample_indices": str(entry.get("invalid_sample_indices", "")),
 		"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
 		"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
 		"pressure": float(entry.get("pressure", 0.0)),
@@ -1238,10 +1431,23 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"shore_vertical_weight": float(entry.get("shore_vertical_weight", 1.0)),
 		"shore_horizontal_weight": float(entry.get("shore_horizontal_weight", 1.0)),
 		"distance_travelled_m": float(entry.get("distance_travelled_m", 0.0)),
+		"distance_remaining_in_corridor_m": float(entry.get("distance_remaining_in_corridor_m", entry.get("remaining", 0.0))),
 		"remaining": float(entry.get("remaining", 0.0)),
 		"crest_correction_xz": entry.get("crest_correction_xz", Vector2.ZERO),
 		"crest_miss_ticks": int(entry.get("crest_miss_ticks", 0)),
 		"host_crest_fade_start": float(entry.get("host_crest_fade_start", -1.0)),
+		"corridor_start_xz": entry.get("corridor_start_xz", Vector2.ZERO),
+		"corridor_end_xz": entry.get("corridor_end_xz", Vector2.ZERO),
+		"corridor_length_m": float(entry.get("corridor_length_m", 0.0)),
+		"available_corridor_length_m": float(entry.get("available_corridor_length_m", 0.0)),
+		"required_development_distance_m": float(entry.get("required_development_distance_m", 0.0)),
+		"lifecycle_distance_m": float(entry.get("lifecycle_distance_m", 0.0)),
+		"depth_start_m": float(entry.get("depth_start_m", 0.0)),
+		"depth_end_m": float(entry.get("depth_end_m", 0.0)),
+		"pressure_start": float(entry.get("pressure_start", 0.0)),
+		"pressure_end": float(entry.get("pressure_end", 0.0)),
+		"surf_corridor_eligible": bool(entry.get("surf_corridor_eligible", false)),
+		"corridor_reason": str(entry.get("corridor_reason", "legacy")),
 	}
 
 
@@ -1258,7 +1464,7 @@ func _publish_slot(index: int, state: Dictionary) -> void:
 		ribbon.set_instance_shader_parameter(&"breaker_spawn_hs_m", float(state.get("spawn_local_hs", 0.0)))
 
 
-func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float) -> void:
+func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float, reason: String = "INVALID_QUERY_SAMPLE", invalid_indices: String = "unknown") -> void:
 	## 4C-S4.2: muestras no válidas -> el breaker activo sigue su lifecycle
 	## autónomo (no depende del detector); si no, permanece IDLE.
 	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
@@ -1270,7 +1476,8 @@ func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float) ->
 	state["valid"] = 0.0
 	state["query_valid"] = false
 	state["candidate_valid"] = false
-	state["detector_gate_reason"] = "INVALID_QUERY_SAMPLE"
+	state["detector_gate_reason"] = reason
+	state["invalid_sample_indices"] = invalid_indices
 	state["tracked_xz"] = anchor_xz
 	state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", 0.0)) - render_time)
 	_publish_slot(index, state)
@@ -1311,8 +1518,11 @@ func _place_anchors() -> Array[Dictionary]:
 
 func _place_anchors_for_energy(long_hs_m: float, coastal_fraction: float) -> Array[Dictionary]:
 	## Candidatos = celdas válidas/alcanzadas de la propagación cuya presión de
-	## profundidad estimada cae en la zona de pre-break. Greedy con separación
-	## mínima, cap en max_breakers. Todo desde datos horneados (CPU).
+	## profundidad estimada cae en la zona de pre-break. Antes de elegirlos se
+	## valida el corredor costero y se retrocede desde el punto de plunge para
+	## colocar el spawn al inicio físico del desarrollo. Todo desde CPU baked.
+	_corridor_evaluation_count = 0
+	_corridor_evaluation_usec = 0
 	var candidates: Array[Dictionary] = []
 	var propagation = _propagation
 	var width: int = propagation.width
@@ -1369,18 +1579,211 @@ func _place_anchors_for_energy(long_hs_m: float, coastal_fraction: float) -> Arr
 			return a["xz"].x < b["xz"].x
 		return a["xz"].y < b["xz"].y)
 	var picked: Array[Dictionary] = []
+	var corridor_candidates := 0
 	for candidate in candidates:
+		if corridor_candidates >= CORRIDOR_MAX_CANDIDATES:
+			break
+		corridor_candidates += 1
+		var prepared := _prepare_anchor_from_corridor(candidate, long_hs_m, coastal_fraction)
+		if prepared.is_empty():
+			continue
 		if picked.size() >= max_breakers:
 			break
 		var too_close := false
 		for anchor in picked:
-			if (Vector2(anchor["xz"]) - Vector2(candidate["xz"])).length() < anchor_min_spacing_m:
+			if (Vector2(anchor["xz"]) - Vector2(prepared["xz"])).length() < anchor_min_spacing_m:
 				too_close = true
 				break
 		if too_close:
 			continue
-		picked.append(candidate)
+		picked.append(prepared)
 	return picked
+
+
+func _prepare_anchor_from_corridor(candidate: Dictionary, long_hs_m: float, coastal_fraction: float) -> Dictionary:
+	var corridor := _evaluate_breaking_corridor(candidate, long_hs_m, coastal_fraction)
+	if not bool(corridor.get("surf_corridor_eligible", false)):
+		return {}
+	var spawn_xz: Vector2 = Vector2(corridor.get("spawn_xz", candidate["xz"]))
+	var spawn := _sample_propagation(spawn_xz)
+	if not bool(spawn.get("valid", false)) or not bool(spawn.get("in_bounds", false)):
+		return {}
+	var prepared := candidate.duplicate()
+	prepared["xz"] = spawn_xz
+	prepared["depth_m"] = float(spawn.get("depth_m", candidate.get("depth_m", 0.0)))
+	prepared["shoaling"] = float(spawn.get("shoaling", candidate.get("shoaling", 1.0)))
+	prepared["wavelength_m"] = maxf(float(spawn.get("wavelength_m", candidate.get("wavelength_m", 0.5))), 0.5)
+	prepared["phase_speed_mps"] = maxf(float(spawn.get("phase_speed_mps", candidate.get("phase_speed_mps", 0.1))), 0.1)
+	prepared["local_k"] = maxf(float(spawn.get("local_k", candidate.get("local_k", 0.0))), 0.0)
+	prepared["direction"] = Vector2(spawn.get("direction", candidate.get("direction", Vector2.RIGHT))).normalized()
+	prepared["pressure"] = float(corridor.get("spawn_pressure", candidate.get("pressure", 0.0)))
+	prepared["pressure_fit"] = 1.0 - clampf(absf(prepared["pressure"] - ANCHOR_PRESSURE_TARGET) / maxf(anchor_max_depth_pressure - anchor_min_depth_pressure, 0.001), 0.0, 1.0)
+	prepared["zone_breaking_activity"] = _local_breaking_activity(spawn_xz)
+	prepared["current_eligibility"] = _anchor_eligibility_for_pressure(float(prepared["pressure"]))
+	prepared["target_eligibility"] = prepared["current_eligibility"]
+	for key in corridor.keys():
+		prepared[key] = corridor[key]
+	prepared["spawn_depth_m"] = float(corridor.get("spawn_depth_m", prepared["depth_m"]))
+	prepared["spawn_pressure"] = float(corridor.get("spawn_pressure", prepared["pressure"]))
+	prepared["spawn_shore_vertical_weight"] = float(corridor.get("spawn_shore_vertical_weight", 1.0))
+	prepared["spawn_shore_horizontal_weight"] = float(corridor.get("spawn_shore_horizontal_weight", 1.0))
+	prepared["retire_when_idle"] = false
+	return prepared
+
+
+func _evaluate_breaking_corridor(candidate: Dictionary, long_hs_m: float, coastal_fraction: float) -> Dictionary:
+	var started_usec := Time.get_ticks_usec()
+	_corridor_evaluation_count += 1
+	var base_xz: Vector2 = Vector2(candidate["xz"])
+	var fallback_direction := Vector2(candidate.get("direction", Vector2.RIGHT)).normalized()
+	var wavelength := maxf(float(candidate.get("wavelength_m", 0.5)), 0.5)
+	var phase_speed := maxf(float(candidate.get("phase_speed_mps", 0.1)), 0.1)
+	var corridor_direction := _infer_shoreward_direction(base_xz, fallback_direction, wavelength)
+	var offshore_distance := CORRIDOR_OFFSHORE_LENGTH_LAMBDA * wavelength
+	var shoreward_distance := CORRIDOR_SHOREWARD_LENGTH_LAMBDA * wavelength
+	var sample_spacing := (offshore_distance + shoreward_distance) / float(CORRIDOR_SAMPLE_COUNT - 1)
+	var start_xz := _advance_render_path(base_xz, corridor_direction, -offshore_distance)
+	var path: Array[Dictionary] = []
+	var current_xz := start_xz
+	var previous_direction := corridor_direction
+	for sample_index in CORRIDOR_SAMPLE_COUNT:
+		if sample_index > 0:
+			current_xz = _advance_render_path(current_xz, previous_direction, sample_spacing)
+		var sample := _sample_propagation(current_xz)
+		var point := {
+			"xz": current_xz,
+			"valid": bool(sample.get("valid", false)) and bool(sample.get("in_bounds", false)),
+			"depth_m": float(sample.get("depth_m", 0.0)),
+			"shoaling": float(sample.get("shoaling", 1.0)),
+			"direction": Vector2(sample.get("direction", previous_direction)).normalized(),
+			"wavelength_m": float(sample.get("wavelength_m", wavelength)),
+			"phase_speed_mps": float(sample.get("phase_speed_mps", phase_speed)),
+		}
+		point["pressure"] = estimate_depth_pressure(long_hs_m, coastal_fraction, point["shoaling"], maxf(point["depth_m"], 0.001)) if point["valid"] else 0.0
+		point["shore_vertical_weight"] = _shore_weight(point["depth_m"], true) if point["valid"] else 0.0
+		point["shore_horizontal_weight"] = _shore_weight(point["depth_m"], false) if point["valid"] else 0.0
+		path.append(point)
+		if point["valid"]:
+			if point["direction"].length_squared() > 0.5:
+				previous_direction = point["direction"] if point["direction"].dot(corridor_direction) >= 0.0 else -point["direction"]
+	var onset_index := -1
+	var plunge_index := -1
+	for index in path.size():
+		var point: Dictionary = path[index]
+		if not bool(point["valid"]):
+			continue
+		if onset_index < 0 and float(point["pressure"]) >= CORRIDOR_ONSET_PRESSURE:
+			onset_index = index
+		if onset_index >= 0 and float(point["pressure"]) >= ANCHOR_PRESSURE_TARGET:
+			plunge_index = index
+			break
+	if onset_index < 0 or plunge_index < 0:
+		_corridor_evaluation_usec += Time.get_ticks_usec() - started_usec
+		return {"surf_corridor_eligible": false, "corridor_reason": "NO_BREAK_PRESSURE_RAMP"}
+	var terminal_index := -1
+	for index in range(plunge_index, path.size()):
+		var point: Dictionary = path[index]
+		if not bool(point["valid"]):
+			terminal_index = index
+			break
+		if float(point["pressure"]) >= anchor_max_depth_pressure or float(point["shore_vertical_weight"]) <= CORRIDOR_TERMINAL_VERTICAL_WEIGHT:
+			terminal_index = index
+			break
+	if terminal_index <= onset_index:
+		_corridor_evaluation_usec += Time.get_ticks_usec() - started_usec
+		return {"surf_corridor_eligible": false, "corridor_reason": "NO_SHALLOW_DEVELOPMENT"}
+	var onset_point: Dictionary = path[onset_index]
+	var terminal_point: Dictionary = path[terminal_index]
+	var available_length := Vector2(onset_point["xz"]).distance_to(Vector2(terminal_point["xz"]))
+	var wave_period := wavelength / phase_speed
+	var lifecycle_distance := phase_speed * clampf(LIFECYCLE_DURATION_WAVE_FRACTION * wave_period, LIFECYCLE_DURATION_MIN, LIFECYCLE_DURATION_MAX)
+	var plunge_life := _life_for_stage(CORRIDOR_PLUNGE_STAGE)
+	var required_distance := maxf(lifecycle_distance * plunge_life, wavelength * 0.55)
+	if available_length < required_distance * CORRIDOR_MIN_SHALLOW_DISTANCE_FRACTION:
+		_corridor_evaluation_usec += Time.get_ticks_usec() - started_usec
+		return {"surf_corridor_eligible": false, "corridor_reason": "NO_SHALLOW_DEVELOPMENT"}
+	var plunge_point: Dictionary = path[plunge_index]
+	var spawn_xz := _advance_render_path(Vector2(plunge_point["xz"]), corridor_direction, -required_distance)
+	var spawn := _sample_propagation(spawn_xz)
+	var spawn_valid := bool(spawn.get("valid", false)) and bool(spawn.get("in_bounds", false))
+	var spawn_depth := float(spawn.get("depth_m", 0.0))
+	var spawn_shoaling := float(spawn.get("shoaling", 1.0))
+	var spawn_pressure := estimate_depth_pressure(long_hs_m, coastal_fraction, spawn_shoaling, maxf(spawn_depth, 0.001)) if spawn_valid else 0.0
+	var spawn_vertical := _shore_weight(spawn_depth, true) if spawn_valid else 0.0
+	var spawn_horizontal := _shore_weight(spawn_depth, false) if spawn_valid else 0.0
+	if not spawn_valid or spawn_pressure < anchor_min_depth_pressure or spawn_vertical < CORRIDOR_SPAWN_VERTICAL_WEIGHT_MIN:
+		_corridor_evaluation_usec += Time.get_ticks_usec() - started_usec
+		return {"surf_corridor_eligible": false, "corridor_reason": "SPAWN_NOT_PREBREAK"}
+	_corridor_evaluation_usec += Time.get_ticks_usec() - started_usec
+	return {
+		"surf_corridor_eligible": true,
+		"corridor_reason": "SURF_CORRIDOR",
+		"corridor_start_xz": onset_point["xz"],
+		"corridor_end_xz": terminal_point["xz"],
+		"corridor_length_m": available_length,
+		"available_corridor_length_m": available_length,
+		"depth_start_m": float(onset_point["depth_m"]),
+		"depth_end_m": float(terminal_point["depth_m"]),
+		"pressure_start": float(onset_point["pressure"]),
+		"pressure_end": float(terminal_point["pressure"]),
+		"break_point_xz": plunge_point["xz"],
+		"spawn_xz": spawn_xz,
+		"spawn_depth_m": spawn_depth,
+		"spawn_pressure": spawn_pressure,
+		"spawn_shore_vertical_weight": spawn_vertical,
+		"spawn_shore_horizontal_weight": spawn_horizontal,
+		"required_development_distance_m": required_distance,
+		"lifecycle_distance_m": lifecycle_distance,
+		"plunge_life_fraction": plunge_life,
+		"corridor_sample_count": CORRIDOR_SAMPLE_COUNT,
+		"corridor_direction": corridor_direction,
+	}
+
+
+func _life_for_stage(target_stage: float) -> float:
+	var low := 0.0
+	var high := 1.0
+	for _iteration in 12:
+		var midpoint := (low + high) * 0.5
+		if _smoothstep(0.0, STAGE_LIFE_END, midpoint) < target_stage:
+			low = midpoint
+		else:
+			high = midpoint
+	return (low + high) * 0.5
+
+
+func _advance_render_path(origin: Vector2, fallback_direction: Vector2, distance_m: float) -> Vector2:
+	var direction := fallback_direction.normalized()
+	if _propagation != null and _propagation.is_valid():
+		var start_sample := _sample_propagation(origin)
+		var sampled_direction := Vector2(start_sample.get("direction", direction)).normalized()
+		if bool(start_sample.get("valid", false)) and sampled_direction.length_squared() > 0.5:
+			direction = sampled_direction if sampled_direction.dot(direction) >= 0.0 else -sampled_direction
+	var midpoint := origin + direction * distance_m * 0.5
+	if _propagation != null and _propagation.is_valid():
+		var midpoint_sample := _sample_propagation(midpoint)
+		var midpoint_direction := Vector2(midpoint_sample.get("direction", direction)).normalized()
+		if bool(midpoint_sample.get("valid", false)) and midpoint_direction.length_squared() > 0.5:
+			direction = midpoint_direction if midpoint_direction.dot(direction) >= 0.0 else -midpoint_direction
+	return origin + direction * distance_m
+
+
+func _infer_shoreward_direction(origin: Vector2, render_direction: Vector2, wavelength: float) -> Vector2:
+	## La convención render_direction sigue siendo la única trayectoria. En
+	## assets/mocks donde apunta offshore, el signo se determina por el gradiente
+	## de depth para no confundir una rampa invertida con una costa plana.
+	var direction := render_direction.normalized()
+	if _propagation == null or not _propagation.is_valid():
+		return direction
+	var probe_distance := maxf(wavelength * 0.35, _propagation.cell_size_m * 2.0)
+	var forward := _sample_propagation(origin + direction * probe_distance)
+	var backward := _sample_propagation(origin - direction * probe_distance)
+	if not bool(forward.get("valid", false)) or not bool(backward.get("valid", false)):
+		return direction
+	var depth_delta := float(forward.get("depth_m", 0.0)) - float(backward.get("depth_m", 0.0))
+	if absf(depth_delta) <= maxf(_propagation.cell_size_m * 0.25, 0.05):
+		return direction
+	return -direction if depth_delta > 0.0 else direction
 
 
 func _anchor_eligibility_for_pressure(pressure: float) -> float:
