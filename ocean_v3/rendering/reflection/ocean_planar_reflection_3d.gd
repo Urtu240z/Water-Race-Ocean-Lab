@@ -31,6 +31,7 @@ var _max_camera_height_m := 75.0
 var _reflection_strength := 0.55
 var _distortion_strength := 0.035
 var _edge_fade := 0.08
+var _sampling_anchor_mode := 0
 var _cull_mask := USER_RENDER_LAYER_MASK & ~(1 << (OCEAN_RENDER_LAYER - 1))
 var _enabled := true
 var _initialized := false
@@ -491,6 +492,8 @@ func _sync_material_state(active: bool) -> void:
 	_surface_material.set_shader_parameter(&"planar_reflection_strength", _reflection_strength)
 	_surface_material.set_shader_parameter(&"planar_reflection_distortion_strength", _distortion_strength)
 	_surface_material.set_shader_parameter(&"planar_reflection_edge_fade", _edge_fade)
+	_surface_material.set_shader_parameter(&"planar_reflection_plane_y", _sea_plane_world_y())
+	_surface_material.set_shader_parameter(&"planar_reflection_anchor_mode", _sampling_anchor_mode)
 	if _reflection_viewport != null:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
 
@@ -545,6 +548,24 @@ func sampling_projection_diagnostic() -> Dictionary:
 		"xyw_max_delta": _sampling_xyw_max_delta,
 		"z_max_delta": _sampling_z_max_delta,
 	}
+
+
+func cycle_sampling_anchor_mode() -> void:
+	_sampling_anchor_mode = (_sampling_anchor_mode + 1) % 3
+	if _surface_material == null or not is_instance_valid(_surface_material):
+		return
+	_surface_material.set_shader_parameter(&"planar_reflection_plane_y", _sea_plane_world_y())
+	_surface_material.set_shader_parameter(&"planar_reflection_anchor_mode", _sampling_anchor_mode)
+
+
+func sampling_anchor_label() -> String:
+	match _sampling_anchor_mode:
+		1:
+			return "FLAT WORLD XZ"
+		2:
+			return "FLAT BASE XZ"
+		_:
+			return "DISPLACED WORLD"
 
 
 func _sampling_projection_for_capture() -> Projection:

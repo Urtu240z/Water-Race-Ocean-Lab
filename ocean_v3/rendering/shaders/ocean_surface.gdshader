@@ -182,6 +182,9 @@ uniform int reflection_debug_mode = 0;
 uniform bool planar_reflection_enabled = false;
 uniform sampler2D planar_reflection_texture : repeat_disable, filter_linear;
 uniform mat4 planar_reflection_view_projection = mat4(1.0);
+// LAB diagnostic: all values are world-space and only affect planar lookup.
+uniform float planar_reflection_plane_y = 0.0;
+uniform int planar_reflection_anchor_mode = 0;
 uniform float planar_reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
 uniform float planar_reflection_distortion_strength : hint_range(0.0, 0.2, 0.001) = 0.035;
 uniform float planar_reflection_edge_fade : hint_range(0.001, 0.5, 0.005) = 0.08;
@@ -1625,7 +1628,21 @@ void fragment() {
 	float planar_reflection_validity = 0.0;
 	float planar_reflection_weight = 0.0;
 	if (planar_reflection_enabled) {
-		vec4 reflection_clip = planar_reflection_view_projection * vec4(ocean_world_position, 1.0);
+		vec3 planar_world_position = ocean_world_position;
+		if (planar_reflection_anchor_mode == 1) {
+			planar_world_position = vec3(
+				ocean_world_position.x,
+				planar_reflection_plane_y,
+				ocean_world_position.z
+			);
+		} else if (planar_reflection_anchor_mode == 2) {
+			planar_world_position = vec3(
+				ocean_base_xz.x,
+				planar_reflection_plane_y,
+				ocean_base_xz.y
+			);
+		}
+		vec4 reflection_clip = planar_reflection_view_projection * vec4(planar_world_position, 1.0);
 		if (reflection_clip.w > 0.0001) {
 			vec2 projected_uv = reflection_clip.xy / reflection_clip.w;
 			projected_uv = projected_uv * 0.5 + 0.5;
