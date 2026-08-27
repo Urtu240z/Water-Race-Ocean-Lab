@@ -74,7 +74,7 @@ func set_settings(enabled: bool, resolution_scale: float, overscan: float, updat
 	var previous_max_distance_m := _max_distance_m
 	_enabled = enabled
 	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
-	_overscan = clampf(overscan, 1.0, 1.5)
+	_overscan = clampf(overscan, 1.0, 2.0)
 	var previous_update_hz := _update_hz
 	_update_hz = 0 if update_hz <= 0 else 15 if update_hz <= 15 else 30 if update_hz <= 30 else 60
 	_max_distance_m = clampf(max_distance_m, 50.0, 5000.0)

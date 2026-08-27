@@ -377,9 +377,9 @@ var _wave_transition_start_short_geometry := 0.25
 		planar_reflection_resolution_scale = clampf(value, 0.10, 1.0)
 		_request_visual_sync()
 
-@export_range(1.0, 1.5, 0.01) var planar_reflection_overscan: float = 1.15:
+@export_range(1.0, 2.0, 0.01) var planar_reflection_overscan: float = 1.15:
 	set(value):
-		planar_reflection_overscan = clampf(value, 1.0, 1.5)
+		planar_reflection_overscan = clampf(value, 1.0, 2.0)
 		_request_visual_sync()
 
 @export_enum("15 Hz:15", "30 Hz:30", "60 Hz:60", "Every Frame:0") var planar_reflection_update_hz: int = 30:
