@@ -195,9 +195,9 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 	propagation.resource_path = propagation_path
 	warp.resource_path = warp_path
 	for resource_pair in [[bathymetry, bathymetry_path], [propagation, propagation_path], [warp, warp_path]]:
-		var error: Error = ResourceSaver.save(resource_pair[0], resource_pair[1], ResourceSaver.FLAG_CHANGE_PATH)
-		if error != OK:
-			push_error("CoastalBakeAuthoring: no se pudo guardar %s (error %d)." % [resource_pair[1], error])
+		var save_error: Error = ResourceSaver.save(resource_pair[0], resource_pair[1], ResourceSaver.FLAG_CHANGE_PATH)
+		if save_error != OK:
+			push_error("CoastalBakeAuthoring: no se pudo guardar %s (error %d)." % [resource_pair[1], save_error])
 			return null
 	var error: Error = ResourceSaver.save(asset, asset_path)
 	if error != OK:
