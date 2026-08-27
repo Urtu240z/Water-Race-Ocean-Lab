@@ -7,20 +7,29 @@ extends RefCounted
 ##   d0 = incoming_direction (unitario)
 ##   n0 = perpendicular(d0)
 ##   s_deep = render_phi / k0  (coordenada longitudinal de presentación)
-##   r_deep = dot(p_frontera_upstream, n0)  (backtrace con -render_direction)
+##   PHASE_TRANSVERSE_IDENTITY: r_deep = dot(world_xz, n0)
+##   LEGACY_CHARACTERISTIC_BACKTRACE: r_deep = dot(p_frontera_upstream, n0)
 ##   deep_xz = deep_origin + d0*s_deep + n0*r_deep
 ##   deep_origin = d0 * min_s  (con min_s = min dot(world, d0) en el grid)
 ##
 ## En fondo plano el mapping es la IDENTIDAD (deep_xz ~= world_xz).
 ##
-## Backtrace: RK2 (Heun) sobre -render_direction interpolada bilinealmente,
-## paso inicial = backtrace_step_cells * cell_size. Al cruzar la frontera
+## Backtrace legacy: RK2 (Heun) sobre -render_direction interpolada
+## bilinealmente, en coordenadas locales de celdas. Al cruzar la frontera
 ## upstream se guarda r_deep = dot(p_cruce, n0). Si el backtrace entra en
 ## tierra/shadow o agota pasos, el nodo queda INVALID (no se cruza tierra).
 
 const WarpDataScript := preload("res://ocean_v3/coastal/coastal_warp_data.gd")
 
+enum WarpMappingMode {
+	PHASE_TRANSVERSE_IDENTITY,
+	LEGACY_CHARACTERISTIC_BACKTRACE,
+}
+
 var propagation: CoastalPropagationData
+# La fase de presentación es la autoridad longitudinal por defecto. El legacy
+# queda disponible sólo para A/B y compatibilidad de diagnóstico.
+var mapping_mode: WarpMappingMode = WarpMappingMode.PHASE_TRANSVERSE_IDENTITY
 var backtrace_step_cells := 0.5
 var max_backtrace_steps := 0 # 0 => automático (4 * max(w,h) / step_cells + 32).
 var detj_safe_threshold := 0.5
@@ -78,8 +87,10 @@ func bake():
 			minimum_s = minf(minimum_s, point.dot(direction))
 	warp.deep_origin_xz = direction * minimum_s
 
-	var step_h := maxf(cell * backtrace_step_cells, 0.01)
-	var max_steps := max_backtrace_steps if max_backtrace_steps > 0 else int(4.0 * float(maxi(width, height)) / step_h) + 32
+	# _backtrace recibe grid_local en celdas, no metros. Mantener la unidad aquí
+	# evita que el tamaño físico de celda cambie silenciosamente la integración.
+	var step_cells := maxf(backtrace_step_cells, 0.01)
+	var max_steps := max_backtrace_steps if max_backtrace_steps > 0 else int(4.0 * float(maxi(width, height)) / step_cells) + 32
 
 	var bake_start := Time.get_ticks_usec()
 
@@ -88,6 +99,8 @@ func bake():
 			var index := z * width + x
 			if propagation.valid_mask[index] == 0 or propagation.reached_mask[index] == 0:
 				warp.valid_mask[index] = 0
+				warp.r_deep[index] = 0.0
+				warp.boundary_hit[index] = WarpDataScript.BoundaryHit.NONE
 				warp.jacobian_class[index] = WarpDataScript.JacobianClass.INVALID
 				warp.jacobian_det[index] = 0.0
 				continue
@@ -95,20 +108,29 @@ func bake():
 			if propagation.has_render_phase():
 				phase = propagation.render_phase_rad[index]
 			var s_deep := phase / propagation.k0_rad_m
-			var result: Dictionary = _backtrace(propagation, direction, normal, origin, cell, width, height,
-				Vector2(float(x), float(z)), step_h, max_steps)
-			diag_total_steps += int(result["steps"])
-			var hit: int = result["hit"]
-			warp.backtrace_steps[index] = int(result["steps"])
-			warp.boundary_hit[index] = hit
-			if hit == WarpDataScript.BoundaryHit.UPSTREAM:
+			if mapping_mode == WarpMappingMode.PHASE_TRANSVERSE_IDENTITY:
+				# La fase regularizada/renderizada controla s_deep. El eje transversal
+				# conserva la identidad mundial y por tanto no puede cambiar de rama
+				# al cruzar un cut locus.
 				warp.valid_mask[index] = 1
-				# El cruce está en celdas locales; r_deep usa world.
-				var world_cross: Vector2 = origin + (result["cross_point"] as Vector2) * cell
-				warp.r_deep[index] = world_cross.dot(normal)
+				warp.r_deep[index] = (origin + Vector2(float(x), float(z)) * cell).dot(normal)
+				warp.backtrace_steps[index] = 0
+				warp.boundary_hit[index] = WarpDataScript.BoundaryHit.NONE
 			else:
-				warp.valid_mask[index] = 0
-				warp.r_deep[index] = 0.0
+				var result: Dictionary = _backtrace(propagation, direction, normal, origin, cell, width, height,
+					Vector2(float(x), float(z)), step_cells, max_steps)
+				diag_total_steps += int(result["steps"])
+				var hit: int = result["hit"]
+				warp.backtrace_steps[index] = int(result["steps"])
+				warp.boundary_hit[index] = hit
+				if hit == WarpDataScript.BoundaryHit.UPSTREAM:
+					warp.valid_mask[index] = 1
+					# El cruce está en celdas locales; r_deep usa world.
+					var world_cross: Vector2 = origin + (result["cross_point"] as Vector2) * cell
+					warp.r_deep[index] = world_cross.dot(normal)
+				else:
+					warp.valid_mask[index] = 0
+					warp.r_deep[index] = 0.0
 			if warp.valid_mask[index] != 0:
 				var r_deep: float = warp.r_deep[index]
 				var deep: Vector2 = warp.deep_origin_xz + direction * s_deep + normal * r_deep

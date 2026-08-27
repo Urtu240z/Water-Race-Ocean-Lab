@@ -67,9 +67,10 @@ func _bake_propagation(data, direction: Vector2):
 	return baker.bake()
 
 
-func _bake_warp(propagation):
+func _bake_warp(propagation, mapping_mode := WarpBakerScript.WarpMappingMode.PHASE_TRANSVERSE_IDENTITY):
 	var baker = WarpBakerScript.new()
 	baker.propagation = propagation
+	baker.mapping_mode = mapping_mode
 	baker.backtrace_step_cells = 0.5
 	return baker.bake()
 
@@ -245,7 +246,10 @@ func _validate_island() -> void:
 		var dz := float(z - 40)
 		return -1.0 if dx * dx + dz * dz < 14.0 * 14.0 else 18.0)
 	var propagation = _bake_propagation(data, Vector2.RIGHT)
-	var warp = _bake_warp(propagation)
+	# Esta sección conserva la comprobación específica del contrato legacy:
+	# el backtrace no atraviesa tierra. El mapping por defecto se valida en la
+	# suite Phase Authority dedicada.
+	var warp = _bake_warp(propagation, WarpBakerScript.WarpMappingMode.LEGACY_CHARACTERISTIC_BACKTRACE)
 	var width: int = warp.width
 	var height: int = warp.height
 	var land_index: int = 40 * width + 50

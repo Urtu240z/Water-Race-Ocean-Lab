@@ -55,6 +55,7 @@ const SAFE_ID_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 @export_range(0.0, 4.0, 0.01) var phase_regularization_raw_fidelity := 0.25
 
 @export_category("Warp")
+@export_enum("PHASE_TRANSVERSE_IDENTITY", "LEGACY_CHARACTERISTIC_BACKTRACE") var warp_mapping_mode := 0
 @export_range(0.05, 8.0, 0.05) var backtrace_step_cells := 0.5
 @export_range(0.0, 1.0, 0.01) var detj_safe_threshold := 0.5
 @export_range(0, 1000000, 1) var max_backtrace_steps := 0
@@ -130,6 +131,7 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 
 	var warp_baker := CoastalWarpBaker.new()
 	warp_baker.propagation = propagation
+	warp_baker.mapping_mode = warp_mapping_mode
 	warp_baker.backtrace_step_cells = backtrace_step_cells
 	warp_baker.max_backtrace_steps = max_backtrace_steps
 	warp_baker.detj_safe_threshold = detj_safe_threshold

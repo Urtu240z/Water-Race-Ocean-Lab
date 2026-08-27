@@ -6,8 +6,8 @@ extends Resource
 ##   d0 = incoming_direction_xz (unitario)
 ##   n0 = perpendicular(d0) = (-d0.y, d0.x)
 ##   s_deep = phi / k0            (coordenada longitudinal = fase/k0, Eikonal)
-##   r_deep = dot(p_frontera_upstream, n0)   (etiqueta transversal del characteristic,
-##                                            obtenida por BACKTRACE con -local_direction)
+##   r_deep = dot(world_xz, n0)               (PHASE_TRANSVERSE_IDENTITY, default)
+##   r_deep = dot(p_frontera_upstream, n0)    (LEGACY_CHARACTERISTIC_BACKTRACE)
 ##   deep_xz = deep_origin_xz + d0 * s_deep + n0 * r_deep
 ##
 ## En fondo plano (profundidad uniforme) con deep_origin = d0 * min_s, el mapping

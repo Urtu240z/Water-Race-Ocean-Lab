@@ -13,18 +13,18 @@ folds, discontinuidades ni una aproximación físicamente incoherente?
 
 3B.1 aporta T, phi, grad(phi), local_direction y sus campos de presentación
 `render_phase_rad`/`render_direction` (Eikonal/Fast Sweeping, Snell, shadow).
-3B.2A construye las DOS coordenadas del mapping (longitudinal + la etiqueta
-transversal del characteristic) y valida el resultado. El warp final consume la
-presentación cuando está disponible; los campos RAW siguen siendo diagnóstico y
-fallback de compatibilidad.
+3B.2A construye las DOS coordenadas del mapping (longitudinal + transversal) y
+valida el resultado. El warp final consume la presentación cuando está
+disponible; los campos RAW siguen siendo diagnóstico y fallback de
+compatibilidad.
 
-## Mapping elegido (convenio documentado)
+## Mapping por defecto: PHASE_TRANSVERSE_IDENTITY
 
 ```text
 d0 = incoming_direction (unitario)
 n0 = perpendicular(d0) = (-d0.y, d0.x)
 s_deep = render_phi / k0             (coordenada longitudinal: fase de presentación / k0)
-r_deep = dot(p_frontera_upstream, n0) (etiqueta transversal del characteristic)
+r_deep = dot(world_xz, n0)            (identidad transversal, sin cambio de rama)
 deep_xz = deep_origin + d0*s_deep + n0*r_deep
 deep_origin = d0 * min_s   (min_s = min dot(world, d0) en el grid)
 ```
@@ -37,14 +37,25 @@ deep_origin = d0 * min_s   (min_s = min dot(world, d0) en el grid)
 - NO se usa `world + direction*phase_offset/k0` como mapping 2D: eso sólo
   fija la fase longitudinal y no preserva la identidad transversal del rayo.
 
-## Backtrace de characteristics (RK2)
+El modo `LEGACY_CHARACTERISTIC_BACKTRACE` conserva el mapping anterior para
+A/B y diagnóstico:
+
+```text
+r_deep = dot(p_frontera_upstream, n0)
+```
+
+La opción de authoring por defecto es `PHASE_TRANSVERSE_IDENTITY`. Los assets
+ya horneados no se modifican automáticamente: Paradise Island requiere un
+rebake manual para incorporar este mapping.
+
+## Backtrace legacy de characteristics (RK2)
 
 `CoastalWarpBaker._backtrace` integra `p' = -render_direction(p)` desde cada
 nodo reached hacia aguas arriba:
 
-- paso inicial = `0.5 * cell_size` (celdas); RK2/Heun (k2 = dir en el punto
-  medio; si el punto medio sale del grid se degrada a Euler para intersectar
-  el borde correctamente).
+- paso inicial = `backtrace_step_cells` (celdas, no metros); RK2/Heun (k2 =
+  dir en el punto medio; si el punto medio sale del grid se degrada a Euler
+  para intersectar el borde correctamente).
 - `render_direction` interpolada **bilinealmente** en cada paso, con fallback a
   `local_direction` para recursos legacy sin el campo de presentación.
 - Termina al cruzar la frontera del grid; el cruce se clasifica:
@@ -55,6 +66,32 @@ nodo reached hacia aguas arriba:
     atraviesa tierra);
   - `STEPS_EXCEEDED`: no convergió en el límite → inválido.
 - NO se hacen forward rays: el backward mapping denso es más robusto.
+
+El modo por defecto no ejecuta este backtrace. Así, una discontinuidad o
+branch-switch de la etiqueta transversal no puede crear una costura en la
+fase longitudinal ya regularizada.
+
+## Validación Phase Authority (fix)
+
+`tests/coastal_warp_phase_authority_validation.gd` mide ambos modos con los
+mismos campos sintéticos. Resultados observados en la ejecución local:
+
+| caso / métrica | legacy | PHASE_TRANSVERSE_IDENTITY |
+|---|---:|---:|
+| flat `max |deep-world|` | — | 0.000009537 m |
+| reconstrucción de fase máxima | — | 0.000003815 rad |
+| rampa: ángulo medio / P95 / máximo vs `render_direction` | — | 0.002420° / 0.019782° / 0.027976° |
+| isla: área válida | 5883/6561 | 6244/6561 |
+| isla: salto vecino máximo `deep_x/deep_z/r_deep` | 1.0000/4.9788/4.9788 m | 1.0000/1.0000/1.0000 m |
+| isla, línea central detrás: muestras válidas | 0 | 27 |
+| isla `detJ` min / P01 / mean / P99 / max | 0.000000 / 0.284965 / 0.805825 / 1.043922 / 4.978844 | 1.000000 / 1.000000 / 1.000000 / 1.000000 / 1.000000 |
+
+Las clases del modo nuevo en la isla fueron SAFE 95.17%, NEAR_CAUSTIC 0%,
+FOLDED 0% e INVALID 4.83%; el INVALID corresponde a la máscara de tierra,
+no a la energía de shadow. En el canal y con múltiples rocas la validez del
+warp coincide exactamente con `valid_mask && reached_mask`, sin NaN/Inf.
+La prueba de unidades usa celda de 2 m y paso 0.5: el centro legacy integra
+65 pasos, confirmando que el backtrace recibe celdas.
 
 ### Hot path: sampler directo (optimización de coste)
 
@@ -190,10 +227,13 @@ a medio plazo evaluar división por sectores direccionales (NO implementada).
 - `ocean_v3/coastal/coastal_warp_data.gd` — Resource: deep_x/z, jacobian_det,
   valid, r_deep, backtrace_steps, boundary_hit, jacobian_class + sample_warp().
 - `ocean_v3/coastal/coastal_warp_sample.gd` — resultado de sample_warp().
-- `ocean_v3/coastal/coastal_warp_baker.gd` — bake del warp (backtrace RK2,
-  sampler directo, jacobiano, clasificación; incluye contadores de perfilado).
+- `ocean_v3/coastal/coastal_warp_baker.gd` — bake del warp (mapping
+  `PHASE_TRANSVERSE_IDENTITY` por defecto, backtrace RK2 legacy, sampler
+  directo, jacobiano, clasificación; incluye contadores de perfilado).
 - `tests/phase_3b_2a_warp_validation.gd` — validación A–D + resolución +
   narrow-band + LONG energy.
+- `tests/coastal_warp_phase_authority_validation.gd` — A/B cuantitativo de
+  phase authority, unidades del backtrace y casos flat/rampa/isla/canal/rocas.
 - `lab/benchmark/phase_3b_2a_warp_benchmark.gd` — coste Eikonal+warp+memoria
   y perfilado.
 - `lab/coastal/phase_3b_2a_sampler_check.gd` — validación sampler directo vs
