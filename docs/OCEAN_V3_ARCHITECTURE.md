@@ -283,9 +283,9 @@ For runtime diagnosis, `BreakerRibbonPool` stores the detector values already
 used by the decision (`candidate_s`, previous position, advancing/window gates,
 pressure/prominence/steepness contributions, raw/final score, eligibility,
 probability, deterministic roll, cooldown, and wave serial) in its tracking
-snapshot. The Lab's `F8` detector mode renders the anchor, physical sample
+snapshot. The Lab's `J` detector mode renders the anchor, physical sample
 line, spawn window, and current candidate without issuing extra queries;
-`Shift+F8` selects a slot and `Ctrl+F8` force-spawns that slot only after a real
+`Shift+J` selects a slot and `Ctrl+J` force-spawns that slot only after a real
 candidate exists, bypassing score/probability/roll for lifecycle isolation.
 
 ## Sea State Zones

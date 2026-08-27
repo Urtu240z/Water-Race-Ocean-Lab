@@ -24,7 +24,7 @@ func _run() -> void:
 		_quit()
 		return
 	var source := FileAccess.get_file_as_string("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
-	_check(source.contains("enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, DETECTOR, OFF }"), "F8 incluye DETECTOR antes de OFF")
+	_check(source.contains("enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, DETECTOR, OFF }"), "J incluye DETECTOR antes de OFF")
 	_check(source.contains("_apply_detector_diagnostics"), "el detector persiste el desglose por slot")
 	_check(source.contains("detector_gate_reason"), "el detector publica razón concreta de no-spawn")
 	_check(source.contains("force_spawn_selected_slot"), "existe FORCE SPAWN aislado")

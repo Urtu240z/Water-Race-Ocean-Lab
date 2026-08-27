@@ -1,6 +1,6 @@
 extends SceneTree
 ## Captura headless de 10 s sobre lab/lab_main.tscn.
-## Activa DETECTOR por la misma API que usa F8 y sólo lee los snapshots ya
+## Activa DETECTOR por la misma API que usa J y sólo lee los snapshots ya
 ## calculados por BreakerRibbonPool; no añade queries ni altera tuning.
 
 const CAPTURE_DURATION_S := 10.0
