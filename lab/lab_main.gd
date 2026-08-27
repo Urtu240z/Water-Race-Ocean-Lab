@@ -5,6 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F1: HUD\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -25,7 +26,8 @@ func _ready() -> void:
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
-	controls_label.text = "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F1: HUD\n4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: CALM/RACE/ROUGH instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+	_wire_real_coastal_pipeline()
+	_update_coastal_hud()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -47,6 +49,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module:
 				fft_module.toggle_enabled()
+		KEY_C:
+			var fft_module_coastal := get_tree().get_first_node_in_group(&"ocean_fft")
+			if fft_module_coastal:
+				if event.shift_pressed:
+					fft_module_coastal.cycle_coastal_composition_debug()
+				else:
+					fft_module_coastal.set_coastal_runtime_enabled(not fft_module_coastal.coastal_runtime_enabled())
+				_update_coastal_hud()
 		KEY_V:
 			var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 			if fft_module:
@@ -137,6 +147,37 @@ func _create_demo_sea_state_zone() -> void:
 	_demo_sea_state_zone.priority = 0
 	add_child(_demo_sea_state_zone)
 	ocean_v3.register_sea_state_zone(_demo_sea_state_zone)
+
+
+func _wire_real_coastal_pipeline() -> void:
+	## Runtime dev tooling: el Baker real de la isla produce el único bake de
+	## Bathymetry; el preview baker permanece exclusivamente en modo editor.
+	var bathymetry_baker := get_node_or_null("BathymetryBaker") as BathymetryBaker
+	var fft_module := get_tree().get_first_node_in_group(&"ocean_fft") as OpenOceanFFTModule
+	if bathymetry_baker == null or fft_module == null:
+		push_error("Ocean V3 Lab: faltan BathymetryBaker u OpenOceanFFT para Coastal runtime.")
+		return
+	var bathymetry_data = bathymetry_baker.bake()
+	if bathymetry_data == null or not bathymetry_data.is_valid():
+		push_error("Ocean V3 Lab: BathymetryBaker no produjo BathymetryData válida.")
+		return
+	fft_module.coastal_bathymetry_data = bathymetry_data
+	fft_module.coastal_incoming_direction_xz = fft_module.coastal_long_reference_direction()
+	fft_module.coastal_eikonal_enabled = true
+	fft_module.coastal_propagation_enabled = true
+	fft_module.coastal_warp_enabled = true
+	fft_module.rebuild_coastal_propagation()
+	fft_module.set_coastal_runtime_enabled(true)
+	print("Ocean V3 Coastal runtime: Bathymetry -> Eikonal -> Warp -> LONG_COASTAL (ON)")
+
+
+func _update_coastal_hud() -> void:
+	var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
+	if fft_module == null:
+		controls_label.text = CONTROLS_TEXT + "\nC: Coastal unavailable | Shift+C: composition"
+		return
+	var state := "ON" if fft_module.coastal_runtime_enabled() else "OFF"
+	controls_label.text = CONTROLS_TEXT + "\nC: Coastal ON/OFF (%s) | Shift+C: %s" % [state, fft_module.coastal_composition_debug_name()]
 
 
 func _set_active_camera(use_race_camera: bool) -> void:

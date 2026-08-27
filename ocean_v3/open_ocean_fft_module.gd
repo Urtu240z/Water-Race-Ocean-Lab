@@ -156,8 +156,11 @@ enum BandDebug {
 @export_range(0.05, 4.0, 0.05) var coastal_min_valid_depth_m := 0.25
 @export var coastal_monochromatic_debug := false
 @export_range(0.01, 2.0, 0.01) var coastal_monochromatic_amplitude_m := 0.35
-# 3B.1: sólo instrumento MONO; nunca warp definitivo del FFT direccional.
+# 3B.1: instrumento MONO/Eikonal histórico. No gobierna el solver final.
 @export var coastal_eikonal_refraction_debug := false
+# Solver semántico del camino Coastal final. Se mantiene separado del flag de
+# diagnóstico para que el warp de producción no dependa de una opción "debug".
+@export var coastal_eikonal_enabled := true
 # 3B.2B: split direccional de LONG (COASTAL / REMAINDER).
 # Máscara angular suave: plena 1 hasta inner_deg, falloff hasta 0 en outer_deg.
 @export_range(0.0, 60.0, 1.0) var coastal_split_inner_deg := 20.0
@@ -216,6 +219,7 @@ var _sea_state: int = SeaStateScript.State.RACE
 var _sea_state_initialized := false
 var _coastal_propagation = null
 var _coastal_warp = null
+var _coastal_runtime_enabled := true
 var _coastal_energy_metrics: Dictionary = {}
 var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
@@ -1035,7 +1039,7 @@ func rebuild_coastal_propagation() -> bool:
 		surface.set_coastal_propagation(null)
 		_configure_breaker_pool()
 		return false
-	if coastal_eikonal_refraction_debug:
+	if coastal_eikonal_enabled:
 		var eikonal_baker := CoastalEikonalBakerScript.new()
 		eikonal_baker.bathymetry_data = coastal_bathymetry_data
 		eikonal_baker.incoming_direction_xz = coastal_incoming_direction_xz
@@ -1057,7 +1061,7 @@ func rebuild_coastal_propagation() -> bool:
 	# ES la base del warp (propagation_kind==1); el transform visual del FFT se
 	# autoriza cuando hay warp activo, o en el camino straight 3B (sin eikonal).
 	# Con eikonal debug SIN warp (3B.1), el transform queda OFF (solo MONO).
-	var fft_transform_enabled := coastal_propagation_enabled and (not coastal_eikonal_refraction_debug or coastal_warp_enabled)
+	var fft_transform_enabled := coastal_propagation_enabled and (not coastal_eikonal_enabled or coastal_warp_enabled)
 	if coastal_propagation_enabled and coastal_warp_enabled and _coastal_propagation.propagation_kind == 1:
 		var warp_baker := WarpBakerScript.new()
 		warp_baker.propagation = _coastal_propagation
@@ -1071,8 +1075,31 @@ func rebuild_coastal_propagation() -> bool:
 				coastal_split_inner_deg, coastal_split_outer_deg, coastal_long_reference_direction())
 	# El campo 2D no se aplica al FFT: sólo el shader mono consume phi(x,z).
 	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug, coastal_monochromatic_amplitude_m, fft_transform_enabled, coastal_eikonal_refraction_debug and coastal_propagation_enabled)
+	surface.set_coastal_runtime_enabled(_coastal_runtime_enabled)
 	_configure_breaker_pool()
 	return coastal_propagation_enabled
+
+
+func set_coastal_runtime_enabled(enabled: bool) -> void:
+	## A/B visual inmediato sobre el bake residente; no llama a rebuild.
+	_coastal_runtime_enabled = enabled
+	surface.set_coastal_runtime_enabled(enabled)
+	if enabled:
+		_configure_breaker_pool()
+	elif _breaker_pool != null:
+		_breaker_pool.disable()
+
+
+func coastal_runtime_enabled() -> bool:
+	return _coastal_runtime_enabled
+
+
+func cycle_coastal_composition_debug() -> void:
+	surface.cycle_coastal_composition_debug()
+
+
+func coastal_composition_debug_name() -> String:
+	return surface.coastal_composition_debug_name()
 
 
 func _configure_breaker_pool() -> void:
@@ -1081,7 +1108,7 @@ func _configure_breaker_pool() -> void:
 	## hay ningún breaker. Nunca se ejecuta por frame.
 	if _breaker_pool == null:
 		return
-	var coastal_ok: bool = coastal_propagation_enabled and _coastal_propagation != null and _coastal_propagation.is_valid()
+	var coastal_ok: bool = _coastal_runtime_enabled and coastal_propagation_enabled and _coastal_propagation != null and _coastal_propagation.is_valid()
 	if not breaker_enabled or not coastal_ok:
 		_breaker_pool.disable()
 		return

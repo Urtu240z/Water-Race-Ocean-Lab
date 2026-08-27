@@ -60,6 +60,12 @@ var _module_enabled := true
 var _lod_debug := false
 var _periodicity_debug := false
 var _coastal_debug_field: int = CoastalDebugField.OFF
+var _coastal_runtime_enabled := true
+var _coastal_propagation_available := false
+var _coastal_transform_requested := false
+var _coastal_monochromatic_debug := false
+var _coastal_eikonal_phase_debug := false
+var _coastal_warp_available := false
 var _breaking_debug: int = BreakingDebug.OFF
 var _tracking_camera: Camera3D
 var _triangle_count := 0
@@ -170,13 +176,17 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 	## Sólo LONG consume esta transformación. MID/SHORT y sus H0 quedan intactos.
 	var enabled: bool = data != null and data.is_valid()
 	var textures: Dictionary = data.build_gpu_textures() if enabled else {}
+	_coastal_propagation_available = enabled
+	_coastal_transform_requested = transform_enabled
+	_coastal_monochromatic_debug = monochromatic_debug
+	_coastal_eikonal_phase_debug = eikonal_phase_debug
 	for material in [_surface_material, _wireframe_material]:
 		# data_enabled permite MONO/Eikonal y sus probes; transform_enabled sólo
 		# autoriza el warp visual de LONG (nunca para Eikonal 3B.1).
-		material.set_shader_parameter(&"coastal_propagation_enabled", enabled)
-		material.set_shader_parameter(&"coastal_transform_enabled", enabled and transform_enabled)
-		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled)
-		material.set_shader_parameter(&"coastal_eikonal_phase_debug", eikonal_phase_debug and monochromatic_debug and enabled)
+		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and _coastal_runtime_enabled)
+		material.set_shader_parameter(&"coastal_transform_enabled", enabled and transform_enabled and _coastal_runtime_enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled and _coastal_runtime_enabled)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", eikonal_phase_debug and monochromatic_debug and enabled and _coastal_runtime_enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_amplitude_m", monochromatic_amplitude_m)
 		if not enabled:
 			continue
@@ -197,8 +207,9 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 	## blend suave en NEAR_CAUSTIC; fallback a world_xz en inválido/folded.
 	var warp_enabled: bool = enabled and warp_data != null and warp_data.is_valid()
 	var textures: Dictionary = warp_data.build_gpu_textures() if warp_enabled else {}
+	_coastal_warp_available = warp_enabled
 	for material in [_surface_material, _wireframe_material]:
-		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled)
+		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled and _coastal_runtime_enabled)
 		if not warp_enabled:
 			continue
 		material.set_shader_parameter(&"coastal_warp_texture", textures["warp"])
@@ -206,6 +217,38 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 		material.set_shader_parameter(&"coastal_warp_origin_xz", warp_data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_warp_extent_m", warp_data.world_max_xz() - warp_data.world_origin_xz)
 		material.set_shader_parameter(&"coastal_warp_detj_safe", warp_data.detj_safe_threshold)
+
+
+func set_coastal_runtime_enabled(enabled: bool) -> void:
+	## Activa/desactiva la presentación de los datos ya horneados. No reconstruye
+	## Bathymetry, Eikonal, warp, H0 ni texturas GPU; sólo cambia uniforms.
+	_coastal_runtime_enabled = enabled
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"coastal_propagation_enabled", _coastal_propagation_available and enabled)
+		material.set_shader_parameter(&"coastal_transform_enabled", _coastal_propagation_available and _coastal_transform_requested and enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", _coastal_propagation_available and _coastal_monochromatic_debug and enabled)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", _coastal_propagation_available and _coastal_eikonal_phase_debug and enabled)
+		material.set_shader_parameter(&"coastal_warp_enabled", _coastal_warp_available and enabled)
+
+
+func coastal_runtime_enabled() -> bool:
+	return _coastal_runtime_enabled
+
+
+func set_coastal_composition_debug(mode: int) -> void:
+	var clamped := clampi(mode, CoastalCompositionDebug.FULL, CoastalCompositionDebug.MID_SHORT_ONLY)
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"coastal_composition_debug", clamped)
+
+
+func cycle_coastal_composition_debug() -> void:
+	var current: int = int(_surface_material.get_shader_parameter(&"coastal_composition_debug"))
+	set_coastal_composition_debug(CoastalCompositionDebug.LONG_COASTAL_ONLY if current == CoastalCompositionDebug.FULL else CoastalCompositionDebug.FULL)
+
+
+func coastal_composition_debug_name() -> String:
+	var current: int = int(_surface_material.get_shader_parameter(&"coastal_composition_debug"))
+	return CoastalCompositionDebug.keys()[clampi(current, CoastalCompositionDebug.FULL, CoastalCompositionDebug.MID_SHORT_ONLY)]
 
 
 func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int,
