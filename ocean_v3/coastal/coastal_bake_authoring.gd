@@ -131,7 +131,7 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 
 	var warp_baker := CoastalWarpBaker.new()
 	warp_baker.propagation = propagation
-	warp_baker.mapping_mode = warp_mapping_mode
+	warp_baker.mapping_mode = warp_mapping_mode as CoastalWarpBaker.WarpMappingMode
 	warp_baker.backtrace_step_cells = backtrace_step_cells
 	warp_baker.max_backtrace_steps = max_backtrace_steps
 	warp_baker.detj_safe_threshold = detj_safe_threshold

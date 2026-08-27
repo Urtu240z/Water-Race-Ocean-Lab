@@ -813,18 +813,18 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 	var spawn_time: float = float(entry.get("spawn_time", render_time))
 	var age: float = maxf(0.0, render_time - spawn_time)
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
-	var position: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO))
+	var predicted_position: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO))
 	if _propagation == null or not _propagation.is_valid() or age <= 0.0:
-		return position + Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized() * (phase_speed * age)
+		return predicted_position + Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized() * (phase_speed * age)
 	# Fixed-step midpoint integration makes the result independent of render FPS.
 	var steps := clampi(int(ceil(age / TRAJECTORY_STEP_S)), 1, TRAJECTORY_MAX_STEPS)
 	var dt := age / float(steps)
 	for _step in steps:
-		var velocity_0 := _sample_velocity(position, entry)
-		var midpoint := position + Vector2(velocity_0["direction"]) * float(velocity_0["speed"]) * dt * 0.5
+		var velocity_0 := _sample_velocity(predicted_position, entry)
+		var midpoint := predicted_position + Vector2(velocity_0["direction"]) * float(velocity_0["speed"]) * dt * 0.5
 		var velocity_mid := _sample_velocity(midpoint, entry)
-		position += Vector2(velocity_mid["direction"]) * float(velocity_mid["speed"]) * dt
-	return position
+		predicted_position += Vector2(velocity_mid["direction"]) * float(velocity_mid["speed"]) * dt
+	return predicted_position
 
 
 func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
@@ -853,8 +853,8 @@ func _sample_propagation(world_xz: Vector2) -> Dictionary:
 func _shore_weight(depth_m: float, vertical: bool) -> float:
 	var depth := maxf(depth_m, 0.0)
 	var presence := _smoothstep(0.0, maxf(0.25, 0.001), depth)
-	var range := Vector2(0.25, 6.0) if vertical else Vector2(0.75, 12.0)
-	return presence * _smoothstep(minf(range.x, range.y), maxf(range.x, range.y), depth)
+	var depth_range := Vector2(0.25, 6.0) if vertical else Vector2(0.75, 12.0)
+	return presence * _smoothstep(minf(depth_range.x, depth_range.y), maxf(depth_range.x, depth_range.y), depth)
 
 
 func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render_time: float) -> void:
