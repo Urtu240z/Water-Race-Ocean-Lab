@@ -23,9 +23,9 @@ const SeaStateZoneMathScript := preload("res://ocean_v3/core/sea_state_zone_math
 ## 4C-S1: LUT de cross-section horneada (ocean_v3 autocontenido; sin depender de lab/).
 const LutTexture := preload("res://ocean_v3/breaking/data/breaker_cross_section_lut.res")
 
-enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, OFF }
+enum DebugMode { LIP, TAKEOVER, REGION, FORCE_LIP, DETECTOR, OFF }
 
-const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "OFF"]
+const DEBUG_NAMES := ["LIP", "TAKEOVER", "REGION", "FORCE_LIP", "DETECTOR", "OFF"]
 const BREAKER_GAMMA := 0.78
 const ANCHOR_PRESSURE_TARGET := 0.78
 const TRAJECTORY_STEP_S := 0.125
@@ -156,6 +156,10 @@ var _breaker_height_batch: Callable = Callable() # Specialized DETECT/ACTIVE hei
 var _breaker_slope_batch: Callable = Callable() # Specialized candidate slope batch.
 var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz, h0, h3, h6} por slot.
 var _last_track_time := 0.0 # 4C-S4: último render_time usado por el tracker (HUD).
+var _detector_debug_instance: MeshInstance3D = null
+var _detector_debug_mesh: ImmediateMesh = null
+var _detector_debug_material: StandardMaterial3D = null
+var _last_force_spawn_result := "never_requested"
 
 ## 5R.1F: scheduler del detector. El breaker ACTIVE es autónomo (nunca consulta
 ## OceanQuery); COOLDOWN tampoco consulta; sólo los slots DETECT se consultan en
@@ -211,6 +215,7 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 	_sea_level_y = sea_level_y
 	_surface_material = surface_material
 	_ensure_material()
+	_ensure_detector_debug_visual()
 	set_energy_model(long_hs_m, coastal_fraction)
 	_sync_uniforms()
 	visible = _diagnostic_visible
@@ -376,6 +381,8 @@ func disable() -> void:
 	_reset_scheduler()
 	_rebuild_instances()
 	visible = false
+	if _detector_debug_instance != null:
+		_detector_debug_instance.visible = false
 	if _surface_material != null:
 		_surface_material.set_shader_parameter(&"breaker_takeover_count", 0)
 
@@ -386,6 +393,7 @@ func set_debug_mode(mode: int) -> void:
 		_material.set_shader_parameter(&"breaker_debug_mode", _debug_mode)
 	_apply_visibility()
 	_sync_takeover_mask()
+	_update_detector_debug_visual()
 
 
 func cycle_debug_mode() -> void:
@@ -397,6 +405,7 @@ func set_debug_slot(slot: int) -> void:
 	_debug_slot = slot
 	_apply_visibility()
 	_sync_takeover_mask()
+	_update_detector_debug_visual()
 
 
 func cycle_debug_slot() -> void:
@@ -502,7 +511,31 @@ func tracking_snapshot() -> Array:
 		result.append({
 			"state": state_name,
 			"wave": int(entry.get("wave_serial", 0)),
+			"last_decided_wave_serial": int(entry.get("last_decided_wave_serial", -1)),
 			"candidate_s": float(entry.get("candidate_s", 0.0)),
+			"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
+			"previous_s": float(entry.get("detector_prev_s", 0.0)),
+			"previous_s_lambda": float(entry.get("previous_s_lambda", 0.0)),
+			"advancing": bool(entry.get("advancing", false)),
+			"in_window": bool(entry.get("in_window", false)),
+			"cooldown_done": bool(entry.get("cooldown_done", true)),
+			"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
+			"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
+			"pressure": float(entry.get("pressure", 0.0)),
+			"pressure_score": float(entry.get("pressure_score", 0.0)),
+			"pressure_contribution": float(entry.get("pressure_contribution", 0.0)),
+			"prominence": float(entry.get("prominence", 0.0)),
+			"prominence_score": float(entry.get("prominence_score", 0.0)),
+			"prominence_contribution": float(entry.get("prominence_contribution", 0.0)),
+			"local_hs": float(entry.get("local_hs", 0.0)),
+			"slope_long": float(entry.get("slope_long", 0.0)),
+			"steepness_score": float(entry.get("steepness_score", 0.0)),
+			"steepness_contribution": float(entry.get("steepness_contribution", 0.0)),
+			"raw_score": float(entry.get("raw_score", 0.0)),
+			"anchor_eligibility": float(entry.get("anchor_eligibility", 0.0)),
+			"zone_activity": float(entry.get("zone_activity", 0.0)),
+			"final_score": float(entry.get("final_score", entry.get("score", 0.0))),
+			"detector_gate_reason": str(entry.get("detector_gate_reason", "pending")),
 			"score": float(entry.get("score", 0.0)),
 			"probability": float(entry.get("probability", 0.0)),
 			"roll": float(entry.get("roll", 0.0)),
@@ -554,13 +587,52 @@ func summary() -> Dictionary:
 		"active_tracking_points_last_tick": _active_tracking_points_last_tick,
 		"detector_slope_queries_last_tick": _detector_slope_queries_last_tick,
 		"detector_slope_points_last_tick": _detector_slope_points_last_tick,
+		"slope_queries_last_tick": _detector_slope_queries_last_tick,
+		"slope_points_last_tick": _detector_slope_points_last_tick,
 		"detector_query_elapsed_ms_last_tick": _detector_query_elapsed_ms_last_tick,
+		"breaker_height_source_valid": _breaker_height_batch.is_valid() or _query_batch.is_valid(),
+		"breaker_slope_source_valid": _breaker_slope_batch.is_valid(),
+		"force_spawn_last_result": _last_force_spawn_result,
 	}
+
+
+func force_spawn_selected_slot() -> bool:
+	## Diagnóstico explícito: salta sólo score/probability/roll. Conserva la
+	## muestra candidate real, posición, dirección, wavelength y cooldown.
+	if _debug_slot < 0 or _debug_slot >= _anchors.size():
+		_last_force_spawn_result = "NO_SLOT_SELECTED"
+		return false
+	var index := _debug_slot
+	var anchor: Dictionary = _anchors[index]
+	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+	if bool(entry.get("active", false)):
+		_last_force_spawn_result = "SLOT_ALREADY_ACTIVE"
+		return false
+	var render_time := _last_track_time
+	if render_time < float(entry.get("next_spawn_time", 0.0)):
+		_last_force_spawn_result = "COOLDOWN"
+		return false
+	if not bool(entry.get("detector_initialized", false)):
+		_last_force_spawn_result = "NO_REAL_CANDIDATE_YET"
+		return false
+	var wavelength := float(anchor["wavelength_m"])
+	var candidate_s := float(entry.get("candidate_s", 0.0))
+	var travel_dir := Vector2(anchor["direction"]).normalized()
+	var score := clampf(float(entry.get("final_score", entry.get("score", 0.0))), 0.0, 1.0)
+	var state := _base_state(entry)
+	for key in entry.keys():
+		state[key] = entry[key]
+	state["detector_gate_reason"] = "FORCE_SPAWN"
+	state["last_decided_wave_serial"] = int(entry.get("wave_serial", 0))
+	_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, score, render_time, state)
+	_last_force_spawn_result = "SPAWNED_SLOT_%d" % index
+	return true
 
 
 func _process(_delta: float) -> void:
 	if _material == null or _surface_material == null:
 		return
+	_update_detector_debug_visual()
 	# SimulationClock is the sole temporal authority. Camera movement while
 	# paused may change visibility/fade uniforms, but never breaker world state.
 	var clock = get_node_or_null("/root/SimulationClock")
@@ -573,6 +645,79 @@ func _process(_delta: float) -> void:
 	_prune_retired_transition_anchors()
 	if _structural_energy_update_pending and not _has_active_breakers():
 		_apply_structural_energy_model()
+
+
+func _ensure_detector_debug_visual() -> void:
+	if _detector_debug_instance != null:
+		return
+	_detector_debug_mesh = ImmediateMesh.new()
+	_detector_debug_material = StandardMaterial3D.new()
+	_detector_debug_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_detector_debug_material.vertex_color_use_as_albedo = true
+	_detector_debug_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_detector_debug_material.no_depth_test = true
+	_detector_debug_material.render_priority = 127
+	_detector_debug_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_detector_debug_instance = MeshInstance3D.new()
+	_detector_debug_instance.name = "DetectorDebugOverlay"
+	_detector_debug_instance.mesh = _detector_debug_mesh
+	_detector_debug_instance.material_override = _detector_debug_material
+	_detector_debug_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_detector_debug_instance.top_level = true
+	_detector_debug_instance.visible = false
+	add_child(_detector_debug_instance)
+
+
+func _update_detector_debug_visual() -> void:
+	if _detector_debug_instance == null or _detector_debug_mesh == null:
+		return
+	var enabled := _debug_mode == DebugMode.DETECTOR and _diagnostic_visible and visible and not _anchors.is_empty()
+	_detector_debug_instance.visible = enabled
+	if not enabled:
+		return
+	_detector_debug_mesh.clear_surfaces()
+	_detector_debug_mesh.surface_begin(Mesh.PRIMITIVE_LINES, _detector_debug_material)
+	for index in _anchors.size():
+		if _debug_slot >= 0 and index != _debug_slot:
+			continue
+		var anchor: Dictionary = _anchors[index]
+		var origin := Vector2(anchor.get("xz", Vector2.ZERO))
+		var direction := Vector2(anchor.get("direction", Vector2.RIGHT)).normalized()
+		var side := direction.orthogonal()
+		var wavelength := maxf(float(anchor.get("wavelength_m", 1.0)), 0.001)
+		var y := _sea_level_y + 0.18
+		# Dirección física y línea longitudinal de muestreo.
+		_add_debug_line(origin - direction * wavelength * 0.50, origin + direction * wavelength * 0.50, y, Color(0.20, 0.55, 1.0, 0.95))
+		_add_debug_line(origin, origin + direction * wavelength * 0.22, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+		_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 + side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+		_add_debug_line(origin + direction * wavelength * 0.22, origin + direction * wavelength * 0.16 - side * wavelength * 0.06, y + 0.01, Color(0.35, 0.75, 1.0, 1.0))
+		# Anchor marker.
+		_add_debug_line(origin - side * 0.55, origin + side * 0.55, y + 0.02, Color.WHITE)
+		_add_debug_line(origin - direction * 0.55, origin + direction * 0.55, y + 0.02, Color.WHITE)
+		# Spawn window: las constantes permanecen visibles en metros reales.
+		var window_start := SPAWN_S_START_LAMBDA * wavelength
+		var window_end := SPAWN_S_END_LAMBDA * wavelength
+		var window_a := origin + direction * window_start
+		var window_b := origin + direction * window_end
+		_add_debug_line(window_a - side * 0.80, window_a + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
+		_add_debug_line(window_b - side * 0.80, window_b + side * 0.80, y + 0.03, Color(1.0, 0.82, 0.10, 1.0))
+		_add_debug_line(window_a, window_b, y + 0.03, Color(1.0, 0.82, 0.10, 0.85))
+		# Candidate: verde sólo si la muestra está en ventana y avanzando.
+		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
+		var candidate_s := float(entry.get("candidate_s", 0.0))
+		var candidate := origin + direction * candidate_s
+		var candidate_color := Color(0.15, 1.0, 0.25, 1.0) if bool(entry.get("in_window", false)) and bool(entry.get("advancing", false)) else Color(1.0, 0.12, 0.10, 1.0)
+		_add_debug_line(candidate - side * 1.0, candidate + side * 1.0, y + 0.05, candidate_color)
+		_add_debug_line(candidate - direction * 1.0, candidate + direction * 1.0, y + 0.05, candidate_color)
+	_detector_debug_mesh.surface_set_color(Color.WHITE)
+	_detector_debug_mesh.surface_end()
+
+
+func _add_debug_line(a: Vector2, b: Vector2, y: float, color: Color) -> void:
+	_detector_debug_mesh.surface_set_color(color)
+	_detector_debug_mesh.surface_add_vertex(Vector3(a.x, y, a.y))
+	_detector_debug_mesh.surface_set_color(color)
+	_detector_debug_mesh.surface_add_vertex(Vector3(b.x, y, b.y))
 
 
 # --- Internos. ---
@@ -867,6 +1012,9 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	var last_decided: int = int(entry.get("last_decided_wave_serial", -1))
 	var next_spawn_time: float = float(entry.get("next_spawn_time", 0.0))
 	var candidate_s: float = float(candidate["s"])
+	var score_details := _break_score_details(anchor, candidate, travel_dir)
+	var s_start := SPAWN_S_START_LAMBDA * wavelength
+	var s_end := SPAWN_S_END_LAMBDA * wavelength
 
 	if not detector_initialized:
 		var initial_state := _base_state(entry)
@@ -877,6 +1025,7 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 		initial_state["tracked_xz"] = Vector2(anchor["xz"])
 		initial_state["candidate_s"] = candidate_s
 		initial_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+		_apply_detector_diagnostics(initial_state, score_details, candidate_s, candidate_s, false, candidate_s >= s_start and candidate_s <= s_end, render_time >= next_spawn_time, wave_serial, "INITIALIZED", wavelength)
 		_publish_slot(index, initial_state)
 		return
 
@@ -886,8 +1035,6 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	var advancing: bool = candidate_s > detector_prev_s
 	detector_prev_s = candidate_s
 
-	var s_start := SPAWN_S_START_LAMBDA * wavelength
-	var s_end := SPAWN_S_END_LAMBDA * wavelength
 	var in_window: bool = candidate_s >= s_start and candidate_s <= s_end
 	var cooldown_done: bool = render_time >= next_spawn_time
 
@@ -902,19 +1049,58 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	candidate_state["tracked_xz"] = Vector2(anchor["xz"])
 	candidate_state["candidate_s"] = candidate_s
 	candidate_state["remaining"] = maxf(0.0, next_spawn_time - render_time)
+	var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, float(score_details["final_score"]))
+	var roll: float = _deterministic_roll(index, wave_serial)
+	_apply_detector_diagnostics(candidate_state, score_details, candidate_s, detector_prev_s, advancing, in_window, cooldown_done, wave_serial, "PENDING", wavelength)
+	candidate_state["probability"] = probability
+	candidate_state["roll"] = roll
 
 	if in_window and advancing and wave_serial != last_decided and cooldown_done:
 		candidate_state["last_decided_wave_serial"] = wave_serial
-		var score: float = _break_score(anchor, candidate, travel_dir)
-		var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, score)
-		var roll: float = _deterministic_roll(index, wave_serial)
-		candidate_state["score"] = score
-		candidate_state["probability"] = probability
-		candidate_state["roll"] = roll
+		candidate_state["detector_gate_reason"] = "ROLL_REJECTED"
 		if roll < probability:
-			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, score, render_time, candidate_state)
+			candidate_state["detector_gate_reason"] = "SPAWNED"
+			_spawn_breaker(index, anchor, candidate_s, travel_dir, wavelength, float(score_details["final_score"]), render_time, candidate_state)
 			return
+	else:
+		if not advancing:
+			candidate_state["detector_gate_reason"] = "NOT_ADVANCING"
+		elif not in_window:
+			candidate_state["detector_gate_reason"] = "OUTSIDE_WINDOW"
+		elif wave_serial == last_decided:
+			candidate_state["detector_gate_reason"] = "WAVE_ALREADY_DECIDED"
+		elif not cooldown_done:
+			candidate_state["detector_gate_reason"] = "COOLDOWN"
 	_publish_slot(index, candidate_state)
+
+
+func _apply_detector_diagnostics(state: Dictionary, score_details: Dictionary, candidate_s: float, previous_s: float, advancing: bool, in_window: bool, cooldown_done: bool, wave_serial: int, reason: String, wavelength: float) -> void:
+	state["candidate_s"] = candidate_s
+	state["candidate_s_lambda"] = candidate_s / maxf(wavelength, 0.001)
+	state["previous_s"] = previous_s
+	state["previous_s_lambda"] = previous_s / maxf(wavelength, 0.001)
+	state["advancing"] = advancing
+	state["in_window"] = in_window
+	state["cooldown_done"] = cooldown_done
+	state["spawn_window_start_s"] = SPAWN_S_START_LAMBDA * wavelength
+	state["spawn_window_end_s"] = SPAWN_S_END_LAMBDA * wavelength
+	state["wave_serial"] = wave_serial
+	state["pressure"] = float(score_details.get("pressure", 0.0))
+	state["pressure_score"] = float(score_details.get("pressure_score", 0.0))
+	state["pressure_contribution"] = float(score_details.get("pressure_contribution", 0.0))
+	state["prominence"] = float(score_details.get("prominence", 0.0))
+	state["prominence_score"] = float(score_details.get("prominence_score", 0.0))
+	state["prominence_contribution"] = float(score_details.get("prominence_contribution", 0.0))
+	state["local_hs"] = float(score_details.get("local_hs", 0.0))
+	state["slope_long"] = float(score_details.get("slope_long", 0.0))
+	state["steepness_score"] = float(score_details.get("steepness_score", 0.0))
+	state["steepness_contribution"] = float(score_details.get("steepness_contribution", 0.0))
+	state["raw_score"] = float(score_details.get("raw_score", 0.0))
+	state["anchor_eligibility"] = float(score_details.get("anchor_eligibility", 0.0))
+	state["zone_activity"] = float(score_details.get("zone_activity", 0.0))
+	state["final_score"] = float(score_details.get("final_score", 0.0))
+	state["score"] = state["final_score"]
+	state["detector_gate_reason"] = reason
 
 
 func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_dir: Vector2, wavelength: float, score: float, render_time: float, state: Dictionary) -> void:
@@ -945,17 +1131,40 @@ func _spawn_breaker(index: int, anchor: Dictionary, candidate_s: float, travel_d
 
 
 func _break_score(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2) -> float:
+	return float(_break_score_details(anchor, candidate, travel_dir).get("final_score", 0.0))
+
+
+func _break_score_details(anchor: Dictionary, candidate: Dictionary, travel_dir: Vector2) -> Dictionary:
 	var pressure := estimate_depth_pressure(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)), float(anchor.get("depth_m", 1.0)))
 	var pressure_score: float = _smoothstep(anchor_min_depth_pressure, minf(anchor_max_depth_pressure, 1.15), pressure)
 	var local_hs: float = estimate_local_hs(_long_hs_m, _coastal_fraction, float(anchor.get("shoaling", 1.0)))
-	var prominence_score: float = _smoothstep(0.04 * local_hs, 0.20 * local_hs, maxf(float(candidate["prominence"]), 0.0))
-	var sample: OceanQuerySample = candidate["sample"]
-	var ny: float = maxf(absf(sample.normal.y), 0.05)
-	var slope_xz := -Vector2(sample.normal.x, sample.normal.z) / ny
-	var slope_long: float = absf(slope_xz.dot(travel_dir))
+	var prominence: float = maxf(float(candidate.get("prominence", 0.0)), 0.0)
+	var prominence_score: float = _smoothstep(0.04 * local_hs, 0.20 * local_hs, prominence)
+	var sample = candidate.get("sample")
+	var slope_long := 0.0
+	if sample != null:
+		var ny: float = maxf(absf(sample.normal.y), 0.05)
+		var slope_xz := -Vector2(sample.normal.x, sample.normal.z) / ny
+		slope_long = absf(slope_xz.dot(travel_dir))
 	var steepness_score: float = _smoothstep(0.20, 0.75, slope_long)
 	var raw_score := clampf(SCORE_PRESSURE_WEIGHT * pressure_score + SCORE_PROMINENCE_WEIGHT * prominence_score + SCORE_STEEPNESS_WEIGHT * steepness_score, 0.0, 1.0)
-	return raw_score * _anchor_runtime_eligibility(anchor)
+	var eligibility := _anchor_runtime_eligibility_details(anchor)
+	return {
+		"pressure": pressure,
+		"pressure_score": pressure_score,
+		"pressure_contribution": SCORE_PRESSURE_WEIGHT * pressure_score,
+		"local_hs": local_hs,
+		"prominence": prominence,
+		"prominence_score": prominence_score,
+		"prominence_contribution": SCORE_PROMINENCE_WEIGHT * prominence_score,
+		"slope_long": slope_long,
+		"steepness_score": steepness_score,
+		"steepness_contribution": SCORE_STEEPNESS_WEIGHT * steepness_score,
+		"raw_score": raw_score,
+		"anchor_eligibility": eligibility["anchor_eligibility"],
+		"zone_activity": eligibility["zone_activity"],
+		"final_score": raw_score * eligibility["anchor_eligibility"] * eligibility["zone_activity"],
+	}
 
 
 func _deterministic_roll(slot: int, wave_serial: int) -> float:
@@ -990,6 +1199,29 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"wave_serial": int(entry.get("wave_serial", 0)),
 		"last_decided_wave_serial": int(entry.get("last_decided_wave_serial", -1)),
 		"candidate_s": float(entry.get("candidate_s", 0.0)),
+		"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
+		"previous_s": float(entry.get("previous_s", entry.get("detector_prev_s", 0.0))),
+		"previous_s_lambda": float(entry.get("previous_s_lambda", 0.0)),
+		"advancing": bool(entry.get("advancing", false)),
+		"in_window": bool(entry.get("in_window", false)),
+		"cooldown_done": bool(entry.get("cooldown_done", true)),
+		"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
+		"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
+		"pressure": float(entry.get("pressure", 0.0)),
+		"pressure_score": float(entry.get("pressure_score", 0.0)),
+		"pressure_contribution": float(entry.get("pressure_contribution", 0.0)),
+		"prominence": float(entry.get("prominence", 0.0)),
+		"prominence_score": float(entry.get("prominence_score", 0.0)),
+		"prominence_contribution": float(entry.get("prominence_contribution", 0.0)),
+		"local_hs": float(entry.get("local_hs", 0.0)),
+		"slope_long": float(entry.get("slope_long", 0.0)),
+		"steepness_score": float(entry.get("steepness_score", 0.0)),
+		"steepness_contribution": float(entry.get("steepness_contribution", 0.0)),
+		"raw_score": float(entry.get("raw_score", 0.0)),
+		"anchor_eligibility": float(entry.get("anchor_eligibility", 0.0)),
+		"zone_activity": float(entry.get("zone_activity", 0.0)),
+		"final_score": float(entry.get("final_score", entry.get("score", 0.0))),
+		"detector_gate_reason": str(entry.get("detector_gate_reason", "pending")),
 		"score": float(entry.get("score", 0.0)),
 		"probability": float(entry.get("probability", 0.0)),
 		"roll": float(entry.get("roll", 0.0)),
@@ -1154,11 +1386,18 @@ func _anchor_eligibility_for_energy(anchor: Dictionary, long_hs_m: float, coasta
 
 
 func _anchor_runtime_eligibility(anchor: Dictionary) -> float:
+	var details := _anchor_runtime_eligibility_details(anchor)
+	return details["anchor_eligibility"] * details["zone_activity"]
+
+
+func _anchor_runtime_eligibility_details(anchor: Dictionary) -> Dictionary:
 	var current: float = float(anchor.get("current_eligibility", 1.0))
 	var zone_activity: float = float(anchor.get("zone_breaking_activity", 1.0))
+	var anchor_eligibility := current
 	if not _wave_transition_active:
-		return current * zone_activity
-	return lerpf(current, float(anchor.get("target_eligibility", current)), _wave_transition_alpha) * zone_activity
+		return {"anchor_eligibility": anchor_eligibility, "zone_activity": zone_activity}
+	anchor_eligibility = lerpf(current, float(anchor.get("target_eligibility", current)), _wave_transition_alpha)
+	return {"anchor_eligibility": anchor_eligibility, "zone_activity": zone_activity}
 
 
 func _find_matching_anchor(anchors: Array[Dictionary], candidate: Dictionary) -> int:

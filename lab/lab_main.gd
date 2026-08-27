@@ -5,7 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F8: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+F8: slot 0..7/ALL | Ctrl+F8: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 const PLANAR_AB_WARMUP_S := 0.5
 const PLANAR_AB_MEASURE_S := 4.0
@@ -91,6 +91,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				_query_probe_tool.call("toggle_snapshot")
 		KEY_F2:
 			ocean_v3.toggle_breaker_ribbons_diagnostic_visibility()
+		KEY_F8:
+			if event.ctrl_pressed:
+				ocean_v3.force_spawn_selected_breaker()
+			elif event.shift_pressed:
+				ocean_v3.cycle_breaker_debug_slot()
+			else:
+				ocean_v3.cycle_breaker_debug()
 		KEY_F3:
 			_foam_debug_index = (_foam_debug_index + 1) % FOAM_DEBUG_MODES.size()
 			ocean_v3.foam_debug_mode = FOAM_DEBUG_MODES[_foam_debug_index]

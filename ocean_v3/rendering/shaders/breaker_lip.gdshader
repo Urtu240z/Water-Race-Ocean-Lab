@@ -87,7 +87,8 @@ uniform float breaker_profile_length_scale = 0.65;
 // -1 sólo queda disponible como espejo de diagnóstico.
 uniform float breaker_profile_forward_sign = 1.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
-// 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
+// 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 DETECTOR, 5 OFF.
+// DETECTOR oculta el ribbon de producción; el overlay CPU dibuja el muestreo.
 uniform int breaker_debug_mode = 0;
 // Apariencia de agua para LIP (idéntica a ocean_surface).
 uniform vec3 base_color : source_color = vec3(0.18, 0.34, 0.44);

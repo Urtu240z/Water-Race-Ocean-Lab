@@ -185,19 +185,40 @@ func _breaker_line(fft_module) -> String:
 	var diagnostics: Dictionary = fft_module.breaker_pool_summary()
 	if diagnostics.is_empty():
 		return "Breaker Ribbons: unavailable"
-	var breaker_backend: String = fft_module.breaker_query_backend_name() if fft_module.has_method(&"breaker_query_backend_name") else "unavailable"
-	var breaker_reason: String = fft_module.breaker_query_backend_reason() if fft_module.has_method(&"breaker_query_backend_reason") else "unavailable"
-	return "Breaker Query: %s [%s] | Ribbons: %s | TRANS %s %.2f | anchors %d | active %d | track %d/%d" % [
+	var breaker_backend: String = str(diagnostics.get("breaker_query_backend", "unavailable"))
+	var breaker_reason: String = str(diagnostics.get("breaker_query_backend_reason", "unavailable"))
+	var lines: PackedStringArray = []
+	lines.append("Breaker Query: %s [%s] | Ribbons: %s | Coastal runtime: %s | breaker: %s" % [
 		breaker_backend,
 		breaker_reason,
 		"ON" if fft_module.breaker_ribbons_diagnostic_visible() else "OFF",
-		"ON" if bool(diagnostics.get("transition_active", false)) else "OFF",
-		float(diagnostics.get("transition_alpha", 0.0)),
-		int(diagnostics.get("transition_anchor_count", diagnostics.get("slots", 0))),
+		"ON" if bool(diagnostics.get("coastal_runtime_enabled", false)) else "OFF",
+		"ON" if bool(diagnostics.get("breaker_enabled", false)) else "OFF",
+	])
+	lines.append("Detector: tick=%d queried=%d slots/%d pts | slope=%d/%d pts | %.3f ms | anchors=%d active=%d | no legacy track" % [
+		int(diagnostics.get("detector_tick", 0)),
+		int(diagnostics.get("queried_slots_last_tick", 0)),
+		int(diagnostics.get("queried_points_last_tick", 0)),
+		int(diagnostics.get("detector_slope_queries_last_tick", 0)),
+		int(diagnostics.get("detector_slope_points_last_tick", 0)),
+		float(diagnostics.get("detector_query_elapsed_ms_last_tick", 0.0)),
+		int(diagnostics.get("slots", 0)),
 		int(diagnostics.get("active_breaker_count", 0)),
-		int(diagnostics.get("active_tracking_queries_last_tick", 0)),
-		int(diagnostics.get("active_tracking_points_last_tick", 0)),
-	]
+	])
+	lines.append("Detector gates: window -0.28..-0.06 lambda | prominence .04.. .20 * local Hs | slope .20.. .75 | weights .45/.35/.20 | probability .30.. .70 | force=%s" % str(diagnostics.get("force_spawn_last_result", "never_requested")))
+	var tracking: Array = fft_module.breaker_tracking_snapshot() if fft_module.has_method(&"breaker_tracking_snapshot") else []
+	for index in int(diagnostics.get("slots", 0)):
+		var slot: Dictionary = tracking[index] if index < tracking.size() else {}
+		var state := str(slot.get("state", "DETECT"))
+		if state == "DETECT":
+			lines.append("slot %d DETECT wave=%d s/lambda=%+.3f/%+.3f prev=%+.3f adv=%s win=%s p=%.3f ps=%.2f pc=%.2f prom=%.4f ps=%.2f pc=%.2f Hs=%.3f slope=%.3f ss=%.2f sc=%.2f raw=%.2f elig=%.2f zone=%.2f final=%.2f prob=%.2f roll=%.2f cd=%s last=%d reason=%s" % [
+				index, int(slot.get("wave", 0)), float(slot.get("candidate_s", 0.0)), float(slot.get("candidate_s_lambda", 0.0)), float(slot.get("previous_s_lambda", 0.0)), "YES" if bool(slot.get("advancing", false)) else "NO", "YES" if bool(slot.get("in_window", false)) else "NO", float(slot.get("pressure", 0.0)), float(slot.get("pressure_score", 0.0)), float(slot.get("pressure_contribution", 0.0)), float(slot.get("prominence", 0.0)), float(slot.get("prominence_score", 0.0)), float(slot.get("prominence_contribution", 0.0)), float(slot.get("local_hs", 0.0)), float(slot.get("slope_long", 0.0)), float(slot.get("steepness_score", 0.0)), float(slot.get("steepness_contribution", 0.0)), float(slot.get("raw_score", 0.0)), float(slot.get("anchor_eligibility", 0.0)), float(slot.get("zone_activity", 0.0)), float(slot.get("final_score", 0.0)), float(slot.get("probability", 0.0)), float(slot.get("roll", 0.0)), "YES" if bool(slot.get("cooldown_done", true)) else "NO", int(slot.get("last_decided_wave_serial", -1)), str(slot.get("detector_gate_reason", "pending")),
+			])
+		elif state == "ACTIVE":
+			lines.append("slot %d ACTIVE phase=%s life=%.2f stage=%.2f alpha=%.2f candidate=%+.3fm wave=%d" % [index, str(slot.get("lifecycle_phase", "ACTIVE")), float(slot.get("life_t", 0.0)), float(slot.get("stage", 0.0)), float(slot.get("alpha", 0.0)), float(slot.get("candidate_s", 0.0)), int(slot.get("wave", 0))])
+		else:
+			lines.append("slot %d %s remaining=%.2fs wave=%d reason=%s" % [index, state, float(slot.get("remaining", 0.0)), int(slot.get("wave", 0)), str(slot.get("detector_gate_reason", "pending"))])
+	return "\n".join(lines)
 
 
 func _probe_tool_enabled() -> bool:

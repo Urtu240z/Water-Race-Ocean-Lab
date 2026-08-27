@@ -1005,6 +1005,39 @@ func toggle_breaker_ribbons_diagnostic_visibility() -> void:
 		fft_module.toggle_breaker_ribbons_diagnostic_visibility()
 
 
+func cycle_breaker_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null and fft_module.has_method(&"cycle_breaker_debug"):
+		fft_module.cycle_breaker_debug()
+
+
+func cycle_breaker_debug_slot() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null and fft_module.has_method(&"cycle_breaker_debug_slot"):
+		fft_module.cycle_breaker_debug_slot()
+
+
+func force_spawn_selected_breaker() -> bool:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null and fft_module.has_method(&"force_spawn_selected_breaker"):
+		return bool(fft_module.force_spawn_selected_breaker())
+	return false
+
+
+func breaker_pool_summary() -> Dictionary:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null and fft_module.has_method(&"breaker_pool_summary"):
+		return fft_module.breaker_pool_summary()
+	return {}
+
+
+func breaker_tracking_snapshot() -> Array:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null and fft_module.has_method(&"breaker_tracking_snapshot"):
+		return fft_module.breaker_tracking_snapshot()
+	return []
+
+
 func register_sea_state_zone(zone: OceanSeaStateZone3D) -> void:
 	if zone == null or _sea_state_zones.has(zone):
 		return

@@ -1348,6 +1348,12 @@ func cycle_breaker_debug() -> void:
 		_breaker_pool.cycle_debug_mode()
 
 
+func force_spawn_selected_breaker() -> bool:
+	if _breaker_pool == null:
+		return false
+	return _breaker_pool.force_spawn_selected_slot()
+
+
 func breaker_debug_name() -> String:
 	if _breaker_pool == null:
 		return "UNAVAILABLE"
@@ -1417,7 +1423,13 @@ func breaker_takeover_mask_name() -> String:
 func breaker_pool_summary() -> Dictionary:
 	if _breaker_pool == null:
 		return {}
-	return _breaker_pool.summary()
+	var result: Dictionary = _breaker_pool.summary()
+	result["breaker_enabled"] = breaker_enabled
+	result["coastal_runtime_enabled"] = _coastal_runtime_enabled
+	result["coastal_propagation_enabled"] = coastal_propagation_enabled
+	result["breaker_query_backend"] = breaker_query_backend_name()
+	result["breaker_query_backend_reason"] = breaker_query_backend_reason()
+	return result
 
 
 func breaker_tracking_snapshot() -> Array:
