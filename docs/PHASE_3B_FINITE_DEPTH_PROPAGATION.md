@@ -267,3 +267,13 @@ para N=64–1024. El payload de ese caso es 135,200 B de VRAM.
 4. breaking, foam, costa y normales con regla de cadena completa;
 5. integrar el mismo modelo a cualquier query física sólo cuando se encargue
    explícitamente (3B no toca NATIVE OceanQuery).
+
+## Persistencia offline de la costa
+
+La entrega de integración de Ocean V3 encapsula el resultado de 3B.1 en un
+`CoastalBakeAsset` canónico. `CoastalBakeAuthoring` ejecuta explícitamente
+Bathymetry → Eikonal → Warp y guarda el manifest textual más tres Resources
+binarios bajo `res://ocean_v3/baked/coastal/<coast_id>/`. En runtime OceanV3
+valida y carga esos datos; no invoca Bakers ni recalcula la costa. Los Bakers y
+los tests que construyen Resources en memoria siguen siendo APIs válidas de
+authoring/validación.

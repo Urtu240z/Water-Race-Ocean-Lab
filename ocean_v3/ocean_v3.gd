@@ -41,6 +41,10 @@ var _wave_transition_start_short_geometry := 0.25
 @export_tool_button("Apply Wave Changes", "Play") var apply_wave_changes_button = apply_wave_changes
 @export_tool_button("Save Current Wave Preset", "Save") var save_current_wave_preset_button = save_current_wave_preset
 
+@export_category("Coastal")
+@export var coastal_bake_asset: CoastalBakeAsset
+@export var coastal_enabled_on_start := true
+
 @export_category("Wave Spectrum / LONG")
 @export_range(0.0, 10.0, 0.01) var long_target_hs_m := 0.59:
 	set(value): long_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
@@ -325,6 +329,38 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 1.0, 0.01) var water_specular: float = 0.88:
 	set(value):
 		water_specular = value
+		_request_visual_sync()
+
+
+@export_group("Reflections")
+@export var wave_reflection_response_enabled: bool = true:
+	set(value):
+		wave_reflection_response_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.005) var reflection_calm_roughness: float = 0.035:
+	set(value):
+		reflection_calm_roughness = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var reflection_wave_roughness_gain: float = 0.35:
+	set(value):
+		reflection_wave_roughness_gain = maxf(value, 0.0)
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var reflection_slope_start: float = 0.12:
+	set(value):
+		reflection_slope_start = maxf(value, 0.0)
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var reflection_slope_end: float = 0.55:
+	set(value):
+		reflection_slope_end = maxf(value, 0.0)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var reflection_zone_calm_influence: float = 0.85:
+	set(value):
+		reflection_zone_calm_influence = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
 
@@ -752,6 +788,7 @@ var _sea_state_zone_uniform_data2 := PackedVector4Array()
 var _sea_state_zone_uniform_data3 := PackedVector4Array()
 var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
+var _reflection_debug_mode := 0
 
 
 func _ready() -> void:
@@ -763,7 +800,115 @@ func _ready() -> void:
 	_visual_sync_pending = true
 	if wave_preset != null:
 		apply_selected_wave_preset()
+	_configure_coastal_bake_asset()
 	call_deferred(&"_flush_visual_sync")
+
+
+func _configure_coastal_bake_asset() -> void:
+	if Engine.is_editor_hint():
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module == null:
+		push_error("OceanV3: no se encontró OpenOceanFFT interno.")
+		return
+	fft_module.set_coastal_bake_asset(coastal_bake_asset, coastal_enabled_on_start)
+
+
+func set_coastal_enabled(enabled: bool) -> void:
+	coastal_enabled_on_start = enabled
+	if Engine.is_editor_hint():
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module != null:
+		fft_module.set_coastal_runtime_enabled(enabled)
+
+
+func coastal_enabled() -> bool:
+	if Engine.is_editor_hint():
+		return coastal_enabled_on_start
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	return fft_module.coastal_runtime_enabled() if fft_module != null else false
+
+
+func cycle_coastal_composition_debug() -> void:
+	if Engine.is_editor_hint():
+		return
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module != null:
+		fft_module.cycle_coastal_composition_debug()
+
+
+func coastal_composition_debug_name() -> String:
+	if Engine.is_editor_hint():
+		return "FULL"
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	return fft_module.coastal_composition_debug_name() if fft_module != null else "UNAVAILABLE"
+
+
+func _runtime_fft_module() -> OpenOceanFFTModule:
+	if Engine.is_editor_hint():
+		return null
+	return get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+
+
+func toggle_ocean_enabled() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_enabled()
+
+
+func cycle_ocean_debug_mode() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.cycle_debug_mode()
+
+
+func cycle_ocean_band_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.cycle_band_debug()
+
+
+func toggle_ocean_clipmap_lod_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_clipmap_lod_debug()
+
+
+func toggle_ocean_periodicity_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_periodicity_debug()
+
+
+func cycle_ocean_spectrum_model() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.cycle_spectrum_model()
+
+
+func toggle_ocean_shape_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_ocean_shape_debug()
+
+
+func toggle_ocean_crest_sharpen_debug() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_ocean_crest_sharpen_debug()
+
+
+func toggle_ocean_normal_fragment() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_ocean_normal_fragment()
+
+
+func toggle_breaker_ribbons_diagnostic_visibility() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_breaker_ribbons_diagnostic_visibility()
 
 
 func register_sea_state_zone(zone: OceanSeaStateZone3D) -> void:
@@ -793,6 +938,15 @@ func toggle_sea_state_zone_debug() -> void:
 
 func sea_state_zone_debug_enabled() -> bool:
 	return _sea_state_zone_debug
+
+
+func cycle_reflection_debug() -> void:
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 4
+	_request_visual_sync()
+
+
+func reflection_debug_name() -> String:
+	return ["OFF", "ROUGHNESS", "WAVE_ACTIVITY", "ZONE_CALMNESS"][_reflection_debug_mode]
 
 
 func _refresh_sea_state_zones() -> void:
@@ -1243,6 +1397,13 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"ocean_roughness_near", near_roughness)
 	material.set_shader_parameter(&"ocean_roughness_far", horizon_roughness)
 	material.set_shader_parameter(&"water_specular", water_specular)
+	material.set_shader_parameter(&"wave_reflection_response_enabled", wave_reflection_response_enabled)
+	material.set_shader_parameter(&"reflection_calm_roughness", reflection_calm_roughness)
+	material.set_shader_parameter(&"reflection_wave_roughness_gain", reflection_wave_roughness_gain)
+	material.set_shader_parameter(&"reflection_slope_start", reflection_slope_start)
+	material.set_shader_parameter(&"reflection_slope_end", reflection_slope_end)
+	material.set_shader_parameter(&"reflection_zone_calm_influence", reflection_zone_calm_influence)
+	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)

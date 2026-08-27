@@ -156,6 +156,18 @@ uniform float reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 
+// Reflection response is deliberately material/PBR driven. The environment or
+// a standard ReflectionProbe supplies the reflected radiance; these controls
+// only shape the water lobe from the physical FFT normal and local sea state.
+uniform bool wave_reflection_response_enabled = true;
+uniform float reflection_calm_roughness : hint_range(0.0, 1.0, 0.005) = 0.035;
+uniform float reflection_wave_roughness_gain : hint_range(0.0, 1.0, 0.01) = 0.35;
+uniform float reflection_slope_start : hint_range(0.0, 4.0, 0.01) = 0.12;
+uniform float reflection_slope_end : hint_range(0.0, 4.0, 0.01) = 0.55;
+uniform float reflection_zone_calm_influence : hint_range(0.0, 1.0, 0.01) = 0.85;
+// 0 OFF, 1 ROUGHNESS, 2 WAVE_ACTIVITY, 3 ZONE_CALMNESS.
+uniform int reflection_debug_mode = 0;
+
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
 // spectral Jacobian compression after each FFT assemble; controls below are
 // presentation-only and do not alter water optics.
@@ -368,6 +380,42 @@ float sea_state_zone_foam_activity(float long_amplitude, float mid_amplitude,
 		0.0, 2.0);
 	float chop_activity = clamp(0.5 + 0.5 * choppiness, 0.0, 1.5);
 	return clamp(foam_multiplier * band_activity * chop_activity, 0.0, 1.0);
+}
+
+
+float sea_state_zone_calmness(float long_amplitude, float mid_amplitude,
+		float short_amplitude, float choppiness) {
+	// The local values already include the zone's SDF feather and strength.
+	// Clamping each term makes out-of-range authored multipliers incapable of
+	// producing negative calmness or a reflection discontinuity at the edge.
+	float long_calm = 1.0 - clamp(long_amplitude, 0.0, 1.0);
+	float mid_calm = 1.0 - clamp(mid_amplitude, 0.0, 1.0);
+	float short_calm = 1.0 - clamp(short_amplitude, 0.0, 1.0);
+	float chop_calm = 1.0 - clamp(choppiness, 0.0, 1.0);
+	return clamp(
+		0.35 * long_calm + 0.25 * mid_calm + 0.15 * short_calm + 0.25 * chop_calm,
+		0.0, 1.0);
+}
+
+
+float wave_reflection_activity(vec3 physical_normal) {
+	float physical_slope = length(physical_normal.xz) / max(physical_normal.y, 0.001);
+	float slope_start = min(reflection_slope_start, reflection_slope_end);
+	float slope_end = max(reflection_slope_start, reflection_slope_end);
+	return smoothstep(slope_start, max(slope_end, slope_start + 0.001), physical_slope);
+}
+
+
+float wave_aware_reflection_roughness(float base_roughness, float wave_activity,
+		float zone_calmness) {
+	if (!wave_reflection_response_enabled) {
+		return clamp(base_roughness, 0.0, 1.0);
+	}
+	float calm_target = clamp(reflection_calm_roughness, 0.0, 1.0);
+	float calm_mix = clamp(zone_calmness * reflection_zone_calm_influence, 0.0, 1.0);
+	float calm_base = mix(base_roughness, calm_target, calm_mix);
+	return clamp(calm_base + clamp(wave_activity, 0.0, 1.0)
+		* max(reflection_wave_roughness_gain, 0.0), 0.0, 1.0);
 }
 
 vec3 sea_state_zone_displacement(vec3 value, float amplitude, float choppiness) {
@@ -1176,6 +1224,21 @@ void fragment() {
 	float zone_foam_activity = sea_state_zone_foam_activity(
 		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
 		zone_choppiness, zone_foam_multiplier);
+	float zone_calmness = sea_state_zone_calmness(
+		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude, zone_choppiness);
+	// Debug values use the same stable macronormal and local state as production;
+	// Surface Detail is intentionally excluded because it is visual distortion,
+	// not physical wave activity.
+	float debug_camera_distance = distance(ocean_world_xz, camera_world_xz);
+	float debug_distance_factor = smoothstep(
+		ocean_roughness_distance_m.x,
+		ocean_roughness_distance_m.y,
+		debug_camera_distance);
+	float debug_wave_activity = wave_reflection_activity(normalize(derived_normal));
+	float debug_base_roughness = mix(
+		ocean_roughness_near, ocean_roughness_far, debug_distance_factor);
+	float debug_reflection_roughness = wave_aware_reflection_roughness(
+		debug_base_roughness, debug_wave_activity, zone_calmness);
 	// Keep Surface Foam's independent history/topology intact; only its
 	// presentation contribution is locally attenuated by the zone state.
 	float surface_foam_raw_topology = 0.0;
@@ -1418,8 +1481,15 @@ void fragment() {
 	} else if (foam_debug_mode == 15) {
 		color = vec3(raw_foam_channels.r);
 	}
+	if (reflection_debug_mode == 1) {
+		color = vec3(debug_reflection_roughness);
+	} else if (reflection_debug_mode == 2) {
+		color = vec3(debug_wave_activity);
+	} else if (reflection_debug_mode == 3) {
+		color = vec3(zone_calmness);
+	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || reflection_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -1492,6 +1562,7 @@ void fragment() {
 			visual_normal = normalize(visual_normal + detail_offset_view * surface_normal_strength * foam_micro_gain);
 		}
 		NORMAL = visual_normal;
+		float physical_wave_activity = wave_reflection_activity(shading_normal_world);
 
 		if (water_optics_enabled) {
 			// 5R.3C: profundidad óptica real desde el depth buffer.
@@ -1624,11 +1695,15 @@ void fragment() {
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
-			ROUGHNESS = mix(
+			float base_roughness = mix(
 				ocean_roughness_near,
 				ocean_roughness_far,
 				max(distance_opacity, fresnel)
 			);
+			float water_reflection_roughness = wave_aware_reflection_roughness(
+				base_roughness, physical_wave_activity, zone_calmness);
+			// Water response is established first; foam remains the final authority.
+			ROUGHNESS = water_reflection_roughness;
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
@@ -1649,11 +1724,14 @@ void fragment() {
 				ocean_roughness_distance_m.y,
 				camera_distance
 			);
-			ROUGHNESS = mix(
+			float base_roughness = mix(
 				ocean_roughness_near,
 				ocean_roughness_far,
 				distance_factor
 			);
+			float water_reflection_roughness = wave_aware_reflection_roughness(
+				base_roughness, physical_wave_activity, zone_calmness);
+			ROUGHNESS = water_reflection_roughness;
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);

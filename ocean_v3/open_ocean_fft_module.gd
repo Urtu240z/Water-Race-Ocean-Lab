@@ -379,7 +379,9 @@ func _ready() -> void:
 	_breaker_pool.name = &"BreakerRibbonPool"
 	add_child(_breaker_pool)
 	_update_breaking_energy_model()
-	rebuild_coastal_propagation()
+	# Runtime no hornea Coastal. OceanV3 carga un CoastalBakeAsset opcional
+	# después de que este módulo haya terminado de crear su superficie.
+	_breaker_pool.disable()
 	surface.set_module_enabled(_enabled)
 	surface.set_band_debug(_band_debug)
 	OceanModuleRegistry.register_module(MODULE_ID, _enabled)
@@ -1078,6 +1080,50 @@ func rebuild_coastal_propagation() -> bool:
 	surface.set_coastal_runtime_enabled(_coastal_runtime_enabled)
 	_configure_breaker_pool()
 	return coastal_propagation_enabled
+
+
+func set_coastal_bake_asset(asset: CoastalBakeAsset, runtime_enabled := true) -> bool:
+	## Publicada sólo para el root OceanV3: carga Resources ya horneados y nunca
+	## instancia BathymetryBaker, CoastalEikonalBaker ni CoastalWarpBaker.
+	_coastal_propagation = null
+	_coastal_warp = null
+	if _query_reduced != null:
+		_query_reduced.clear_coastal()
+	surface.set_coastal_warp(null)
+	surface.set_coastal_propagation(null)
+	_coastal_runtime_enabled = runtime_enabled
+	if asset == null:
+		_coastal_runtime_enabled = false
+		coastal_bathymetry_data = null
+		coastal_propagation_enabled = false
+		_configure_breaker_pool()
+		return false
+	if not asset.is_valid():
+		push_warning("Ocean V3 CoastalBakeAsset inválido o incompatible; Coastal OFF, continúa open-ocean.")
+		_coastal_runtime_enabled = false
+		coastal_bathymetry_data = null
+		coastal_propagation_enabled = false
+		_configure_breaker_pool()
+		return false
+	coastal_bathymetry_data = asset.bathymetry
+	_coastal_propagation = asset.propagation
+	_coastal_warp = asset.warp
+	coastal_propagation_enabled = true
+	coastal_incoming_direction_xz = asset.propagation.incoming_direction_xz
+	coastal_reference_wavelength_m = asset.eikonal_reference_wavelength_m
+	coastal_min_valid_depth_m = asset.eikonal_min_valid_depth_m
+	coastal_eikonal_enabled = asset.propagation.propagation_kind == 1
+	coastal_warp_enabled = asset.warp.is_valid()
+	if _coastal_warp != null and _coastal_warp.is_valid() and _query_reduced != null:
+		_query_reduced.configure_coastal(_coastal_warp, _coastal_propagation,
+			coastal_split_inner_deg, coastal_split_outer_deg, coastal_long_reference_direction())
+	surface.set_coastal_warp(_coastal_warp, coastal_warp_enabled)
+	surface.set_coastal_propagation(_coastal_propagation, coastal_monochromatic_debug,
+		coastal_monochromatic_amplitude_m, coastal_warp_enabled,
+		coastal_eikonal_refraction_debug)
+	surface.set_coastal_runtime_enabled(_coastal_runtime_enabled)
+	_configure_breaker_pool()
+	return true
 
 
 func set_coastal_runtime_enabled(enabled: bool) -> void:

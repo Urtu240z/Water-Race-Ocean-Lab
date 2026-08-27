@@ -2059,3 +2059,21 @@ Antes de cada fase:
 9. decidir si se mantiene, simplifica o descarta.
 
 No convertir decisiones conceptuales antiguas en dogmas si los datos del prototipo muestran una solución mejor.
+
+## Coastal Bake Asset Pipeline
+
+La integración definitiva de costas usa `CoastalBakeAsset` como contrato de
+persistencia. Cada costa se publica en
+`res://ocean_v3/baked/coastal/<coast_id>/` con un manifest `coastal_bake.tres`
+pequeño y tres Resources binarios: `bathymetry.res`, `propagation.res` y
+`warp.res`.
+
+`OceanV3` es el único dueño del ciclo runtime: carga y valida el manifest,
+configura internamente OpenOceanFFT y continúa en open ocean si el recurso
+falta o es incompatible. El arranque normal no llama a ningún Baker. La
+generación se realiza sólo mediante `CoastalBakeAuthoring` y su acción explícita
+`BAKE COASTAL ASSET`; los Bakers permanecen como APIs de tests y tools.
+
+Las escenas y niveles sólo instancian OceanV3 y asignan opcionalmente el asset.
+El lab expone controles a través de la API pública de OceanV3, pero no es parte
+del camino de integración de Water Race.
