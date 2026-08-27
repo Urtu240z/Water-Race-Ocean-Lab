@@ -21,7 +21,9 @@ void main() {
 	float k_length = length(k);
 	vec4 h0 = imageLoad(h0_texture, coord);
 	float omega = sqrt(params.values.y * k_length * tanh(k_length * params.values.z));
-	vec2 phase = vec2(cos(omega * params.values.x), sin(omega * params.values.x));
+	// Keep foam's spectral Jacobian on the same TOWARD-propagation convention
+	// as evolve_spectrum.glsl: spatial e^{+ik.x} pairs with temporal e^{-iwt}.
+	vec2 phase = vec2(cos(-omega * params.values.x), sin(-omega * params.values.x));
 	vec2 height = cmul(h0.xy, phase) + cmul(h0.zw, vec2(phase.x, -phase.y));
 	vec2 dhx_dx = vec2(0.0);
 	vec2 dhz_dz = vec2(0.0);

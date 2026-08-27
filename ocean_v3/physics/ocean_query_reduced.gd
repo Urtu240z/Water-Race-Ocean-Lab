@@ -4,6 +4,8 @@ extends RefCounted
 ##
 ## Misma semántica que la Golden Reference (Fase 2A.1): superficie paramétrica
 ## P(q,t).xz = q + Dxz(q,t), y sample_water(world_xz,t) invierte world_xz -> q
+## Convención: wind_direction/incoming_direction apuntan HACIA la propagación;
+## la fase temporal usa e^{-iωt} junto a la reconstrucción e^{+ik·x}.
 ## con Newton-Raphson. Mismo H0 que la GPU. Lambda negativa interna.
 ##
 ## Dos etapas obligatorias:
@@ -860,14 +862,14 @@ func _accumulate(qx: float, qz: float, use_prepared: bool, simulation_time: floa
 				var h0_im := lerpf(h0i_arr[idx], target_h0i_arr[idx], transition_alpha) if _spectrum_transition_active else h0i_arr[idx]
 				var h0n_re := lerpf(h0nr_arr[idx], target_h0nr_arr[idx], transition_alpha) if _spectrum_transition_active else h0nr_arr[idx]
 				var h0n_im := lerpf(h0ni_arr[idx], target_h0ni_arr[idx], transition_alpha) if _spectrum_transition_active else h0ni_arr[idx]
-				var a_re := h0_re * c - h0_im * sn
-				var a_im := h0_re * sn + h0_im * c
-				var b_re := h0n_re * c + h0n_im * sn
-				var b_im := -h0n_re * sn + h0n_im * c
+				var a_re := h0_re * c + h0_im * sn
+				var a_im := -h0_re * sn + h0_im * c
+				var b_re := h0n_re * c - h0n_im * sn
+				var b_im := h0n_re * sn + h0n_im * c
 				h_re = a_re + b_re
 				h_im = a_im + b_im
-				v_re = om_arr[idx] * (-a_im + b_im)
-				v_im = om_arr[idx] * (a_re - b_re)
+				v_re = om_arr[idx] * (a_im - b_im)
+				v_im = om_arr[idx] * (-a_re + b_re)
 			var phi := kx_arr[idx] * qx + ky_arr[idx] * qz
 			var cp := cos(phi)
 			var sp := sin(phi)
@@ -1124,14 +1126,14 @@ func _accumulate_coastal_long(qx: float, qz: float, use_prepared: bool, simulati
 			var h0_im := lerpf(cascade.h0_im[idx], cascade.transition_h0_im[idx], alpha) if _spectrum_transition_active else cascade.h0_im[idx]
 			var h0n_re := lerpf(cascade.h0n_re[idx], cascade.transition_h0n_re[idx], alpha) if _spectrum_transition_active else cascade.h0n_re[idx]
 			var h0n_im := lerpf(cascade.h0n_im[idx], cascade.transition_h0n_im[idx], alpha) if _spectrum_transition_active else cascade.h0n_im[idx]
-			a_hr = h0_re * c - h0_im * sn
-			a_hi = h0_re * sn + h0_im * c
-			b_hr = h0n_re * c + h0n_im * sn
-			b_hi = -h0n_re * sn + h0n_im * c
-			a_vr = -cascade.omega[idx] * a_hi
-			a_vi = cascade.omega[idx] * a_hr
-			b_vr = cascade.omega[idx] * b_hi
-			b_vi = -cascade.omega[idx] * b_hr
+			a_hr = h0_re * c + h0_im * sn
+			a_hi = -h0_re * sn + h0_im * c
+			b_hr = h0n_re * c - h0n_im * sn
+			b_hi = h0n_re * sn + h0n_im * c
+			a_vr = cascade.omega[idx] * a_hi
+			a_vi = -cascade.omega[idx] * a_hr
+			b_vr = -cascade.omega[idx] * b_hi
+			b_vi = cascade.omega[idx] * b_hr
 		var wp := lerpf(cascade.coastal_weight_pos[idx], cascade.transition_coastal_weight_pos[idx], alpha) if _spectrum_transition_active else cascade.coastal_weight_pos[idx]
 		var wn := lerpf(cascade.coastal_weight_neg[idx], cascade.transition_coastal_weight_neg[idx], alpha) if _spectrum_transition_active else cascade.coastal_weight_neg[idx]
 		var h_re := wp * a_hr + wn * b_hr
@@ -1191,31 +1193,31 @@ func _prepare_cascade_time(cascade: _CascadeData, simulation_time: float) -> voi
 		var wt := cascade.omega[idx] * simulation_time
 		var c := cos(wt)
 		var sn := sin(wt)
-		var a_re := cascade.h0_re[idx] * c - cascade.h0_im[idx] * sn
-		var a_im := cascade.h0_re[idx] * sn + cascade.h0_im[idx] * c
-		var b_re := cascade.h0n_re[idx] * c + cascade.h0n_im[idx] * sn
-		var b_im := -cascade.h0n_re[idx] * sn + cascade.h0n_im[idx] * c
+		var a_re := cascade.h0_re[idx] * c + cascade.h0_im[idx] * sn
+		var a_im := -cascade.h0_re[idx] * sn + cascade.h0_im[idx] * c
+		var b_re := cascade.h0n_re[idx] * c - cascade.h0n_im[idx] * sn
+		var b_im := cascade.h0n_re[idx] * sn + cascade.h0n_im[idx] * c
 		if _spectrum_transition_active:
-			var ta_re := cascade.transition_h0_re[idx] * c - cascade.transition_h0_im[idx] * sn
-			var ta_im := cascade.transition_h0_re[idx] * sn + cascade.transition_h0_im[idx] * c
-			var tb_re := cascade.transition_h0n_re[idx] * c + cascade.transition_h0n_im[idx] * sn
-			var tb_im := -cascade.transition_h0n_re[idx] * sn + cascade.transition_h0n_im[idx] * c
+			var ta_re := cascade.transition_h0_re[idx] * c + cascade.transition_h0_im[idx] * sn
+			var ta_im := -cascade.transition_h0_re[idx] * sn + cascade.transition_h0_im[idx] * c
+			var tb_re := cascade.transition_h0n_re[idx] * c - cascade.transition_h0n_im[idx] * sn
+			var tb_im := cascade.transition_h0n_re[idx] * sn + cascade.transition_h0n_im[idx] * c
 			a_re = lerpf(a_re, ta_re, alpha)
 			a_im = lerpf(a_im, ta_im, alpha)
 			b_re = lerpf(b_re, tb_re, alpha)
 			b_im = lerpf(b_im, tb_im, alpha)
 		cascade.ev_h_re[idx] = a_re + b_re
 		cascade.ev_h_im[idx] = a_im + b_im
-		cascade.ev_v_re[idx] = cascade.omega[idx] * (-a_im + b_im)
-		cascade.ev_v_im[idx] = cascade.omega[idx] * (a_re - b_re)
+		cascade.ev_v_re[idx] = cascade.omega[idx] * (a_im - b_im)
+		cascade.ev_v_im[idx] = cascade.omega[idx] * (-a_re + b_re)
 		cascade.ev_a_h_re[idx] = a_re
 		cascade.ev_a_h_im[idx] = a_im
 		cascade.ev_b_h_re[idx] = b_re
 		cascade.ev_b_h_im[idx] = b_im
-		cascade.ev_a_v_re[idx] = -cascade.omega[idx] * a_im
-		cascade.ev_a_v_im[idx] = cascade.omega[idx] * a_re
-		cascade.ev_b_v_re[idx] = cascade.omega[idx] * b_im
-		cascade.ev_b_v_im[idx] = -cascade.omega[idx] * b_re
+		cascade.ev_a_v_re[idx] = cascade.omega[idx] * a_im
+		cascade.ev_a_v_im[idx] = -cascade.omega[idx] * a_re
+		cascade.ev_b_v_re[idx] = -cascade.omega[idx] * b_im
+		cascade.ev_b_v_im[idx] = cascade.omega[idx] * b_re
 
 
 ## --- Selección ----------------------------------------------------------------

@@ -14,6 +14,8 @@ extends RefCounted
 ## Reutiliza exactamente el mismo H0 que la GPU (misma seed, configs, tiempo,
 ## dispersión y lambda negativa). Es intencionadamente lenta: evalúa TODOS los
 ## modos de las tres cascadas (3 × N²). Referencia para Fase 2B.
+## Convención temporal: las direcciones públicas apuntan HACIA donde viaja la
+## ola; con reconstrucción espacial Re(H*e^{+ik·x}), H(k,t) usa e^{-iωt}.
 ##
 ## Normalización (derivada del pipeline): suma directa con 1/N² sobre índices
 ## centrados; el checkerboard del assemble cancela con k = (c - N/2)·Δk y
@@ -116,14 +118,14 @@ func prepare_time(simulation_time: float) -> void:
 			var wt := mode.omega * simulation_time
 			var c := cos(wt)
 			var s := sin(wt)
-			var a_re := mode.h0_re * c - mode.h0_im * s
-			var a_im := mode.h0_re * s + mode.h0_im * c
-			var b_re := mode.h0n_re * c + mode.h0n_im * s
-			var b_im := -mode.h0n_re * s + mode.h0n_im * c
+			var a_re := mode.h0_re * c + mode.h0_im * s
+			var a_im := -mode.h0_re * s + mode.h0_im * c
+			var b_re := mode.h0n_re * c - mode.h0n_im * s
+			var b_im := mode.h0n_re * s + mode.h0n_im * c
 			mode.ev_h_re = a_re + b_re
 			mode.ev_h_im = a_im + b_im
-			mode.ev_v_re = mode.omega * (-a_im + b_im)
-			mode.ev_v_im = mode.omega * (a_re - b_re)
+			mode.ev_v_re = mode.omega * (a_im - b_im)
+			mode.ev_v_im = mode.omega * (-a_re + b_re)
 
 
 func sample_prepared(world_position: Vector3):
@@ -285,14 +287,14 @@ func _parametric_accumulators(qx: float, qz: float, use_prepared: bool, simulati
 				var wt := mode.omega * simulation_time
 				var c := cos(wt)
 				var s := sin(wt)
-				var a_re := mode.h0_re * c - mode.h0_im * s
-				var a_im := mode.h0_re * s + mode.h0_im * c
-				var b_re := mode.h0n_re * c + mode.h0n_im * s
-				var b_im := -mode.h0n_re * s + mode.h0n_im * c
+				var a_re := mode.h0_re * c + mode.h0_im * s
+				var a_im := -mode.h0_re * s + mode.h0_im * c
+				var b_re := mode.h0n_re * c - mode.h0n_im * s
+				var b_im := mode.h0n_re * s + mode.h0n_im * c
 				h_re = a_re + b_re
 				h_im = a_im + b_im
-				v_re = mode.omega * (-a_im + b_im)
-				v_im = mode.omega * (a_re - b_re)
+				v_re = mode.omega * (a_im - b_im)
+				v_im = mode.omega * (-a_re + b_re)
 			var phi := mode.kx * qx + mode.ky * qz
 			var cp := cos(phi)
 			var sp := sin(phi)

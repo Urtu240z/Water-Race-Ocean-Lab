@@ -7,6 +7,15 @@ mismo H0 que la GPU, misma semántica que la Golden Reference (2A.1), con
 compresión de pares ±k y selección por importancia. No implementa jetski,
 buoyancy ni Fase 3.
 
+## Convención temporal de propagación
+
+`wind_direction`, `incoming_direction_xz`, `local_direction` y
+`render_direction` significan la dirección HACIA LA QUE viaja la cresta. La
+reconstrucción espacial usa `Re(H * e^(+i k·x))`, por lo que la evolución
+temporal canónica es `H(k,t) = h0(k)e^(-iωt) + conj(h0(-k))e^(+iωt)`. Así,
+`direction=(0,+1)` mueve la cresta hacia `+Z`. H0, lambda negativa y los
+pesos Coastal no se regeneran ni reinterpretan por esta convención.
+
 ## ETAPA A: compresión EXACTA de pares +k / -k
 
 La superficie real espectral tiene simetría conjugada: `h(-k,t) = conj(h(k,t))`.

@@ -216,18 +216,20 @@ void OceanQueryCore::ensure_prepared(double simulation_time) {
             const double wt = c.omega[idx] * simulation_time;
             const double cw = std::cos(wt);
             const double sw = std::sin(wt);
-            const double a_re = c.h0_re[idx] * cw - c.h0_im[idx] * sw;
-            const double a_im = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
-            const double b_re = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw;
-            const double b_im = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+            // Public directions point toward propagation. With spatial
+            // Re(H*e^{+ik.x}), evolve A with e^{-iwt} and B with e^{+iwt}.
+            const double a_re = c.h0_re[idx] * cw + c.h0_im[idx] * sw;
+            const double a_im = -c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+            const double b_re = c.h0n_re[idx] * cw - c.h0n_im[idx] * sw;
+            const double b_im = c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
             c.ev_h_re[idx] = a_re + b_re;
             c.ev_h_im[idx] = a_im + b_im;
-            c.ev_v_re[idx] = c.omega[idx] * (-a_im + b_im);
-            c.ev_v_im[idx] = c.omega[idx] * (a_re - b_re);
+            c.ev_v_re[idx] = c.omega[idx] * (a_im - b_im);
+            c.ev_v_im[idx] = c.omega[idx] * (-a_re + b_re);
             c.ev_a_h_re[idx] = a_re; c.ev_a_h_im[idx] = a_im;
             c.ev_b_h_re[idx] = b_re; c.ev_b_h_im[idx] = b_im;
-            c.ev_a_v_re[idx] = -c.omega[idx] * a_im; c.ev_a_v_im[idx] = c.omega[idx] * a_re;
-            c.ev_b_v_re[idx] = c.omega[idx] * b_im; c.ev_b_v_im[idx] = -c.omega[idx] * b_re;
+            c.ev_a_v_re[idx] = c.omega[idx] * a_im; c.ev_a_v_im[idx] = -c.omega[idx] * a_re;
+            c.ev_b_v_re[idx] = -c.omega[idx] * b_im; c.ev_b_v_im[idx] = c.omega[idx] * b_re;
             // Mantiene exactamente el orden de C original: peso*A + peso*B.
             if (idx < c.coastal_weight_pos.size() && idx < c.coastal_weight_neg.size()) {
                 c.ev_coastal_h_re[idx] = c.coastal_weight_pos[idx] * a_re + c.coastal_weight_neg[idx] * b_re;
@@ -264,10 +266,10 @@ void OceanQueryCore::ensure_breaker_prepared(double simulation_time) {
         const double wt = c.omega[idx] * simulation_time;
         const double cw = std::cos(wt);
         const double sw = std::sin(wt);
-        c.ev_a_h_re[idx] = c.h0_re[idx] * cw - c.h0_im[idx] * sw;
-        c.ev_a_h_im[idx] = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
-        c.ev_b_h_re[idx] = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw;
-        c.ev_b_h_im[idx] = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+        c.ev_a_h_re[idx] = c.h0_re[idx] * cw + c.h0_im[idx] * sw;
+        c.ev_a_h_im[idx] = -c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+        c.ev_b_h_re[idx] = c.h0n_re[idx] * cw - c.h0n_im[idx] * sw;
+        c.ev_b_h_im[idx] = c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
     }
     // Breaker sampling only visits the exact non-zero coastal support. Build
     // the A/B coastal combination once per time; the point hot path then only
@@ -508,14 +510,14 @@ void OceanQueryCore::accumulate_(double qx, double qz, bool use_prepared, double
                 const double wt = c.omega[idx] * sim_time;
                 const double cw = std::cos(wt);
                 const double sw = std::sin(wt);
-                const double a_re = c.h0_re[idx] * cw - c.h0_im[idx] * sw;
-                const double a_im = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
-                const double b_re = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw;
-                const double b_im = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+                const double a_re = c.h0_re[idx] * cw + c.h0_im[idx] * sw;
+                const double a_im = -c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+                const double b_re = c.h0n_re[idx] * cw - c.h0n_im[idx] * sw;
+                const double b_im = c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
                 h_re = a_re + b_re;
                 h_im = a_im + b_im;
-                v_re = c.omega[idx] * (-a_im + b_im);
-                v_im = c.omega[idx] * (a_re - b_re);
+                v_re = c.omega[idx] * (a_im - b_im);
+                v_im = c.omega[idx] * (-a_re + b_re);
             }
             const double phi = c.kx[idx] * qx + c.ky[idx] * qz;
             const double cp = std::cos(phi);
@@ -587,10 +589,10 @@ void OceanQueryCore::accumulate_coastal_long_(double qx, double qz, bool use_pre
             avr = c.ev_a_v_re[idx]; avi = c.ev_a_v_im[idx]; bvr = c.ev_b_v_re[idx]; bvi = c.ev_b_v_im[idx];
         } else {
             const double wt = c.omega[idx] * sim_time, cw = std::cos(wt), sw = std::sin(wt);
-            ahr = c.h0_re[idx] * cw - c.h0_im[idx] * sw; ahi = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
-            bhr = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw; bhi = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
-            avr = -c.omega[idx] * ahi; avi = c.omega[idx] * ahr;
-            bvr = c.omega[idx] * bhi; bvi = -c.omega[idx] * bhr;
+            ahr = c.h0_re[idx] * cw + c.h0_im[idx] * sw; ahi = -c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+            bhr = c.h0n_re[idx] * cw - c.h0n_im[idx] * sw; bhi = c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+            avr = c.omega[idx] * ahi; avi = -c.omega[idx] * ahr;
+            bvr = -c.omega[idx] * bhi; bvi = c.omega[idx] * bhr;
         }
         const double hr = c.coastal_weight_pos[idx] * ahr + c.coastal_weight_neg[idx] * bhr;
         const double hi = c.coastal_weight_pos[idx] * ahi + c.coastal_weight_neg[idx] * bhi;

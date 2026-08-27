@@ -34,7 +34,10 @@ void main() {
 		clamp(params.transition_alpha, 0.0, 1.0)
 	);
 	float omega = sqrt(params.values.y * k_length);
-	float phase = omega * params.values.x;
+	// Public directions point TOWARD propagation. The spatial reconstruction
+	// is Re(H * e^{+i k.x}), therefore H(k,t) must use e^{-i omega t} so a
+	// crest with k=(+kx,0) travels toward +X (and +Z likewise).
+	float phase = -omega * params.values.x;
 	vec2 positive_phase = vec2(cos(phase), sin(phase));
 	vec2 negative_phase = vec2(positive_phase.x, -positive_phase.y);
 	vec2 height = complex_multiply(h0.xy, positive_phase) + complex_multiply(h0.zw, negative_phase);
