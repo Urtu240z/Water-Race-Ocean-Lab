@@ -58,6 +58,9 @@ var _capture_sequence := 0
 var _pending_capture_sequence := 0
 var _last_active_camera_id := 0
 var _active_projection_label := "PERSPECTIVE"
+var _external_source_enabled := false
+var _external_source_texture: Texture2D
+var _external_source_view_projection := Projection()
 
 
 func _exit_tree() -> void:
@@ -110,6 +113,7 @@ func set_settings(enabled: bool, resolution_scale: float, overscan: float, proje
 	if _initialized:
 		if previous_projection_mode != _projection_mode:
 			_disable_oblique_camera()
+		_set_stable_shadow_projection_enabled(_projection_mode == PROJECTION_MODE_OFF_AXIS_FRUSTUM)
 		if previous_enabled != _enabled or not is_equal_approx(previous_overscan, _overscan) or previous_projection_mode != _projection_mode or not is_equal_approx(previous_clip_bias_m, _clip_bias_m) or not is_equal_approx(previous_max_distance_m, _max_distance_m):
 			_invalidate_capture_state()
 		_reflection_camera.cull_mask = _cull_mask
@@ -134,11 +138,15 @@ func _create_render_target() -> void:
 	_reflection_camera.cull_mask = _cull_mask
 	_reflection_camera.current = true
 	_reflection_viewport.add_child(_reflection_camera)
+	_set_stable_shadow_projection_enabled(_projection_mode == PROJECTION_MODE_OFF_AXIS_FRUSTUM)
 	_resize_to_main_viewport()
 
 
 func _process(delta: float) -> void:
 	if not _initialized:
+		return
+	if _external_source_enabled:
+		_sync_material_state(_enabled)
 		return
 	_capture_rate_elapsed_s += maxf(delta, 0.0)
 	if _capture_rate_elapsed_s >= 1.0:
@@ -279,6 +287,13 @@ func _disable_oblique_camera() -> void:
 		return
 	if _reflection_camera.has_method(&"set_use_oblique_near_plane"):
 		_reflection_camera.call(&"set_use_oblique_near_plane", false)
+
+
+func _set_stable_shadow_projection_enabled(enabled: bool) -> void:
+	if _reflection_camera == null or not is_instance_valid(_reflection_camera):
+		return
+	if _reflection_camera.has_method(&"set_use_stable_shadow_projection"):
+		_reflection_camera.call(&"set_use_stable_shadow_projection", enabled)
 
 
 func _sync_mirrored_perspective(main_camera: Camera3D, plane_y: float) -> void:
@@ -496,11 +511,28 @@ func _sync_material_state(active: bool) -> void:
 	_surface_material.set_shader_parameter(&"planar_reflection_plane_y", _sea_plane_world_y())
 	_surface_material.set_shader_parameter(&"planar_reflection_anchor_mode", _sampling_anchor_mode)
 	_surface_material.set_shader_parameter(&"planar_reflection_uv_orientation", _uv_orientation)
-	if _reflection_viewport != null:
+	if _external_source_enabled:
+		_surface_material.set_shader_parameter(&"planar_reflection_texture", _external_source_texture)
+		_surface_material.set_shader_parameter(&"planar_reflection_view_projection", _external_source_view_projection)
+	elif _reflection_viewport != null:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
 
 
+func set_external_reflection_source(enabled: bool, texture: Texture2D, view_projection: Projection) -> void:
+	_external_source_enabled = enabled and texture != null
+	_external_source_texture = texture
+	_external_source_view_projection = view_projection
+	_capture_matrix_pending = false
+	_pending_capture_sequence = 0
+	_capture_ready = _external_source_enabled
+	if _reflection_viewport != null:
+		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_sync_material_state(_enabled and _external_source_enabled)
+
+
 func _on_frame_post_draw() -> void:
+	if _external_source_enabled:
+		return
 	if not _capture_matrix_pending or _pending_capture_sequence <= 0:
 		return
 	# frame_post_draw is emitted after RenderingServer has updated all Viewports,

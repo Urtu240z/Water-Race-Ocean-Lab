@@ -13,10 +13,9 @@
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
 [ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
-[ext_resource type="Script" uid="uid://7pdvubhcohwk" path="res://ocean_v3/bathymetry/bathymetry_baker.gd" id="13_vvhv5"]
-[ext_resource type="Script" uid="uid://b4apva6qruumm" path="res://ocean_v3/coastal/coastal_eikonal_preview_baker.gd" id="14_bk4pj"]
 [ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
 [ext_resource type="Script" uid="uid://bgmu6kdgxmpru" path="res://ocean_v3/coastal/coastal_bake_authoring.gd" id="17_4qkou"]
+[ext_resource type="Script" path="res://lab/reflection/mirror_geometry_reflection.gd" id="18_mirror"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_5myqe"]
 panorama = ExtResource("2_mi5lw")
@@ -31,12 +30,10 @@ background_mode = 2
 background_energy_multiplier = 0.19
 sky = SubResource("Sky_lab")
 ambient_light_source = 3
-reflected_light_source = 2
 tonemap_mode = 4
 tonemap_exposure = 2.38
 tonemap_agx_white = 16.5
 tonemap_agx_contrast = 1.15
-ssr_enabled = true
 adjustment_enabled = true
 adjustment_saturation = 0.81
 
@@ -116,8 +113,8 @@ horizon_water_alpha = 1.0
 fresnel_power = 9.4
 near_roughness = 0.2
 water_specular = 0.4
+planar_reflection_enabled = false
 planar_reflection_overscan = 2.0
-planar_reflection_projection_mode = 1
 planar_reflection_max_distance_m = 2000.0
 planar_reflection_strength = 1.0
 planar_reflection_edge_fade = 0.001
@@ -193,25 +190,13 @@ surface_material_override/0 = SubResource("StandardMaterial3D_bk4pj")
 [node name="Cabana_4_COL" parent="paradise_island" index="19" unique_id=1115929881]
 transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0, 1.3555894, 214.78558, -7.2204156, 331.6032)
 
-[node name="BathymetryBaker" type="Node" parent="." unique_id=1750152088 node_paths=PackedStringArray("source_root")]
-script = ExtResource("13_vvhv5")
-source_root = NodePath("../paradise_island")
-
-[node name="CoastalEikonalPreviewBaker" type="Node" parent="." unique_id=191422184 node_paths=PackedStringArray("bathymetry_baker")]
-script = ExtResource("14_bk4pj")
-bathymetry_baker = NodePath("../BathymetryBaker")
-cut_locus_blend_passes = 24
-cut_locus_blend_strength = 0.65
-preview_mode = 7
-
 [node name="OceanSeaStateZone3D" type="Node3D" parent="." unique_id=1747485942]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 573.061, 24.53561, 1461.6362)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 573.061, 24.53561, -593.7915)
 script = ExtResource("15_ody2a")
-enabled = false
-box_size_m = Vector2(519.99963, 600)
+box_size_m = Vector2(519.99963, 672.10895)
 feather_distance_m = 96.865234
-long_amplitude_multiplier = 0.12
-mid_amplitude_multiplier = 1.16
+long_amplitude_multiplier = 0.46
+mid_amplitude_multiplier = 0.86
 short_amplitude_multiplier = 0.0
 choppiness_multiplier = 2.0
 foam_generation_multiplier = 0.0
@@ -223,5 +208,8 @@ coast_id = "paradise_island_phase_test"
 source_root = NodePath("../paradise_island")
 cell_size_m = 4.0
 metadata/_custom_type_script = "uid://bgmu6kdgxmpru"
+
+[node name="MirrorGeometryReflection" type="Node3D" parent="."]
+script = ExtResource("18_mirror")
 
 [editable path="paradise_island"]

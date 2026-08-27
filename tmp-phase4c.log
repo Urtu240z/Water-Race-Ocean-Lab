@@ -1,0 +1,38 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+PASS: no queda inversión stale en travel_dir
+PASS: anchors prefieren render_direction con fallback local
+PASS: ACTIVE usa trayectoria del campo costero horneado
+PASS: pool publica datos por slot para takeover
+PASS: surface declara takeover de producción multi-slot
+PASS: takeover se aplica después del envelope shoreline
+PASS: shader del labio usa orientación forward canónica
+PASS: host del ribbon conserva shore stabilization
+PASS: takeover no usa discard
+PASS: LUT stage 0: x_norm crece con u (0.000 -> 1.000)
+PASS: default profile direction = FORWARD (+1)
+PASS: -1 queda sólo como espejo diagnóstico
+PASS: trayectoria (1.0, 0.0) avanza con render_direction
+PASS: spawn_direction coincide con (1.0, 0.0)
+PASS: trayectoria (-1.0, 0.0) avanza con render_direction
+PASS: spawn_direction coincide con (-1.0, 0.0)
+PASS: trayectoria (0.0, 1.0) avanza con render_direction
+PASS: spawn_direction coincide con (0.0, 1.0)
+PASS: trayectoria (0.0, -1.0) avanza con render_direction
+PASS: spawn_direction coincide con (0.0, -1.0)
+S5 placement legacy_shallowest small=0.470 large=0.830 | new gentle_small n=0 depth=0.000 pressure=0.000 | gentle_large n=1 depth=2.406 pressure=0.533 | steep_large n=0 depth=0.000 pressure=0.000
+PASS: rampa suave con Hs grande produce anchor con corredor
+PASS: Hs pequeño y rampa abrupta pueden no tener corredor surf
+PASS: Hs grande rompe más offshore en slope suave
+PASS: spawn pressure queda en onset/mid prebreak
+PASS: anchor usa dirección física render
+PASS: lifecycle SPAWN -> GROW -> LIP -> PLUNGE es monótono
+PASS: lifecycle conserva host world-anchored en movimiento
+PASS: pausa congela estado del pool
+PASS: takeover publica exactamente 4 ACTIVE
+PASS: cada máscara conserva su center/direction
+PASS: takeover desciende al desaparecer un ACTIVE
+PASS: takeover admite el cap de 8 ACTIVE
+PHASE_4C_S5_PRODUCTION_HANDOFF: PASS

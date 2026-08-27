@@ -1,0 +1,86 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+PASS: inc, include del labio y shader existen
+PASS: breaker_lip comparte el detector vía include
+PASS: breaker_lip incluye sus funciones específicas sin contaminar el clipmap
+PASS: el clipmap incluye el detector compartido
+PASS: el clipmap no incluye funciones específicas del ribbon
+PASS: el include del ribbon contiene sólo sus funciones específicas activas
+PASS: el inc expone el campo PREBREAK y el estado local
+PASS: long_height_at samplea SÓLO LONG (COASTAL+REMAINDER): MID/SHORT no entran en el trigger
+PASS: cada slot declara anchor y dirección por instancia
+PASS: el takeover se origina del campo PREBREAK (LONG-only)
+PASS: breaker_lip no invoca OceanQuery ni readbacks
+PASS: el pool no hace readback GPU->CPU
+PASS: uniform compartido declarado en breaker_lip: module_enabled
+PASS: uniform compartido declarado en breaker_lip: coastal_propagation_enabled
+PASS: uniform compartido declarado en breaker_lip: coastal_transform_enabled
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_enabled
+PASS: uniform compartido declarado en breaker_lip: coastal_monochromatic_debug
+PASS: uniform compartido declarado en breaker_lip: coastal_field_texture
+PASS: uniform compartido declarado en breaker_lip: coastal_metrics_texture
+PASS: uniform compartido declarado en breaker_lip: coastal_phase_texture
+PASS: uniform compartido declarado en breaker_lip: coastal_origin_xz
+PASS: uniform compartido declarado en breaker_lip: coastal_extent_m
+PASS: uniform compartido declarado en breaker_lip: coastal_incoming_direction_xz
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_texture
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_jacobian_texture
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_origin_xz
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_extent_m
+PASS: uniform compartido declarado en breaker_lip: coastal_warp_detj_safe
+PASS: uniform compartido declarado en breaker_lip: coastal_k0_rad_m
+PASS: uniform compartido declarado en breaker_lip: breaking_long_hs_m
+PASS: uniform compartido declarado en breaker_lip: breaking_coastal_energy_fraction
+PASS: uniform compartido declarado en breaker_lip: domain_long_coastal_m
+PASS: uniform compartido declarado en breaker_lip: domain_long_remainder_m
+PASS: uniform compartido declarado en breaker_lip: domain_mid_m
+PASS: uniform compartido declarado en breaker_lip: domain_short_m
+PASS: uniform compartido declarado en breaker_lip: displacement_long_coastal
+PASS: uniform compartido declarado en breaker_lip: displacement_long_remainder
+PASS: uniform compartido declarado en breaker_lip: displacement_mid
+PASS: uniform compartido declarado en breaker_lip: displacement_short
+PASS: uniform compartido declarado en breaker_lip: normal_long_coastal
+PASS: uniform compartido declarado en breaker_lip: normal_long_remainder
+PASS: uniform compartido declarado en breaker_lip: normal_mid
+PASS: uniform compartido declarado en breaker_lip: normal_short
+PASS: uniform compartido declarado en breaker_lip: short_fade_range_m
+PASS: uniform compartido declarado en breaker_lip: mid_fade_range_m
+PASS: uniform compartido declarado en breaker_lip: long_fade_range_m
+PASS: uniform compartido declarado en breaker_lip: band_mask
+PASS: uniform compartido declarado en breaker_lip: sea_state_zone_count
+PASS: uniform compartido declarado en breaker_lip: sea_state_zone_data0
+PASS: uniform compartido declarado en breaker_lip: sea_state_zone_data1
+PASS: uniform compartido declarado en breaker_lip: sea_state_zone_data2
+PASS: uniform compartido declarado en breaker_lip: sea_state_zone_data3
+PASS: uniform compartido declarado en breaker_lip: coastal_composition_debug
+PASS: uniform compartido declarado en breaker_lip: coastal_debug_gain
+PASS: uniform compartido declarado en breaker_lip: camera_world_xz
+PASS: uniform compartido declarado en breaker_lip: shore_stabilization_enabled
+PASS: uniform compartido declarado en breaker_lip: shore_vertical_depth_range_m
+PASS: uniform compartido declarado en breaker_lip: shore_horizontal_depth_range_m
+PASS: uniform compartido declarado en breaker_lip: coastal_min_valid_depth_m
+PASS: uniform compartido declarado en breaker_lip: coastal_cell_size_m
+PASS: uniform compartido declarado en breaker_lip: short_geometry_strength
+PASS: uniform compartido declarado en breaker_lip: short_vertex_normal_strength
+PASS: uniform compartido declarado en breaker_lip: ocean_crest_sharpen_strength
+PASS: uniform compartido declarado en breaker_lip: ocean_crest_sharpen_threshold
+PASS: uniform compartido declarado en breaker_lip: ocean_crest_sharpen_max_gain
+PASS: uniform compartido declarado en breaker_lip: ocean_crest_sharpen_long_weight
+PASS: uniform compartido declarado en breaker_lip: ocean_crest_sharpen_mid_weight
+PASS: envolvente: prebreak 0 -> 0 (sin estado binario)
+PASS: envolvente: prebreak alto -> 1
+PASS: envolvente: monótona creciente
+PASS: edge_fade: plena en el centro del ribetón
+PASS: edge_fade: 0 en los bordes (sin seams de recorte)
+PASS: presión de profundidad: réplica del shader (H/(gamma*h))
+4B POOL anchors=0 (max=8) spacing_min=9.0
+PASS: banco abrupto sin corredor no fuerza anchors surf
+PASS: nunca más slots que max_breakers
+PASS: mismo modelo/batimetría -> misma disposición (determinismo)
+PASS: separación mínima entre slots
+PASS: Hs mínima -> sin zona de pre-break -> 0 slots (ningún breaker)
+PASS: restaurar Hs -> el banco abrupto sigue sin corredor surf
+PASS: disable -> 0 slots y oculto (Coastal OFF / sin batimetría)
+PHASE_4B_BREAKER_GEOMETRY: PASS

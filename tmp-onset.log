@@ -1,0 +1,15 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+PASS: gentle beach: corredor surf válido
+PASS: Hs grande: onset más offshore
+PASS: available >= required development
+PASS: spawn permanece prebreak
+PASS: spawn conserva autoridad FFT vertical
+PASS: cliff: NO_SURF_CORRIDOR
+PASS: cliff: razón explícita
+PASS: stencil parcial: no cruza muestra inválida
+PASS: corredor: 16 muestras CPU deterministas
+BREAKER_ONSET_PLACEMENT: gentle_medium=1 gentle_large=1 cliff=NO_SHALLOW_DEVELOPMENT corridor_evals=65 elapsed_ms=51.265
+BREAKER_ONSET_PLACEMENT: PASS

@@ -5,7 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | I: UV Matrix A/B (XYW igual) | F9: Planar Anchor DISPLACED/FLAT WORLD/FLAT BASE | F10: UV Orientation Y/N/X/XY | U: RAW Planar Capture | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | I: UV Matrix A/B (XYW igual) | F9: Planar Anchor DISPLACED/FLAT WORLD/FLAT BASE | F10: UV Orientation Y/N/X/XY | U: RAW Mirror Geometry Capture | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 const PLANAR_AB_WARMUP_S := 0.5
 const PLANAR_AB_MEASURE_S := 4.0
@@ -24,6 +24,7 @@ const PLANAR_AB_RESULT := 5
 @onready var ocean_v3: OceanV3 = $OceanV3Mount/OceanV3
 
 var _planar_reflection: Node
+var _mirror_geometry_reflection: Node
 var _raw_planar_layer: CanvasLayer
 var _raw_planar_panel: PanelContainer
 var _raw_planar_texture_rect: TextureRect
@@ -49,6 +50,7 @@ func _ready() -> void:
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
+	_mirror_geometry_reflection = get_node_or_null(^"MirrorGeometryReflection") as Node
 	_planar_reflection = ocean_v3.get_node_or_null(^"OceanPlanarReflection3D") as Node
 	_create_raw_planar_capture_view()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
@@ -257,7 +259,7 @@ func _create_raw_planar_capture_view() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = "RAW PLANAR CAPTURE"
+	title.text = "RAW MIRROR GEOMETRY CAPTURE"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
@@ -279,6 +281,13 @@ func _create_raw_planar_capture_view() -> void:
 
 func _update_raw_planar_capture() -> void:
 	if not _raw_planar_visible or _raw_planar_texture_rect == null:
+		return
+	if _mirror_geometry_reflection != null and is_instance_valid(_mirror_geometry_reflection):
+		_raw_planar_texture_rect.texture = _mirror_geometry_reflection.call("get_reflection_texture")
+		_raw_planar_projection_label.text = "Projection: %s | Static meshes: %d" % [
+			str(_mirror_geometry_reflection.call("reflection_projection_label")),
+			int(_mirror_geometry_reflection.call("source_mesh_count")),
+		]
 		return
 	if _raw_planar_viewport == null or not is_instance_valid(_raw_planar_viewport):
 		_raw_planar_viewport = ocean_v3.get_node_or_null(^"PlanarReflectionViewport") as SubViewport
