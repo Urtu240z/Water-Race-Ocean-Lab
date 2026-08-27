@@ -245,7 +245,7 @@ func _breaker_slot_short(index: int, slot: Dictionary) -> String:
 
 
 func _breaker_detector_detail(index: int, slot: Dictionary) -> String:
-	return "BREAKER DETECTOR — SLOT %d\nState: %s  Wave: %d  s/lambda: %+.2f  Window: %s\nDepth: %.2f m  Pressure: %.2f  Prom: %.2f  Slope: %.2f\nScore: %.2f  Best: %.2f @ s %.2f m  Prob: %.2f  Roll: %.2f\nGate: %s\nStencil: %d valid [%d..%d]" % [
+	return "BREAKER DETECTOR — SLOT %d\nState: %s  Wave: %d  s/lambda: %+.2f  Window: %s\nDepth: %.2f m  Pressure: %.2f  Prom: %.2f  Slope: %.2f\nPhysical: %.2f  Corridor: %s  Crest confidence: %.2f\nScore: %.2f  Best: %.2f @ s %.2f m  Prob: %.2f  Roll: %.2f\nGate: %s\nStencil: %d valid [%d..%d]" % [
 		index,
 		str(slot.get("state", "DETECT")),
 		int(slot.get("wave", 0)),
@@ -255,6 +255,9 @@ func _breaker_detector_detail(index: int, slot: Dictionary) -> String:
 		float(slot.get("pressure", 0.0)),
 		float(slot.get("prominence", 0.0)),
 		float(slot.get("slope_long", 0.0)),
+		float(slot.get("physical_breaking_strength", 0.0)),
+		"YES" if bool(slot.get("surf_corridor_eligible", false)) else "NO",
+		float(slot.get("crest_confidence", 0.0)),
 		float(slot.get("final_score", 0.0)),
 		float(slot.get("best_score", 0.0)),
 		float(slot.get("best_candidate_s", 0.0)),

@@ -34,7 +34,7 @@ func _run() -> void:
 	_check(not diagnostics_source.contains("_call_breaker_heights") and not diagnostics_source.contains("_call_breaker_slopes"), "diagnóstico no añade una query")
 	_check(source.contains("SPAWN_S_START_LAMBDA := -0.28") and source.contains("SPAWN_S_END_LAMBDA := -0.06"), "window de spawn sin tuning")
 	_check(source.contains("SCORE_PRESSURE_WEIGHT := 0.45") and source.contains("SCORE_PROMINENCE_WEIGHT := 0.35") and source.contains("SCORE_STEEPNESS_WEIGHT := 0.20"), "pesos sin tuning")
-	_check(source.contains("SPAWN_PROB_SOFT_LO := 0.30") and source.contains("SPAWN_PROB_SOFT_HI := 0.70"), "probabilidad sin tuning")
+	_check(source.contains("PHYSICAL_BREAKING_MARGINAL_THRESHOLD := 0.30") and source.contains("PHYSICAL_BREAKING_GUARANTEED_THRESHOLD := 0.55"), "umbrales físicos sin tuning")
 	_validate_force_spawn(pool_script)
 	_quit()
 

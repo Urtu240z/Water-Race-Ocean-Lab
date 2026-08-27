@@ -52,12 +52,13 @@ const CREST_TRACK_EPSILON := 1.0e-4
 const NEW_WAVE_WRAP_LAMBDA := 0.45
 const SPAWN_S_START_LAMBDA := -0.28
 const SPAWN_S_END_LAMBDA := -0.06
-## break_score 0..1 (pesos juntos y fáciles de tunear).
+## Crest refinement score 0..1. Physical breaking eligibility is evaluated
+## separately from the corridor and is the authoritative spawn gate.
 const SCORE_PRESSURE_WEIGHT := 0.45
 const SCORE_PROMINENCE_WEIGHT := 0.35
 const SCORE_STEEPNESS_WEIGHT := 0.20
-const SPAWN_PROB_SOFT_LO := 0.30
-const SPAWN_PROB_SOFT_HI := 0.70
+const PHYSICAL_BREAKING_MARGINAL_THRESHOLD := 0.30
+const PHYSICAL_BREAKING_GUARANTEED_THRESHOLD := 0.55
 const SPAWN_STRENGTH_MIN := 0.70
 ## Lifecycle / cooldown.
 const LIFECYCLE_DURATION_WAVE_FRACTION := 0.85
@@ -546,6 +547,11 @@ func tracking_snapshot() -> Array:
 			"best_score": float(entry.get("best_score", 0.0)),
 			"best_candidate_s": float(entry.get("best_candidate_s", 0.0)),
 			"best_in_window": bool(entry.get("best_in_window", false)),
+			"best_pressure": float(entry.get("best_pressure", 0.0)),
+			"best_prominence": float(entry.get("best_prominence", 0.0)),
+			"best_steepness": float(entry.get("best_steepness", 0.0)),
+			"best_crest_confidence": float(entry.get("best_crest_confidence", 0.0)),
+			"best_physical_breaking_strength": float(entry.get("best_physical_breaking_strength", 0.0)),
 			"candidate_s": float(entry.get("candidate_s", 0.0)),
 			"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
 			"previous_s": float(entry.get("detector_prev_s", 0.0)),
@@ -575,6 +581,8 @@ func tracking_snapshot() -> Array:
 			"anchor_eligibility": float(entry.get("anchor_eligibility", 0.0)),
 			"zone_activity": float(entry.get("zone_activity", 0.0)),
 			"final_score": float(entry.get("final_score", entry.get("score", 0.0))),
+			"physical_breaking_strength": float(entry.get("physical_breaking_strength", 0.0)),
+			"crest_confidence": float(entry.get("crest_confidence", 0.0)),
 			"detector_gate_reason": str(entry.get("detector_gate_reason", "pending")),
 			"score": float(entry.get("score", 0.0)),
 			"probability": float(entry.get("probability", 0.0)),
@@ -603,6 +611,8 @@ func tracking_snapshot() -> Array:
 			"corridor_length_m": float(entry.get("corridor_length_m", 0.0)),
 			"required_development_distance_m": float(entry.get("required_development_distance_m", 0.0)),
 			"lifecycle_distance_m": float(entry.get("lifecycle_distance_m", 0.0)),
+			"surf_corridor_eligible": bool(entry.get("surf_corridor_eligible", false)),
+			"corridor_reason": str(entry.get("corridor_reason", "legacy")),
 			"direction_dot": Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized().dot(Vector2(_anchors[index].get("direction", Vector2.RIGHT)).normalized()),
 		})
 	return result
@@ -1168,6 +1178,11 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 		initial_state["best_wave_serial"] = wave_serial
 		initial_state["best_score"] = float(score_details["final_score"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
 		initial_state["best_candidate_s"] = candidate_s if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_pressure"] = float(score_details["pressure"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_prominence"] = float(score_details["prominence"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_steepness"] = float(score_details["slope_long"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_crest_confidence"] = float(score_details["crest_confidence"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
+		initial_state["best_physical_breaking_strength"] = float(score_details["physical_breaking_strength"]) if candidate_s >= s_start and candidate_s <= s_end else 0.0
 		_publish_slot(index, initial_state)
 		return
 
@@ -1200,13 +1215,26 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 		candidate_state["best_wave_serial"] = wave_serial
 		candidate_state["best_score"] = 0.0
 		candidate_state["best_candidate_s"] = 0.0
-	if in_window and advancing and float(score_details["final_score"]) > float(candidate_state.get("best_score", 0.0)):
+		candidate_state["best_pressure"] = 0.0
+		candidate_state["best_prominence"] = 0.0
+		candidate_state["best_steepness"] = 0.0
+		candidate_state["best_crest_confidence"] = 0.0
+		candidate_state["best_physical_breaking_strength"] = 0.0
+	if in_window and advancing and (not bool(candidate_state.get("best_in_window", false)) or float(score_details["final_score"]) > float(candidate_state.get("best_score", 0.0))):
 		candidate_state["best_score"] = float(score_details["final_score"])
 		candidate_state["best_candidate_s"] = candidate_s
+		candidate_state["best_pressure"] = float(score_details["pressure"])
+		candidate_state["best_prominence"] = float(score_details["prominence"])
+		candidate_state["best_steepness"] = float(score_details["slope_long"])
+		candidate_state["best_crest_confidence"] = float(score_details["crest_confidence"])
+		candidate_state["best_physical_breaking_strength"] = float(score_details["physical_breaking_strength"])
 	var best_score := float(candidate_state.get("best_score", 0.0))
 	var best_candidate_s := float(candidate_state.get("best_candidate_s", 0.0))
+	var best_physical_strength := float(candidate_state.get("best_physical_breaking_strength", 0.0))
+	var best_crest_confidence := float(candidate_state.get("best_crest_confidence", 0.0))
 	var best_in_window := best_candidate_s >= s_start and best_candidate_s <= s_end
-	var probability: float = _smoothstep(SPAWN_PROB_SOFT_LO, SPAWN_PROB_SOFT_HI, best_score)
+	var marginal_signal := clampf(0.70 * best_physical_strength + 0.30 * best_crest_confidence, 0.0, 1.0)
+	var probability: float = _smoothstep(PHYSICAL_BREAKING_MARGINAL_THRESHOLD, PHYSICAL_BREAKING_GUARANTEED_THRESHOLD, marginal_signal) if best_physical_strength >= PHYSICAL_BREAKING_MARGINAL_THRESHOLD else 0.0
 	var roll: float = _deterministic_roll(index, wave_serial)
 	_apply_detector_diagnostics(candidate_state, score_details, candidate_s, detector_prev_s, advancing, in_window, cooldown_done, wave_serial, "PENDING", wavelength)
 	candidate_state["probability"] = probability
@@ -1214,25 +1242,29 @@ func _run_detector(index: int, anchor: Dictionary, candidate: Dictionary, render
 	candidate_state["best_in_window"] = best_in_window
 	candidate_state["best_score"] = best_score
 	candidate_state["best_candidate_s"] = best_candidate_s
+	candidate_state["best_physical_breaking_strength"] = best_physical_strength
 
 	var passed_spawn_window := candidate_s > s_end and best_in_window
-	var guaranteed := best_score >= SPAWN_PROB_SOFT_HI
-	if best_in_window and advancing and wave_serial != last_decided and cooldown_done and (passed_spawn_window or guaranteed):
+	var guaranteed := best_physical_strength >= PHYSICAL_BREAKING_GUARANTEED_THRESHOLD
+	var corridor_eligible := bool(anchor.get("surf_corridor_eligible", false))
+	if corridor_eligible and best_in_window and advancing and wave_serial != last_decided and cooldown_done and (passed_spawn_window or guaranteed):
 		candidate_state["last_decided_wave_serial"] = wave_serial
-		candidate_state["detector_gate_reason"] = "ROLL_REJECTED"
+		candidate_state["detector_gate_reason"] = "PHYSICAL_BREAK_GUARANTEED" if guaranteed else ("MARGINAL_ROLL" if best_physical_strength >= PHYSICAL_BREAKING_MARGINAL_THRESHOLD else "WEAK_REJECT")
 		if guaranteed or roll < probability:
 			candidate_state["detector_gate_reason"] = "SPAWNED"
 			_spawn_breaker(index, anchor, best_candidate_s, travel_dir, wavelength, best_score, render_time, candidate_state)
 			return
 	else:
-		if not advancing:
-			candidate_state["detector_gate_reason"] = "NOT_ADVANCING"
+		if not corridor_eligible:
+			candidate_state["detector_gate_reason"] = "NO_SURF_CORRIDOR"
+		elif not advancing:
+			candidate_state["detector_gate_reason"] = "WAITING_CREST"
 		elif not best_in_window and candidate_s <= s_end:
 			candidate_state["detector_gate_reason"] = "OUTSIDE_WINDOW"
 		elif not best_in_window:
-			candidate_state["detector_gate_reason"] = "NO_BEST_SCORE"
+			candidate_state["detector_gate_reason"] = "WAITING_CREST"
 		elif not passed_spawn_window and not guaranteed:
-			candidate_state["detector_gate_reason"] = "BEST_SCORE_PENDING"
+			candidate_state["detector_gate_reason"] = "WAITING_CREST"
 		elif wave_serial == last_decided:
 			candidate_state["detector_gate_reason"] = "WAVE_ALREADY_DECIDED"
 		elif not cooldown_done:
@@ -1268,6 +1300,8 @@ func _apply_detector_diagnostics(state: Dictionary, score_details: Dictionary, c
 	state["zone_activity"] = float(score_details.get("zone_activity", 0.0))
 	state["final_score"] = float(score_details.get("final_score", 0.0))
 	state["score"] = state["final_score"]
+	state["physical_breaking_strength"] = float(score_details.get("physical_breaking_strength", 0.0))
+	state["crest_confidence"] = float(score_details.get("crest_confidence", 0.0))
 	state["detector_gate_reason"] = reason
 
 
@@ -1334,6 +1368,9 @@ func _break_score_details(anchor: Dictionary, candidate: Dictionary, travel_dir:
 	var steepness_score: float = _smoothstep(0.20, 0.75, slope_long)
 	var raw_score := clampf(SCORE_PRESSURE_WEIGHT * pressure_score + SCORE_PROMINENCE_WEIGHT * prominence_score + SCORE_STEEPNESS_WEIGHT * steepness_score, 0.0, 1.0)
 	var eligibility := _anchor_runtime_eligibility_details(anchor)
+	var physical_strength := _physical_breaking_strength(anchor)
+	# Confidence refines candidate selection only; it is never a physical gate.
+	var crest_confidence := clampf(0.50 + 0.35 * prominence_score + 0.15 * steepness_score, 0.0, 1.0)
 	return {
 		"pressure": pressure,
 		"pressure_score": pressure_score,
@@ -1349,7 +1386,27 @@ func _break_score_details(anchor: Dictionary, candidate: Dictionary, travel_dir:
 		"anchor_eligibility": eligibility["anchor_eligibility"],
 		"zone_activity": eligibility["zone_activity"],
 		"final_score": raw_score * eligibility["anchor_eligibility"] * eligibility["zone_activity"],
+		"physical_breaking_strength": physical_strength,
+		"crest_confidence": crest_confidence,
 	}
+
+
+func _physical_breaking_strength(anchor: Dictionary) -> float:
+	## Autoridad de que la ola rompe: corridor + pressure + desarrollo. No usa
+	## prominence ni specialized slope, que sólo refinan dónde está la cresta.
+	if not bool(anchor.get("surf_corridor_eligible", false)):
+		return 0.0
+	var spawn_pressure := float(anchor.get("spawn_pressure", 0.0))
+	var pressure_start := float(anchor.get("pressure_start", 0.0))
+	var pressure_end := float(anchor.get("pressure_end", 0.0))
+	var pressure_at_break := maxf(maxf(spawn_pressure, pressure_start), pressure_end)
+	var pressure_progression := _smoothstep(CORRIDOR_ONSET_PRESSURE, anchor_max_depth_pressure, pressure_at_break)
+	var spawn_pressure_fit := _smoothstep(anchor_min_depth_pressure, ANCHOR_PRESSURE_TARGET, spawn_pressure)
+	var required := maxf(float(anchor.get("required_development_distance_m", 0.0)), 0.001)
+	var available := maxf(float(anchor.get("available_corridor_length_m", 0.0)), 0.0)
+	var development_ratio := available / required
+	var development_strength := _smoothstep(CORRIDOR_MIN_SHALLOW_DISTANCE_FRACTION, 1.50, development_ratio)
+	return clampf(0.45 * pressure_progression + 0.20 * spawn_pressure_fit + 0.35 * development_strength, 0.0, 1.0)
 
 
 func _deterministic_roll(slot: int, wave_serial: int) -> float:
@@ -1391,6 +1448,11 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"best_score": float(entry.get("best_score", 0.0)),
 		"best_candidate_s": float(entry.get("best_candidate_s", 0.0)),
 		"best_in_window": bool(entry.get("best_in_window", false)),
+		"best_pressure": float(entry.get("best_pressure", 0.0)),
+		"best_prominence": float(entry.get("best_prominence", 0.0)),
+		"best_steepness": float(entry.get("best_steepness", 0.0)),
+		"best_crest_confidence": float(entry.get("best_crest_confidence", 0.0)),
+		"best_physical_breaking_strength": float(entry.get("best_physical_breaking_strength", 0.0)),
 		"candidate_s": float(entry.get("candidate_s", 0.0)),
 		"candidate_s_lambda": float(entry.get("candidate_s_lambda", 0.0)),
 		"previous_s": float(entry.get("previous_s", entry.get("detector_prev_s", 0.0))),
@@ -1420,6 +1482,8 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"anchor_eligibility": float(entry.get("anchor_eligibility", 0.0)),
 		"zone_activity": float(entry.get("zone_activity", 0.0)),
 		"final_score": float(entry.get("final_score", entry.get("score", 0.0))),
+		"physical_breaking_strength": float(entry.get("physical_breaking_strength", 0.0)),
+		"crest_confidence": float(entry.get("crest_confidence", 0.0)),
 		"detector_gate_reason": str(entry.get("detector_gate_reason", "pending")),
 		"score": float(entry.get("score", 0.0)),
 		"probability": float(entry.get("probability", 0.0)),

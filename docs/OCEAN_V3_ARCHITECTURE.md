@@ -302,6 +302,14 @@ scores do not spawn. Normal HUD output stays compact; `Ctrl+Shift+J` enables
 extra breaker diagnostics, while `DETECTOR` shows the selected slot (or a short
 table for `ALL`).
 
+The physical decision is independent from the old crest score. For an eligible
+corridor, `physical_breaking_strength` is the clamped blend
+`0.45*pressure_progression + 0.20*spawn_pressure_fit + 0.35*development_strength`;
+the corridor is the gate, while prominence and specialized slope are only crest
+confidence/refinement. Strength `>= 0.55` guarantees one spawn for that
+`wave_serial`; `0.30..0.55` uses the seeded probability
+`smoothstep(0.30, 0.55, 0.70*physical + 0.30*crest_confidence)`.
+
 ## Sea State Zones
 
 See the single canonical manual: [SEA_STATE_ZONES.md](../ocean_v3/SEA_STATE_ZONES.md).
