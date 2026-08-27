@@ -5,7 +5,16 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+
+const PLANAR_AB_WARMUP_S := 0.5
+const PLANAR_AB_MEASURE_S := 4.0
+const PLANAR_AB_IDLE := 0
+const PLANAR_AB_WARMUP_OFF := 1
+const PLANAR_AB_MEASURE_OFF := 2
+const PLANAR_AB_WARMUP_ON := 3
+const PLANAR_AB_MEASURE_ON := 4
+const PLANAR_AB_RESULT := 5
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -18,6 +27,14 @@ var _using_race_camera := false
 var _query_probe_tool: Node3D
 var _demo_sea_state_zone: OceanSeaStateZone3D
 var _foam_debug_index := 0
+var _smoothed_frame_ms := 16.67
+var _planar_ab_phase := PLANAR_AB_IDLE
+var _planar_ab_elapsed_s := 0.0
+var _planar_ab_sum_ms := 0.0
+var _planar_ab_frame_count := 0
+var _planar_ab_saved_enabled := true
+var _planar_ab_off_avg_ms := 0.0
+var _planar_ab_on_avg_ms := 0.0
 
 
 func _ready() -> void:
@@ -26,6 +43,7 @@ func _ready() -> void:
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
+	_smoothed_frame_ms = 1000.0 / maxf(float(Engine.get_frames_per_second()), 1.0)
 	_update_coastal_hud()
 
 
@@ -82,6 +100,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F5:
 			ocean_v3.cycle_reflection_debug()
 			_update_coastal_hud()
+		KEY_F6:
+			_toggle_planar_reflection()
+		KEY_F7:
+			_start_planar_ab_measurement()
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET
@@ -109,6 +131,94 @@ func _unhandled_input(event: InputEvent) -> void:
 			SimulationClock.time_scale = minf(SimulationClock.time_scale * 2.0, 8.0)
 		KEY_F1:
 			benchmark_hud.visible = not benchmark_hud.visible
+
+
+func _process(delta: float) -> void:
+	_smoothed_frame_ms = lerpf(_smoothed_frame_ms, delta * 1000.0, 0.12)
+	_update_planar_ab_measurement(delta)
+
+
+func _toggle_planar_reflection() -> void:
+	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
+		return
+	ocean_v3.planar_reflection_enabled = not ocean_v3.planar_reflection_enabled
+	_update_coastal_hud()
+
+
+func _start_planar_ab_measurement() -> void:
+	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
+		return
+	_planar_ab_saved_enabled = ocean_v3.planar_reflection_enabled
+	_planar_ab_off_avg_ms = 0.0
+	_planar_ab_on_avg_ms = 0.0
+	_planar_ab_elapsed_s = 0.0
+	_planar_ab_sum_ms = 0.0
+	_planar_ab_frame_count = 0
+	ocean_v3.planar_reflection_enabled = false
+	_planar_ab_phase = PLANAR_AB_WARMUP_OFF
+
+
+func _update_planar_ab_measurement(delta: float) -> void:
+	if _planar_ab_phase == PLANAR_AB_IDLE or _planar_ab_phase == PLANAR_AB_RESULT:
+		return
+	_planar_ab_elapsed_s += delta
+	if _planar_ab_phase == PLANAR_AB_WARMUP_OFF or _planar_ab_phase == PLANAR_AB_WARMUP_ON:
+		if _planar_ab_elapsed_s < PLANAR_AB_WARMUP_S:
+			return
+		_planar_ab_elapsed_s = 0.0
+		_planar_ab_sum_ms = 0.0
+		_planar_ab_frame_count = 0
+		_planar_ab_phase = PLANAR_AB_MEASURE_OFF if _planar_ab_phase == PLANAR_AB_WARMUP_OFF else PLANAR_AB_MEASURE_ON
+		return
+
+	_planar_ab_sum_ms += delta * 1000.0
+	_planar_ab_frame_count += 1
+	if _planar_ab_elapsed_s < PLANAR_AB_MEASURE_S:
+		return
+	var average_ms := _planar_ab_sum_ms / maxf(float(_planar_ab_frame_count), 1.0)
+	_planar_ab_elapsed_s = 0.0
+	_planar_ab_sum_ms = 0.0
+	_planar_ab_frame_count = 0
+	if _planar_ab_phase == PLANAR_AB_MEASURE_OFF:
+		_planar_ab_off_avg_ms = average_ms
+		ocean_v3.planar_reflection_enabled = true
+		_planar_ab_phase = PLANAR_AB_WARMUP_ON
+	else:
+		_planar_ab_on_avg_ms = average_ms
+		ocean_v3.planar_reflection_enabled = _planar_ab_saved_enabled
+		_planar_ab_phase = PLANAR_AB_RESULT
+
+
+func smoothed_frame_time_ms() -> float:
+	return _smoothed_frame_ms
+
+
+func planar_hud_lines() -> Array[String]:
+	var planar_state := "ON" if ocean_v3.planar_reflection_enabled else "OFF"
+	var lines: Array[String] = [
+		"Planar Reflection: %s | Scale: %.2fx" % [planar_state, ocean_v3.planar_reflection_resolution_scale]
+	]
+	match _planar_ab_phase:
+		PLANAR_AB_WARMUP_OFF:
+			lines.append("Planar A/B: WARMUP OFF")
+		PLANAR_AB_MEASURE_OFF:
+			lines.append("Planar A/B: MEASURE OFF")
+		PLANAR_AB_WARMUP_ON:
+			lines.append("Planar A/B: WARMUP ON")
+		PLANAR_AB_MEASURE_ON:
+			lines.append("Planar A/B: MEASURE ON")
+		PLANAR_AB_RESULT:
+			var cost_ms := _planar_ab_on_avg_ms - _planar_ab_off_avg_ms
+			var cost_sign := "+" if cost_ms >= 0.0 else ""
+			lines.append("Planar A/B RESULT")
+			lines.append("OFF %.2f ms (~%.1f FPS) | ON %.2f ms (~%.1f FPS)" % [
+				_planar_ab_off_avg_ms,
+				1000.0 / maxf(_planar_ab_off_avg_ms, 0.001),
+				_planar_ab_on_avg_ms,
+				1000.0 / maxf(_planar_ab_on_avg_ms, 0.001),
+			])
+			lines.append("COST %s%.2f ms" % [cost_sign, cost_ms])
+	return lines
 
 
 func _create_demo_sea_state_zone() -> void:

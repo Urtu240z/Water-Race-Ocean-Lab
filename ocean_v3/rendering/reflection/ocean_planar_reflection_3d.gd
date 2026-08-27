@@ -17,7 +17,7 @@ var _surface_node: Node3D
 var _main_viewport: Viewport
 var _reflection_viewport: SubViewport
 var _reflection_camera: Camera3D
-var _resolution_scale := 0.5
+var _resolution_scale := 0.10
 var _reflection_strength := 0.55
 var _distortion_strength := 0.035
 var _edge_fade := 0.08
@@ -46,7 +46,7 @@ func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
 
 func set_settings(enabled: bool, resolution_scale: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
 	_enabled = enabled
-	_resolution_scale = clampf(resolution_scale, 0.25, 1.0)
+	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
 	_reflection_strength = clampf(reflection_strength, 0.0, 1.0)
 	_distortion_strength = maxf(distortion_strength, 0.0)
 	_edge_fade = clampf(edge_fade, 0.001, 0.5)

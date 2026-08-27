@@ -372,9 +372,9 @@ var _wave_transition_start_short_geometry := 0.25
 		planar_reflection_enabled = value
 		_request_visual_sync()
 
-@export_range(0.25, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.5:
+@export_range(0.10, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.10:
 	set(value):
-		planar_reflection_resolution_scale = clampf(value, 0.25, 1.0)
+		planar_reflection_resolution_scale = clampf(value, 0.10, 1.0)
 		_request_visual_sync()
 
 @export_range(0.0, 1.0, 0.01) var planar_reflection_strength: float = 0.55:
