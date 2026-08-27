@@ -519,6 +519,8 @@ func tracking_snapshot() -> Array:
 			"advancing": bool(entry.get("advancing", false)),
 			"in_window": bool(entry.get("in_window", false)),
 			"cooldown_done": bool(entry.get("cooldown_done", true)),
+			"query_valid": bool(entry.get("query_valid", false)),
+			"candidate_valid": bool(entry.get("candidate_valid", false)),
 			"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
 			"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
 			"pressure": float(entry.get("pressure", 0.0)),
@@ -1082,6 +1084,8 @@ func _apply_detector_diagnostics(state: Dictionary, score_details: Dictionary, c
 	state["advancing"] = advancing
 	state["in_window"] = in_window
 	state["cooldown_done"] = cooldown_done
+	state["query_valid"] = true
+	state["candidate_valid"] = true
 	state["spawn_window_start_s"] = SPAWN_S_START_LAMBDA * wavelength
 	state["spawn_window_end_s"] = SPAWN_S_END_LAMBDA * wavelength
 	state["wave_serial"] = wave_serial
@@ -1205,6 +1209,8 @@ func _base_state(entry: Dictionary) -> Dictionary:
 		"advancing": bool(entry.get("advancing", false)),
 		"in_window": bool(entry.get("in_window", false)),
 		"cooldown_done": bool(entry.get("cooldown_done", true)),
+		"query_valid": bool(entry.get("query_valid", false)),
+		"candidate_valid": bool(entry.get("candidate_valid", false)),
 		"spawn_window_start_s": float(entry.get("spawn_window_start_s", 0.0)),
 		"spawn_window_end_s": float(entry.get("spawn_window_end_s", 0.0)),
 		"pressure": float(entry.get("pressure", 0.0)),
@@ -1262,6 +1268,9 @@ func _update_slot_invalid(index: int, anchor_xz: Vector2, render_time: float) ->
 	var state := _base_state(entry)
 	state["active"] = false
 	state["valid"] = 0.0
+	state["query_valid"] = false
+	state["candidate_valid"] = false
+	state["detector_gate_reason"] = "INVALID_QUERY_SAMPLE"
 	state["tracked_xz"] = anchor_xz
 	state["remaining"] = maxf(0.0, float(entry.get("next_spawn_time", 0.0)) - render_time)
 	_publish_slot(index, state)
