@@ -81,8 +81,23 @@ composición/debug y no regeneran datos.
 | Sea state, amplitud visual o preset de oleaje | No |
 | Breaker tuning que no cambie la geometría horneada | No |
 
-Tras un rebake, conserva el mismo `coast_id` para reemplazar el asset que usa
-el nivel. Cambiarlo crea una variante independiente.
+Tras un rebake, conserva el mismo `coast_id`: `BAKE COASTAL ASSET` está
+preparado para publicar varias veces esa misma costa dentro del mismo proceso
+de Godot. Primero termina y valida todo el solve; después toma las cuatro
+rutas canónicas con `Resource.take_over_path()` y guarda sin
+`ResourceSaver.FLAG_CHANGE_PATH`, reemplazando de forma explícita los owners de
+`ResourceCache`. El manifest sigue referenciando los tres `.res` mediante
+`ext_resource` y no crea IDs temporales persistentes.
+
+Un fallo de authoring antes de la fase de publicación no toca el manifest que
+ya estaba en disco. Las referencias vivas a rebakes anteriores siguen siendo
+válidas en memoria y conservan sus datos, aunque Godot les vacía
+`resource_path` al perder la propiedad de la ruta; una carga posterior con
+`ResourceLoader.CACHE_MODE_REUSE` obtiene el owner nuevo. El rebake no exige
+cerrar la escena ni liberar esos Resources. Una propiedad de escena que ya
+apuntaba al objeto anterior no se reasigna automáticamente: para que un nivel
+abierto consuma el rebake, recarga o reasigna el manifest en esa propiedad.
+Cambiar `coast_id` crea, en cambio, una variante independiente.
 
 ## Migrar a Water Race
 

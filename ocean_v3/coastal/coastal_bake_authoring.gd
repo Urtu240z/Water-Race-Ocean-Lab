@@ -185,28 +185,54 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 		push_error("CoastalBakeAuthoring: el manifest no supera la validación de grid.")
 		return null
 
+	return _persist_canonical_asset(asset, bathymetry, propagation, warp, safe_id)
+
+
+func _persist_canonical_asset(asset: CoastalBakeAsset, bathymetry: BathymetryData, propagation: CoastalPropagationData, warp: CoastalWarpData, safe_id: String) -> CoastalBakeAsset:
+	# Todo el bake y toda la validación ocurren antes de entrar aquí. Por tanto,
+	# un fallo de authoring anterior a esta fase no toca el asset ya publicado.
+	# La ruta canónica se toma explícitamente antes de guardar: esto sustituye el
+	# owner de ResourceCache y evita que FLAG_CHANGE_PATH deje un owner anterior
+	# asociado al mismo path durante un rebake en el mismo proceso.
 	var output_dir := "%s/%s" % [OUTPUT_ROOT, safe_id]
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(output_dir))
 	var bathymetry_path := "%s/bathymetry.res" % output_dir
 	var propagation_path := "%s/propagation.res" % output_dir
 	var warp_path := "%s/warp.res" % output_dir
 	var asset_path := "%s/coastal_bake.tres" % output_dir
-	# Asigna el resource_path antes de serializar el manifest para que el .tres
-	# conserve referencias ext_resource y no embeba los arrays grandes.
-	bathymetry.resource_path = bathymetry_path
-	propagation.resource_path = propagation_path
-	warp.resource_path = warp_path
-	for resource_pair in [[bathymetry, bathymetry_path], [propagation, propagation_path], [warp, warp_path]]:
-		var save_error: Error = ResourceSaver.save(resource_pair[0], resource_pair[1], ResourceSaver.FLAG_CHANGE_PATH)
-		if save_error != OK:
-			push_error("CoastalBakeAuthoring: no se pudo guardar %s (error %d)." % [resource_pair[1], save_error])
-			return null
-	var error: Error = ResourceSaver.save(asset, asset_path)
-	if error != OK:
-		push_error("CoastalBakeAuthoring: no se pudo guardar %s (error %d)." % [asset_path, error])
+	if FileAccess.file_exists(asset_path):
+		print("COASTAL ASSET: replacing existing canonical resources...")
+
+	# Los paths de los hijos hacen que ResourceSaver serialice ext_resource en el
+	# manifest; los arrays grandes no quedan embebidos dentro del .tres.
+	if not _take_over_and_save(bathymetry, bathymetry_path):
+		return null
+	if not _take_over_and_save(propagation, propagation_path):
+		return null
+	if not _take_over_and_save(warp, warp_path):
+		return null
+	if not _take_over_and_save(asset, asset_path):
+		return null
+
+	# CACHE_MODE_REUSE debe devolver exactamente la representación canónica que
+	# acabamos de publicar (normalmente el propio asset tras take_over_path).
+	var canonical := ResourceLoader.load(asset_path, "", ResourceLoader.CACHE_MODE_REUSE) as CoastalBakeAsset
+	if canonical == null or not canonical.is_valid():
+		push_error("CoastalBakeAuthoring: el asset publicado no se puede recargar desde %s." % asset_path)
 		return null
 	print("COASTAL ASSET: saved %s" % asset_path)
-	return asset
+	return canonical
+
+
+func _take_over_and_save(resource: Resource, path: String) -> bool:
+	resource.take_over_path(path)
+	# No usamos FLAG_CHANGE_PATH: el owner ya fue sustituido de forma explícita.
+	# ResourceSaver.save sólo serializa el Resource que ahora posee la ruta.
+	var error: Error = ResourceSaver.save(resource, path)
+	if error != OK:
+		push_error("CoastalBakeAuthoring: no se pudo guardar %s (error %d)." % [path, error])
+		return false
+	return true
 
 
 func _sanitize_coast_id(value: String) -> String:
