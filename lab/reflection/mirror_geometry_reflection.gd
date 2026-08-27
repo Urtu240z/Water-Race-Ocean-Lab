@@ -27,6 +27,7 @@ var _pending_view_projection := Projection()
 var _capture_pending := false
 var _initialized := false
 var _source_mesh_count := 0
+var _reflection_mesh_cache: Dictionary = {}
 
 
 func _ready() -> void:
@@ -112,6 +113,7 @@ func _create_reflection_world() -> void:
 
 func _clone_static_geometry() -> void:
 	_source_mesh_count = 0
+	_reflection_mesh_cache.clear()
 	if _source_root == null or _mirror_geometry_root == null:
 		return
 	var source_meshes := _source_root.find_children("*", "MeshInstance3D", true, false)
@@ -121,7 +123,7 @@ func _clone_static_geometry() -> void:
 			continue
 		var reflection_mesh := MeshInstance3D.new()
 		reflection_mesh.name = "%s_Mirror" % source_mesh.name
-		reflection_mesh.mesh = source_mesh.mesh
+		reflection_mesh.mesh = _get_reflection_mesh(source_mesh.mesh)
 		reflection_mesh.transform = _mirrored_transform(source_mesh.global_transform)
 		reflection_mesh.layers = MIRROR_LAYER_MASK
 		reflection_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -132,6 +134,101 @@ func _clone_static_geometry() -> void:
 			reflection_mesh.set_surface_override_material(surface_index, _create_reflection_material(source_material))
 		_mirror_geometry_root.add_child(reflection_mesh)
 		_source_mesh_count += 1
+
+
+func _get_reflection_mesh(source_mesh: Mesh) -> Mesh:
+	if _reflection_mesh_cache.has(source_mesh):
+		return _reflection_mesh_cache[source_mesh] as Mesh
+	var reflection_mesh := _build_reversed_winding_mesh(source_mesh)
+	_reflection_mesh_cache[source_mesh] = reflection_mesh
+	return reflection_mesh
+
+
+func _build_reversed_winding_mesh(source_mesh: Mesh) -> Mesh:
+	var source_array_mesh := source_mesh as ArrayMesh
+	if source_array_mesh == null:
+		push_warning("LabMirrorGeometryReflection: source mesh is not an ArrayMesh; keeping its topology.")
+		return source_mesh
+	var reflection_mesh := ArrayMesh.new()
+	reflection_mesh.resource_name = "%s_MirrorWinding" % source_array_mesh.resource_name if source_array_mesh.resource_name != "" else "MirrorWinding"
+	for surface_index in range(source_array_mesh.get_surface_count()):
+		var primitive_type: int = source_array_mesh.surface_get_primitive_type(surface_index)
+		var surface_arrays: Array = source_array_mesh.surface_get_arrays(surface_index).duplicate()
+		if primitive_type == Mesh.PRIMITIVE_TRIANGLES:
+			_reverse_triangle_winding(surface_arrays)
+		else:
+			push_warning("LabMirrorGeometryReflection: unsupported primitive %d on surface %d; topology kept." % [primitive_type, surface_index])
+		reflection_mesh.add_surface_from_arrays(primitive_type, surface_arrays)
+		reflection_mesh.surface_set_name(surface_index, source_array_mesh.surface_get_name(surface_index))
+	return reflection_mesh
+
+
+func _reverse_triangle_winding(surface_arrays: Array) -> void:
+	var index_value: Variant = surface_arrays[Mesh.ARRAY_INDEX]
+	if index_value is PackedInt32Array:
+		var indices: PackedInt32Array = (index_value as PackedInt32Array).duplicate()
+		if indices.size() % 3 != 0:
+			push_warning("LabMirrorGeometryReflection: indexed triangle surface has incomplete final triangle; topology kept.")
+			return
+		for triangle_start in range(0, indices.size(), 3):
+			var second_index := indices[triangle_start + 1]
+			indices[triangle_start + 1] = indices[triangle_start + 2]
+			indices[triangle_start + 2] = second_index
+		surface_arrays[Mesh.ARRAY_INDEX] = indices
+		return
+
+	var vertex_value: Variant = surface_arrays[Mesh.ARRAY_VERTEX]
+	if not vertex_value is PackedVector3Array:
+		return
+	var vertex_count := (vertex_value as PackedVector3Array).size()
+	if vertex_count % 3 != 0:
+		push_warning("LabMirrorGeometryReflection: non-indexed triangle surface has incomplete final triangle; topology kept.")
+		return
+	for array_index in range(Mesh.ARRAY_INDEX):
+		var attribute: Variant = surface_arrays[array_index]
+		if attribute == null:
+			continue
+		var stride := _attribute_stride(attribute, array_index, vertex_count)
+		if stride <= 0 or _attribute_size(attribute) < vertex_count * stride:
+			continue
+		var reordered: Variant = attribute.duplicate()
+		for triangle_start in range(0, vertex_count, 3):
+			_copy_attribute_entry(reordered, triangle_start + 1, attribute, triangle_start + 2, stride)
+			_copy_attribute_entry(reordered, triangle_start + 2, attribute, triangle_start + 1, stride)
+		surface_arrays[array_index] = reordered
+
+
+func _attribute_stride(attribute: Variant, array_index: int, vertex_count: int) -> int:
+	if attribute is PackedFloat32Array and (array_index == Mesh.ARRAY_TANGENT or array_index == Mesh.ARRAY_WEIGHTS):
+		return 4
+	if attribute is PackedInt32Array and array_index == Mesh.ARRAY_BONES:
+		return 4
+	if attribute is PackedByteArray and _attribute_size(attribute) == vertex_count * 4:
+		return 4
+	return 1
+
+
+func _attribute_size(attribute: Variant) -> int:
+	if attribute is PackedByteArray:
+		return (attribute as PackedByteArray).size()
+	if attribute is PackedInt32Array:
+		return (attribute as PackedInt32Array).size()
+	if attribute is PackedFloat32Array:
+		return (attribute as PackedFloat32Array).size()
+	if attribute is PackedVector2Array:
+		return (attribute as PackedVector2Array).size()
+	if attribute is PackedVector3Array:
+		return (attribute as PackedVector3Array).size()
+	if attribute is PackedVector4Array:
+		return (attribute as PackedVector4Array).size()
+	if attribute is PackedColorArray:
+		return (attribute as PackedColorArray).size()
+	return 0
+
+
+func _copy_attribute_entry(destination: Variant, destination_entry: int, source: Variant, source_entry: int, stride: int) -> void:
+	for component in range(stride):
+		destination[destination_entry * stride + component] = source[source_entry * stride + component]
 
 
 func _create_reflection_material(source_material: Material) -> ShaderMaterial:
