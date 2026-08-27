@@ -25,7 +25,6 @@ func _ready() -> void:
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
-	_create_lab_reflection_probe()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
 	_update_coastal_hud()
 
@@ -129,20 +128,6 @@ func _create_demo_sea_state_zone() -> void:
 	_demo_sea_state_zone.priority = 0
 	add_child(_demo_sea_state_zone)
 	ocean_v3.register_sea_state_zone(_demo_sea_state_zone)
-
-
-func _create_lab_reflection_probe() -> void:
-	# LAB-only validation aid. Production OceanV3 never creates or requires a
-	# probe; scenes remain free to author their own standard ReflectionProbes.
-	if not find_children("*", "ReflectionProbe", true, false).is_empty():
-		return
-	var probe := ReflectionProbe.new()
-	probe.name = "LabReflectionProbe"
-	probe.position = Vector3(550.0, 0.0, -600.0)
-	probe.size = Vector3(1400.0, 160.0, 1400.0)
-	probe.box_projection = true
-	probe.update_mode = ReflectionProbe.UPDATE_ONCE
-	add_child(probe)
 
 
 func _update_coastal_hud() -> void:
