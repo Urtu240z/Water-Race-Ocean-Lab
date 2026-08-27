@@ -14,6 +14,7 @@
 [ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
 [ext_resource type="Script" uid="uid://7pdvubhcohwk" path="res://ocean_v3/bathymetry/bathymetry_baker.gd" id="13_vvhv5"]
 [ext_resource type="Script" uid="uid://b4apva6qruumm" path="res://ocean_v3/coastal/coastal_eikonal_preview_baker.gd" id="14_bk4pj"]
+[ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_5myqe"]
 panorama = ExtResource("2_mi5lw")
@@ -176,10 +177,13 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 591.20557, -6.093811, -741.18
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 527.7775, 1.2421999, -593.01697)
 
 [node name="paradise_island" parent="." unique_id=2062542373 instance=ExtResource("9_73jaq")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, -7.8204727, -506.55515)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, 5.30381, -506.55515)
 
 [node name="Terrain_Master_VIS" parent="paradise_island" index="0" unique_id=2078926670]
 surface_material_override/0 = SubResource("StandardMaterial3D_bk4pj")
+
+[node name="Cabana_4_COL" parent="paradise_island" index="19" unique_id=1115929881]
+transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0, 1.3555894, 214.78558, -7.2204156, 331.6032)
 
 [node name="BathymetryBaker" type="Node" parent="." unique_id=1750152088 node_paths=PackedStringArray("source_root")]
 script = ExtResource("13_vvhv5")
@@ -188,10 +192,21 @@ source_root = NodePath("../paradise_island")
 [node name="CoastalEikonalPreviewBaker" type="Node" parent="." unique_id=191422184 node_paths=PackedStringArray("bathymetry_baker")]
 script = ExtResource("14_bk4pj")
 bathymetry_baker = NodePath("../BathymetryBaker")
-cut_locus_blend_radius_m = 32.0
 cut_locus_blend_passes = 24
 cut_locus_blend_strength = 0.65
-preview_mode = 2
+preview_mode = 7
 bake_state = 4
+
+[node name="OceanSeaStateZone3D" type="Node3D" parent="." unique_id=1747485942]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 573.061, 24.53561, 1461.6362)
+script = ExtResource("15_ody2a")
+box_size_m = Vector2(519.99963, 600)
+feather_distance_m = 96.865234
+long_amplitude_multiplier = 0.12
+mid_amplitude_multiplier = 1.16
+short_amplitude_multiplier = 0.0
+choppiness_multiplier = 2.0
+foam_generation_multiplier = 0.0
+metadata/_custom_type_script = "uid://didnedvqjuvg1"
 
 [editable path="paradise_island"]
