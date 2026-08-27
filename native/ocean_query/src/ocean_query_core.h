@@ -202,6 +202,10 @@ public:
     // Igual que sample_world pero asume ensure_prepared ya llamado.
     void sample_prepared(double wx, double wz, double *out) { sample_prepared_(wx, wz, out); }
 
+    void accumulate_breaker_long_height_(double qx, double qz, double &h) const;
+    void accumulate_breaker_long_slope_(double qx, double qz, double &h,
+                                        double &dhx, double &dhz) const;
+
     // Batch: evalúa n posiciones; out debe tener n*S_STRIDE doubles.
     // Producción: dispatch AVX2 si está disponible; scalar siempre fallback.
     void sample_batch_prepared(const double *positions_xz, size_t n, double *out);
@@ -259,8 +263,6 @@ private:
     void sample_prepared_(double wx, double wz, double *out);
     double band_height_(size_t band_index, double qx, double qz) const;
     void apply_crest_sharpen_(double qx, double qz, double &h, double &dx, double &dz) const;
-    void accumulate_breaker_long_(double qx, double qz, double &h,
-                                  double &dhx, double &dhz) const;
     void finite_jacobian_(double qx, double qz, double &ja, double &jb, double &jc, double &jd);
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);

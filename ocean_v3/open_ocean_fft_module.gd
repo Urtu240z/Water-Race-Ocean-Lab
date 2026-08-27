@@ -11,6 +11,7 @@ const SurfaceFoamSolverScript := preload("res://ocean_v3/rendering/fft/surface_f
 const SurfaceFoamMidHistorySolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_mid_history_solver.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
+const SeaStateZoneMathScript := preload("res://ocean_v3/core/sea_state_zone_math.gd")
 const QueryReferenceScript := preload("res://ocean_v3/physics/ocean_query_reference.gd")
 const QueryReducedScript := preload("res://ocean_v3/physics/ocean_query_reduced.gd")
 const QuerySampleScript := preload("res://ocean_v3/physics/ocean_query_sample.gd")
@@ -827,7 +828,7 @@ func _apply_spectrum_model() -> void:
 func sample_water(world_position: Vector3, simulation_time: float):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		return _native_to_sample(_query_native.sample_world(world_position.x, world_position.z, simulation_time))
 	if _query_reduced != null:
 		return _query_reduced.sample_water(world_position, simulation_time)
@@ -837,7 +838,7 @@ func sample_water(world_position: Vector3, simulation_time: float):
 func sample_water_physics_time(world_position: Vector3):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		_query_native.ensure_prepared(SimulationClock.simulation_time)
 		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
 	if _query_reduced != null:
@@ -854,7 +855,7 @@ func sample_water_batch_physics_time(positions: Array[Vector3]) -> Array:
 		for index in positions.size():
 			flat_result[index] = flat
 		return flat_result
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		_query_native.ensure_prepared(SimulationClock.simulation_time)
 		var packed := PackedVector3Array()
 		packed.resize(positions.size())
@@ -883,7 +884,7 @@ func sample_water_batch_at_time(positions: Array[Vector3], simulation_time: floa
 		for index in positions.size():
 			flat_result[index] = flat
 		return flat_result
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		_query_native.ensure_prepared(simulation_time)
 		var packed := PackedVector3Array()
 		packed.resize(positions.size())
@@ -907,7 +908,7 @@ func sample_coastal_breaker_heights_batch_at_time(positions: Array[Vector3], sim
 	## igual que el dominio donde el renderer aplica CoastalWarp.
 	if not _enabled or _query_reduced == null:
 		return _breaker_invalid_results(positions.size())
-	if _native_query_can_sample_coastal() and _query_native.has_method(&"prepare_breaker_time"):
+	if _native_query_can_sample_breaker():
 		return _sample_native_breaker_batch(positions, simulation_time, false)
 	_query_reduced.prepare_breaker_time(simulation_time)
 	return _query_reduced.sample_coastal_breaker_heights_prepared(positions)
@@ -918,7 +919,7 @@ func sample_coastal_breaker_slopes_batch_at_time(positions: Array[Vector3], simu
 	## para los candidatos ya seleccionados (no para las siete muestras del perfil).
 	if not _enabled or _query_reduced == null:
 		return _breaker_invalid_results(positions.size())
-	if _native_query_can_sample_coastal() and _query_native.has_method(&"prepare_breaker_time"):
+	if _native_query_can_sample_breaker():
 		return _sample_native_breaker_batch(positions, simulation_time, true)
 	_query_reduced.prepare_breaker_time(simulation_time)
 	return _query_reduced.sample_coastal_breaker_slopes_prepared(positions)
@@ -935,7 +936,7 @@ func _sample_native_breaker_batch(positions: Array[Vector3], simulation_time: fl
 	result.resize(positions.size())
 	for index in positions.size():
 		result[index] = _native_to_sample(out, index)
-	return result
+	return _apply_breaker_zone_postprocess(result, positions, include_slope)
 
 
 func _breaker_invalid_results(count: int) -> Array:
@@ -947,7 +948,7 @@ func _breaker_invalid_results(count: int) -> Array:
 
 
 func prepare_query_time(simulation_time: float) -> void:
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		_query_native.ensure_prepared(simulation_time)
 	if _query_reduced != null:
 		_query_reduced.prepare_time(simulation_time)
@@ -958,7 +959,7 @@ func prepare_query_time(simulation_time: float) -> void:
 func sample_water_prepared(world_position: Vector3):
 	if not _enabled:
 		return QuerySampleScript.flat(surface.clipmap_config.sea_level_y)
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		return _native_to_sample(_query_native.sample_prepared(world_position.x, world_position.z))
 	if _query_reduced != null:
 		return _query_reduced.sample_water_prepared(world_position)
@@ -988,15 +989,54 @@ func sample_water_golden_prepared(world_position: Vector3):
 
 
 func query_backend_name() -> String:
-	if _native_query_can_sample_coastal():
+	if _native_query_can_sample_full():
 		return "NATIVE"
 	return "REDUCED_GDSCRIPT"
 
 
+func query_backend_reason() -> String:
+	if _native_query_can_sample_full():
+		return "NATIVE"
+	if _wave_transition_active:
+		return "WAVE_TRANSITION"
+	if not _sea_state_zone_descriptors.is_empty():
+		return "SEA_STATE_ZONE_FULL_QUERY"
+	if _query_native == null:
+		return "NATIVE_INSTANCE_MISSING"
+	if _query_reduced != null and _query_reduced.coastal_enabled() and not _query_native.has_method(&"set_coastal_runtime"):
+		return "NATIVE_METHOD_MISSING:set_coastal_runtime"
+	return "NATIVE_FULL_GATE_FALSE"
+
+
+func breaker_query_backend_name() -> String:
+	if _native_query_can_sample_breaker():
+		return "NATIVE+ZONE_POSTPROCESS" if not _sea_state_zone_descriptors.is_empty() else "NATIVE"
+	return "REDUCED_GDSCRIPT"
+
+
+func breaker_query_backend_reason() -> String:
+	if not _enabled:
+		return "MODULE_DISABLED"
+	if _query_native == null:
+		return "NATIVE_INSTANCE_MISSING"
+	if not _query_native.has_method(&"prepare_breaker_time"):
+		return "NATIVE_METHOD_MISSING:prepare_breaker_time"
+	if not _query_native.has_method(&"sample_coastal_breaker_batch_prepared"):
+		return "NATIVE_METHOD_MISSING:sample_coastal_breaker_batch_prepared"
+	if _query_reduced == null or not _query_reduced.coastal_enabled():
+		return "COASTAL_RUNTIME_MISSING"
+	if not _query_native.has_method(&"set_coastal_runtime"):
+		return "NATIVE_METHOD_MISSING:set_coastal_runtime"
+	if _wave_transition_active:
+		return "WAVE_TRANSITION_PENDING_NATIVE_ENDPOINT"
+	if not _sea_state_zone_descriptors.is_empty():
+		return "NATIVE+ZONE_POSTPROCESS"
+	return "NATIVE"
+
+
 func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
-	# Native OceanQuery has no spatial zone inputs. Keep it available for the
-	# global/open path, but route local-zone samples through the exact reduced
-	# evaluator that applies the same post-coastal scale and derivatives.
+	# Breaker queries remain Native; zones are a cheap LONG amplitude/gradient
+	# postprocess in GDScript. The full physical query keeps its stricter gate.
 	_sea_state_zone_descriptors = descriptors.duplicate()
 	if _query_reduced != null:
 		_query_reduced.set_sea_state_zones(_sea_state_zone_descriptors)
@@ -1004,9 +1044,10 @@ func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
 		_breaker_pool.set_sea_state_zones(_sea_state_zone_descriptors)
 
 
-func _native_query_can_sample_coastal() -> bool:
-	# The native backend currently receives one compact H0 set. During a global
-	# transition REDUCED evaluates the same dual-H0 alpha as the GPU instead.
+func _native_query_can_sample_full() -> bool:
+	# The full physical query currently receives one compact H0 set. During a
+	# global transition or spatial zone evaluation REDUCED preserves exact dual
+	# endpoint/zone semantics.
 	if _wave_transition_active:
 		return false
 	if not _sea_state_zone_descriptors.is_empty():
@@ -1019,6 +1060,70 @@ func _native_query_can_sample_coastal() -> bool:
 	if _query_reduced == null or not _query_reduced.coastal_enabled():
 		return true
 	return _query_native.has_method(&"set_coastal_runtime")
+
+
+func _native_query_can_sample_breaker() -> bool:
+	# Breaker detection has its own Native capability gate. It is LONG-only,
+	# height/slope-only and must not inherit the full OceanQuery restrictions.
+	if not _enabled or _wave_transition_active or _query_native == null or _query_reduced == null:
+		return false
+	if not _query_native.has_method(&"prepare_breaker_time"):
+		return false
+	if not _query_native.has_method(&"sample_coastal_breaker_batch_prepared"):
+		return false
+	if not _query_reduced.coastal_enabled():
+		return false
+	return _query_native.has_method(&"set_coastal_runtime")
+
+
+func _apply_breaker_zone_postprocess(samples: Array, positions: Array[Vector3], include_slope: bool) -> Array:
+	if _sea_state_zone_descriptors.is_empty():
+		return samples
+	var sea_level: float = surface.clipmap_config.sea_level_y
+	for index in samples.size():
+		var sample = samples[index]
+		if sample == null or not sample.valid:
+			continue
+		var zone_state := _breaker_zone_long_state(Vector2(positions[index].x, positions[index].z))
+		var base_h: float = sample.height - sea_level
+		sample.height = sea_level + base_h * zone_state.x
+		if include_slope:
+			var base_dhx := 0.0
+			var base_dhz := 0.0
+			if absf(sample.normal.y) > 1.0e-6:
+				base_dhx = -sample.normal.x / sample.normal.y
+				base_dhz = -sample.normal.z / sample.normal.y
+			var dhx: float = zone_state.x * base_dhx + base_h * zone_state.y
+			var dhz: float = zone_state.x * base_dhz + base_h * zone_state.z
+			var normal := Vector3(-dhx, 1.0, -dhz)
+			sample.normal = normal.normalized() if normal.length_squared() > 1.0e-8 else Vector3.UP
+	return samples
+
+
+func _breaker_zone_long_state(point: Vector2) -> Vector3:
+	var long_amplitude := 1.0
+	var grad_x := 0.0
+	var grad_z := 0.0
+	for descriptor in _sea_state_zone_descriptors:
+		var sdf_weight := SeaStateZoneMathScript.weight_and_gradient(
+			point,
+			Vector2(descriptor.get("center", Vector2.ZERO)),
+			Vector2(descriptor.get("axis", Vector2.RIGHT)),
+			Vector2(descriptor.get("half_extents", Vector2.ZERO)),
+			float(descriptor.get("feather", 0.0))
+		)
+		var blend_weight := clampf(sdf_weight.x * clampf(float(descriptor.get("strength", 1.0)), 0.0, 1.0), 0.0, 1.0)
+		if blend_weight <= 0.0:
+			continue
+		var strength := clampf(float(descriptor.get("strength", 1.0)), 0.0, 1.0)
+		var grad_weight_x := sdf_weight.y * strength
+		var grad_weight_z := sdf_weight.z * strength
+		var target: Vector4 = descriptor.get("target", Vector4.ONE)
+		var old_long := long_amplitude
+		long_amplitude = lerpf(old_long, target.x, blend_weight)
+		grad_x = grad_x * (1.0 - blend_weight) + (target.x - old_long) * grad_weight_x
+		grad_z = grad_z * (1.0 - blend_weight) + (target.x - old_long) * grad_weight_z
+	return Vector3(long_amplitude, grad_x, grad_z)
 
 
 func _try_create_native_backend():

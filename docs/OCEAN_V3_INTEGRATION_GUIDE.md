@@ -53,7 +53,9 @@ batch general de `OceanQuery`, no hace Newton/Jacobiano/velocidad y no evalúa
 MID/SHORT. La batch general sigue siendo la ruta de física, probes y cualquier
 integración externa que necesite la superficie completa. Si la DLL Native
 compatible está disponible, el mismo contrato se ejecuta en C++; en transiciones
-o con zonas locales se usa el fallback reducido determinista.
+o con zonas locales se mantiene Native con el postprocess local de zona; una
+transición global puede suspender temporalmente el muestreo pendiente hasta
+instalar el endpoint preparado.
 
 La costa puede controlarse mediante la API pública de OceanV3:
 

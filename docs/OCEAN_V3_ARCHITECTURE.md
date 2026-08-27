@@ -163,9 +163,19 @@ The backend policy is exact and intentional:
 1. Native is used when the Windows GDExtension is registered, there is no
    active global transition, there are no active local zones, and the native
    object can represent the current Coastal path.
-2. Reduced GDScript is used during global transitions and whenever local
-   zones are active. It is also the fallback when Native is unavailable.
+2. Reduced GDScript is used for the full physical query during global
+   transitions and whenever local zones are active. It is also the fallback
+   when Native is unavailable.
 3. Golden Reference is opt-in debug/test only (`enable_reference_query_debug`).
+
+Breaker detection has its own Native capability gate and must not inherit
+fallback restrictions from the full physical OceanQuery. Its LONG-only
+height/slope batch remains Native when zones are active; zones apply a cheap
+GDScript amplitude/gradient postprocess and must not force spectral breaker
+evaluation back to GDScript. During a global transition, breaker sampling is
+temporarily suspended while the prepared endpoint is pending, so the old
+ribbons remain procedural and the Reduced 30 ms path is not scheduled on a
+frame.
 
 The `band_debug` view, clipmap fades, and quality profile do not change the
 three-band physical query. When OceanV3 is disabled, query methods return a
@@ -195,9 +205,9 @@ conservation. Treat Coastal as a feature to validate for the level's baked
 data, not as a universal requirement.
 
 The same valid warp is passed to Reduced Query, where it modifies the
-parametric evaluation. Native can use the Coastal data only when its compiled
-extension exposes the Coastal runtime methods; local zones and transitions
-still force Reduced.
+parametric evaluation. Native full-query use requires its Coastal runtime
+method, while Native breaker use additionally requires
+`prepare_breaker_time` and `sample_coastal_breaker_batch_prepared`.
 
 ## Foam
 

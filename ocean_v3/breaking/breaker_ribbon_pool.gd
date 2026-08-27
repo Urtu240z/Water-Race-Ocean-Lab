@@ -573,9 +573,13 @@ func _update_tracking() -> void:
 	var render_time: float = SimulationClock.get_render_time()
 	_last_track_time = render_time
 	_update_active_slots(render_time)
-	if _wave_transition_active:
-		_update_active_crest_tracking(render_time)
 	_update_cooldown_slots(render_time)
+	# A spectrum transition is a pending endpoint operation for breaker queries.
+	# Keep existing ribbons procedural and defer both crest re-sampling and DETECT
+	# until the new endpoint is installed; never put the 30 ms Reduced LONG path
+	# on the frame scheduler during a transition.
+	if _wave_transition_active:
+		return
 	if render_time < _next_detector_time:
 		return
 	_run_detector_tick(render_time)
@@ -710,6 +714,10 @@ func _run_detector_tick(render_time: float) -> void:
 	_detector_slope_points_last_tick = 0
 	_detector_query_elapsed_ms_last_tick = 0.0
 	var total_anchors := _anchors.size()
+	if total_anchors == 0:
+		_detector_queried_slots_last_tick = 0
+		_detector_queried_points_last_tick = 0
+		return
 	var selected: Array[int] = []
 	var inspected := 0
 	var cursor := _detector_cursor

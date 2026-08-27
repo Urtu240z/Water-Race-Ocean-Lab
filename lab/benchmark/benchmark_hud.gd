@@ -34,9 +34,10 @@ func _process(_delta: float) -> void:
 			fft_module.ocean_normal_fragment_name() if fft_module else "unavailable",
 		],
 		_hs_line(fft_module),
-		"Query probes: %s | Query backend: %s" % [
+		"Query probes: %s | Query backend: %s [%s]" % [
 			"ON" if _probe_tool_enabled() else "OFF",
 			fft_module.query_backend_name() if fft_module else "unavailable",
+			fft_module.query_backend_reason() if fft_module and fft_module.has_method(&"query_backend_reason") else "unavailable",
 		],
 		"FPS: %d | Frame: %.2f ms" % [fps, frame_time_ms],
 		"CPU process: %.2f ms | Physics: %.2f ms" % [
@@ -184,7 +185,11 @@ func _breaker_line(fft_module) -> String:
 	var diagnostics: Dictionary = fft_module.breaker_pool_summary()
 	if diagnostics.is_empty():
 		return "Breaker Ribbons: unavailable"
-	return "Breaker Ribbons: %s | Breakers: TRANS %s %.2f | anchors %d | active %d | track %d/%d" % [
+	var breaker_backend: String = fft_module.breaker_query_backend_name() if fft_module.has_method(&"breaker_query_backend_name") else "unavailable"
+	var breaker_reason: String = fft_module.breaker_query_backend_reason() if fft_module.has_method(&"breaker_query_backend_reason") else "unavailable"
+	return "Breaker Query: %s [%s] | Ribbons: %s | TRANS %s %.2f | anchors %d | active %d | track %d/%d" % [
+		breaker_backend,
+		breaker_reason,
 		"ON" if fft_module.breaker_ribbons_diagnostic_visible() else "OFF",
 		"ON" if bool(diagnostics.get("transition_active", false)) else "OFF",
 		float(diagnostics.get("transition_alpha", 0.0)),

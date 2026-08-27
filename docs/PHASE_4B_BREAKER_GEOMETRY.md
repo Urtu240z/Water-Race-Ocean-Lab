@@ -168,8 +168,12 @@ paramétrico que usa el renderer para aplicar CoastalWarp.
 
 Cuando está disponible una DLL Native compatible, el módulo usa el mismo
 contrato LONG-only en C++ (incluida una preparación temporal sólo de LONG).
-Durante transiciones o con zonas locales se conserva el fallback GDScript
-reducido, que aplica exactamente la misma fórmula y los mismos datos.
+El gate Native del breaker es independiente del gate de la query física
+completa: una Sea State Zone sólo añade un postprocess barato de amplitud y
+gradiente en GDScript, sin repetir la evaluación espectral. Durante una
+transición global se suspenden temporalmente el DETECT y el crest tracking
+pendiente; los ribbons existentes siguen procedurales y la query Reduced de
+30 ms no entra en el frame.
 
 Antes, cada slot DETECT consumía siete muestras de la batch completa; con el
 scheduler actual eran hasta 14 puntos por tick y cada punto podía recorrer las

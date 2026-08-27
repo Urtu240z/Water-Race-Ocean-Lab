@@ -18,11 +18,16 @@ var _failures := 0
 func _initialize() -> void:
 	_validate_wiring_contract()
 	var query = _make_query()
+	var native = null
+	if ClassDB.class_exists(&"OceanQueryNative"):
+		native = ClassDB.instantiate(&"OceanQueryNative")
+		query.configure_native_backend(native)
 	var coastal := _bake_coastal()
 	query.configure_coastal(coastal.warp, coastal.propagation, 20.0, 35.0, Vector2(1.0, 0.15).normalized())
 	_validate_preparation_contract(query)
 	_validate_samples(query)
 	_validate_repeatability(query)
+	_validate_native_specialized(query, native)
 	if _failures == 0:
 		print("PHASE_BREAKER_SPECIALIZED_QUERY: PASS")
 		quit(0)
@@ -129,6 +134,35 @@ func _validate_repeatability(query) -> void:
 		max_delta = maxf(max_delta, absf(first[index].height - second[index].height))
 	print("BREAKER SPECIALIZED samples=%d max_repeat_height_delta=%.9f long_pairs=%d" % [positions.size(), max_delta, query.selected_pair_counts()[0]])
 	_check(max_delta == 0.0, "misma seed/H0/tiempo produce altura idéntica")
+
+
+func _validate_native_specialized(query, native) -> void:
+	if native == null:
+		print("NATIVE BREAKER: SKIP (OceanQueryNative no disponible)")
+		return
+	_check(native.has_method(&"prepare_breaker_time"), "DLL expone prepare_breaker_time")
+	_check(native.has_method(&"sample_coastal_breaker_batch_prepared"), "DLL expone batch breaker especializado")
+	_check(native.has_method(&"set_coastal_runtime"), "DLL expone set_coastal_runtime para breakers")
+	if not native.has_method(&"sample_coastal_breaker_batch_prepared"):
+		return
+	var positions: PackedVector3Array = [Vector3(-5.0, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), Vector3(8.0, 0.0, 2.0)]
+	native.prepare_breaker_time(TIME)
+	var native_heights: PackedFloat64Array = native.sample_coastal_breaker_batch_prepared(positions, false)
+	var native_slopes: PackedFloat64Array = native.sample_coastal_breaker_batch_prepared(positions, true)
+	var reduced_heights = query.sample_coastal_breaker_heights_prepared(positions)
+	var reduced_slopes = query.sample_coastal_breaker_slopes_prepared(positions)
+	var max_height_delta := 0.0
+	var max_slope_delta := 0.0
+	for index in positions.size():
+		max_height_delta = maxf(max_height_delta, absf(native_heights[index * 15 + 1] - reduced_heights[index].height))
+		for field in [5, 6, 7]:
+			var reduced_normal: float = [reduced_slopes[index].normal.x, reduced_slopes[index].normal.y, reduced_slopes[index].normal.z][field - 5]
+			max_slope_delta = maxf(max_slope_delta, absf(native_slopes[index * 15 + field] - reduced_normal))
+	_check(max_height_delta < 2.0e-7, "Native breaker height == Reduced especializado")
+	_check(max_slope_delta < 2.0e-7, "Native breaker slope == Reduced especializado")
+	_check(native_heights[6] == 1.0, "Native height-only conserva normal UP")
+	var pair_counts: PackedInt64Array = native.get_coastal_pair_counts()
+	print("BREAKER NATIVE pairs_nonzero=%d total=%d height_delta=%.9f slope_delta=%.9f" % [pair_counts[0], pair_counts[1], max_height_delta, max_slope_delta])
 
 
 func _check(condition: bool, label: String) -> void:

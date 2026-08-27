@@ -269,22 +269,47 @@ void OceanQueryCore::ensure_breaker_prepared(double simulation_time) {
         c.ev_b_h_re[idx] = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw;
         c.ev_b_h_im[idx] = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
     }
+    // Breaker sampling only visits the exact non-zero coastal support. Build
+    // the A/B coastal combination once per time; the point hot path then only
+    // evaluates phi/sin/cos and the requested height or slope terms.
+    for (size_t idx : c.coastal_nonzero_indices) {
+        c.ev_coastal_h_re[idx] = c.coastal_weight_pos[idx] * c.ev_a_h_re[idx] +
+                                 c.coastal_weight_neg[idx] * c.ev_b_h_re[idx];
+        c.ev_coastal_h_im[idx] = c.coastal_weight_pos[idx] * c.ev_a_h_im[idx] +
+                                 c.coastal_weight_neg[idx] * c.ev_b_h_im[idx];
+    }
     breaker_prepared_time = simulation_time;
     breaker_prepared_valid = true;
 }
 
-void OceanQueryCore::accumulate_breaker_long_(double qx, double qz, double &h,
-                                               double &dhx, double &dhz) const {
+void OceanQueryCore::accumulate_breaker_long_height_(double qx, double qz, double &h) const {
+    h = 0.0;
+    if (cascades.empty()) {
+        return;
+    }
+    const Cascade &c = cascades[0];
+    for (size_t idx : c.coastal_nonzero_indices) {
+        const double h_re = c.ev_coastal_h_re[idx];
+        const double h_im = c.ev_coastal_h_im[idx];
+        const double phi = c.kx[idx] * qx + c.ky[idx] * qz;
+        const double cp = std::cos(phi);
+        const double sp = std::sin(phi);
+        const double sig = c.parity[idx] * c.weight[idx];
+        h += sig * (h_re * cp - h_im * sp);
+    }
+    h *= c.inv_n2;
+}
+
+void OceanQueryCore::accumulate_breaker_long_slope_(double qx, double qz, double &h,
+                                                     double &dhx, double &dhz) const {
     h = dhx = dhz = 0.0;
     if (cascades.empty()) {
         return;
     }
     const Cascade &c = cascades[0];
-    for (size_t idx = 0; idx < c.kx.size(); ++idx) {
-        const double h_re = c.coastal_weight_pos[idx] * c.ev_a_h_re[idx] +
-                            c.coastal_weight_neg[idx] * c.ev_b_h_re[idx];
-        const double h_im = c.coastal_weight_pos[idx] * c.ev_a_h_im[idx] +
-                            c.coastal_weight_neg[idx] * c.ev_b_h_im[idx];
+    for (size_t idx : c.coastal_nonzero_indices) {
+        const double h_re = c.ev_coastal_h_re[idx];
+        const double h_im = c.ev_coastal_h_im[idx];
         const double phi = c.kx[idx] * qx + c.ky[idx] * qz;
         const double cp = std::cos(phi);
         const double sp = std::sin(phi);
@@ -318,18 +343,28 @@ void OceanQueryCore::sample_coastal_breaker_prepared(const double *positions_xz,
             continue;
         }
         double open_h = 0.0, open_dhx = 0.0, open_dhz = 0.0;
-        accumulate_breaker_long_(qx, qz, open_h, open_dhx, open_dhz);
+        if (include_slope) {
+            accumulate_breaker_long_slope_(qx, qz, open_h, open_dhx, open_dhz);
+        } else {
+            accumulate_breaker_long_height_(qx, qz, open_h);
+        }
         double composed_h = open_h;
         double composed_dhx = open_dhx;
         double composed_dhz = open_dhz;
         if (sample.confidence > 0.0) {
             double deep_h = 0.0, deep_dhx = 0.0, deep_dhz = 0.0;
-            accumulate_breaker_long_(sample.deep_x, sample.deep_z, deep_h, deep_dhx, deep_dhz);
+            if (include_slope) {
+                accumulate_breaker_long_slope_(sample.deep_x, sample.deep_z, deep_h, deep_dhx, deep_dhz);
+            } else {
+                accumulate_breaker_long_height_(sample.deep_x, sample.deep_z, deep_h);
+            }
             const double scaled_open = sample.effective_shoaling * (1.0 - sample.confidence);
             const double scaled_deep = sample.effective_shoaling * sample.confidence;
             composed_h = scaled_open * open_h + scaled_deep * deep_h - open_h;
-            composed_dhx = scaled_open * open_dhx + scaled_deep * (sample.j00 * deep_dhx + sample.j10 * deep_dhz) - open_dhx;
-            composed_dhz = scaled_open * open_dhz + scaled_deep * (sample.j01 * deep_dhx + sample.j11 * deep_dhz) - open_dhz;
+            if (include_slope) {
+                composed_dhx = scaled_open * open_dhx + scaled_deep * (sample.j00 * deep_dhx + sample.j10 * deep_dhz) - open_dhx;
+                composed_dhz = scaled_open * open_dhz + scaled_deep * (sample.j01 * deep_dhx + sample.j11 * deep_dhz) - open_dhz;
+            }
         }
         dst[S_VALID] = 1.0;
         dst[S_HEIGHT] = sea_level + composed_h;
