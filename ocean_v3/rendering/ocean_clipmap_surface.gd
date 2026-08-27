@@ -24,6 +24,9 @@ enum CoastalDebugField {
 	PHASE_OFFSET,
 	LOCAL_K,
 	REACHABILITY,
+	SHORE_DEPTH,
+	SHORE_VERTICAL_WEIGHT,
+	SHORE_HORIZONTAL_WEIGHT,
 }
 
 ## Phase 4A — instrumentación GPU de pre-break. No crea entidades persistentes.
@@ -51,6 +54,9 @@ enum CoastalWarpEffectDebug {
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
+@export var shore_stabilization_enabled := true
+@export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
+@export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
 
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
@@ -198,6 +204,8 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 		material.set_shader_parameter(&"coastal_k0_rad_m", data.k0_rad_m)
 		material.set_shader_parameter(&"coastal_omega_rad_s", data.omega_ref_rad_s)
 		material.set_shader_parameter(&"coastal_incoming_direction_xz", data.incoming_direction_xz)
+		material.set_shader_parameter(&"coastal_min_valid_depth_m", maxf(data.min_valid_depth_m, 0.001))
+		material.set_shader_parameter(&"coastal_cell_size_m", maxf(data.cell_size_m, 0.25))
 	set_coastal_debug_field(_coastal_debug_field)
 
 
@@ -270,7 +278,7 @@ func set_coastal_time(simulation_time_s: float) -> void:
 
 
 func set_coastal_debug_field(field: int) -> void:
-	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.REACHABILITY)
+	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.SHORE_HORIZONTAL_WEIGHT)
 	_surface_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 	_wireframe_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 
@@ -339,6 +347,11 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_monochromatic_debug", false)
 		material.set_shader_parameter(&"coastal_eikonal_phase_debug", false)
 		material.set_shader_parameter(&"coastal_debug_field", CoastalDebugField.OFF)
+		material.set_shader_parameter(&"shore_stabilization_enabled", shore_stabilization_enabled)
+		material.set_shader_parameter(&"shore_vertical_depth_range_m", shore_vertical_depth_range_m)
+		material.set_shader_parameter(&"shore_horizontal_depth_range_m", shore_horizontal_depth_range_m)
+		material.set_shader_parameter(&"coastal_min_valid_depth_m", 0.25)
+		material.set_shader_parameter(&"coastal_cell_size_m", 1.0)
 		material.set_shader_parameter(&"breaking_debug_mode", BreakingDebug.OFF)
 		material.set_shader_parameter(&"breaking_long_hs_m", configs[0].target_hs_m)
 		material.set_shader_parameter(&"breaking_coastal_energy_fraction", 0.5)

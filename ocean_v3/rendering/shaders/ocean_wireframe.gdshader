@@ -39,6 +39,10 @@ uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
 uniform vec2 coastal_warp_origin_xz = vec2(0.0);
 uniform vec2 coastal_warp_extent_m = vec2(1.0);
 uniform float coastal_warp_detj_safe = 0.5;
+uniform bool shore_stabilization_enabled = true;
+uniform vec2 shore_vertical_depth_range_m = vec2(0.25, 6.0);
+uniform vec2 shore_horizontal_depth_range_m = vec2(0.75, 12.0);
+uniform float coastal_min_valid_depth_m = 0.25;
 uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
@@ -70,6 +74,41 @@ vec2 coastal_uv(vec2 world_xz) {
 	return (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
 }
 
+float shore_data_inside(vec2 uv) {
+	return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+}
+
+void shore_weights_from_depth(float depth_m, out float vertical_weight, out float horizontal_weight) {
+	float depth = max(depth_m, 0.0);
+	float water_presence = smoothstep(0.0, max(coastal_min_valid_depth_m, 0.001), depth);
+	float vertical_curve = smoothstep(
+		min(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y),
+		max(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y), depth);
+	float horizontal_curve = smoothstep(
+		min(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y),
+		max(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y), depth);
+	vertical_weight = water_presence * vertical_curve;
+	horizontal_weight = water_presence * horizontal_curve;
+}
+
+void shore_stabilization_weights(vec2 world_xz, vec4 metrics_data,
+		out float vertical_weight, out float horizontal_weight) {
+	vertical_weight = 1.0;
+	horizontal_weight = 1.0;
+	if (!shore_stabilization_enabled || !coastal_propagation_enabled) return;
+	float inside = shore_data_inside(coastal_uv(world_xz));
+	float local_vertical;
+	float local_horizontal;
+	shore_weights_from_depth(metrics_data.r, local_vertical, local_horizontal);
+	vertical_weight = mix(1.0, local_vertical, inside);
+	horizontal_weight = mix(1.0, local_horizontal, inside);
+}
+
+float coastal_render_confidence(vec2 uv, vec4 field_data) {
+	if (!coastal_propagation_enabled || !coastal_transform_enabled) return 0.0;
+	return shore_data_inside(uv) * clamp(field_data.a, 0.0, 1.0);
+}
+
 bool has_coastal_data(vec2 uv, vec4 field_data) {
 	return coastal_propagation_enabled && coastal_transform_enabled && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 && field_data.a > 0.5;
 }
@@ -98,20 +137,25 @@ void vertex() {
 		vec2 coast_uv = coastal_uv(world_xz);
 		coastal_field = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 		coastal_metrics = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
+		float shore_vertical_weight;
+		float shore_horizontal_weight;
+		shore_stabilization_weights(world_xz, coastal_metrics, shore_vertical_weight, shore_horizontal_weight);
 		bool coast_active = has_coastal_data(coast_uv, coastal_field);
+		float render_confidence = coastal_render_confidence(coast_uv, coastal_field);
+		bool coast_render_active = render_confidence > 0.001;
 		vec4 warp_sample = vec4(world_xz, 0.0, 0.0);
-		if (coast_active && coastal_forced_warp_debug && coastal_warp_effect_debug != 2) {
+		if (coast_render_active && coastal_forced_warp_debug && coastal_warp_effect_debug != 2) {
 			warp_sample = vec4(world_xz + coastal_forced_warp_offset_xz, 1.0, 0.0);
-		} else if (coast_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
+		} else if (coast_render_active && coastal_warp_enabled && coastal_warp_effect_debug != 2) {
 			warp_sample = warp_deep_sample(world_xz);
 		}
 		vec2 deep_xz = warp_sample.xy;
-		float warp_confidence = warp_sample.z;
+		float warp_confidence = warp_sample.z * render_confidence;
 		vec3 long_coastal_warped = textureLod(displacement_long_coastal, spectrum_uv(deep_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal_open = textureLod(displacement_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb;
 		vec3 long_coastal = mix(long_coastal_open, long_coastal_warped, warp_confidence);
 		float effective_shoaling = 1.0;
-		if (coast_active) {
+		if (coast_render_active) {
 			if (coastal_warp_effect_debug == 2) effective_shoaling = coastal_field.g;
 			else if (coastal_warp_effect_debug == 0) effective_shoaling = mix(1.0, coastal_field.g, warp_confidence);
 		}
@@ -128,6 +172,8 @@ void vertex() {
 			float phase = dot(world_xz, coastal_incoming_direction_xz) * coastal_k0_rad_m + coastal_field.r - coastal_omega_rad_s * coastal_time_s;
 			displacement = vec3(0.0, coastal_monochromatic_amplitude_m * coastal_field.g * cos(phase), 0.0);
 		}
+		displacement.xz *= shore_horizontal_weight;
+		displacement.y *= shore_vertical_weight;
 		VERTEX += displacement;
 	}
 }
@@ -146,6 +192,18 @@ void fragment() {
 		else if (coastal_debug_field == 4) value = coastal_metrics.a / 8.0;
 		else if (coastal_debug_field == 5) value = (coastal_field.g - 1.0) * 8.0;
 		else if (coastal_debug_field == 6) value = abs(coastal_field.r) / 6.2831853;
+		else if (coastal_debug_field == 9) value = clamp(max(coastal_metrics.r, 0.0) / max(shore_horizontal_depth_range_m.y, 0.001), 0.0, 1.0);
+		else if (coastal_debug_field == 10) {
+			float vertical_weight;
+			float horizontal_weight;
+			shore_stabilization_weights(ocean_world_xz, coastal_metrics, vertical_weight, horizontal_weight);
+			value = vertical_weight;
+		} else if (coastal_debug_field == 11) {
+			float vertical_weight;
+			float horizontal_weight;
+			shore_stabilization_weights(ocean_world_xz, coastal_metrics, vertical_weight, horizontal_weight);
+			value = horizontal_weight;
+		}
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
 	}
 	ALBEDO = color;

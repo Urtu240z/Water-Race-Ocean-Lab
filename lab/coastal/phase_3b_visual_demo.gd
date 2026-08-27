@@ -11,8 +11,8 @@ const _GRID_WIDTH := 257
 const _GRID_HEIGHT := 129
 const _CELL_SIZE_M := 1.0
 const _ORIGIN_XZ := Vector2(-128.0, -64.0)
-const _DEBUG_FIELDS := [0, 1, 2, 5, 6, 7, 8]
-const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET", "LOCAL_K", "VALID / SHADOW"]
+const _DEBUG_FIELDS := [0, 1, 2, 5, 6, 7, 8, 9, 10, 11]
+const _DEBUG_FIELD_NAMES := ["NORMAL", "DEPTH", "WAVELENGTH", "SHOALING", "PHASE_OFFSET", "LOCAL_K", "VALID / SHADOW", "SHORE DEPTH", "SHORE VERTICAL", "SHORE HORIZONTAL"]
 # Subgrid del warp debug (129x97 centrado en el banco): el bake es ~7 s, por eso
 # NO se usa el grid completo de la demo (257x129 -> ~28 s).
 const _WARP_DEBUG_WIDTH := 129

@@ -209,6 +209,32 @@ parametric evaluation. Native full-query use requires its Coastal runtime
 method, while Native breaker use additionally requires
 `prepare_breaker_time` and `sample_coastal_breaker_batch_prepared`.
 
+## Near-shore base FFT stabilization
+
+The base FFT is not a swash or run-up solver. When Coastal is enabled, the
+rendering clipmap applies a final, world-space geometry envelope from the
+baked `depth_m` stored in `coastal_metrics_texture.r`. Horizontal
+displacement/choppiness fades first, followed by vertical displacement, so
+the FFT remains a stable base as the shoreline is approached. Both `ocean_surface`
+and its wireframe diagnostic use the same metres-based weights; they do not
+depend on camera position, clipmap level, vertex index, screen UV, or frame.
+
+The defaults are `shore_vertical_depth_range_m = (0.25, 6.0)` and
+`shore_horizontal_depth_range_m = (0.75, 12.0)`. The lower bound follows the
+current minimum valid Coastal depth and the upper bounds are conservative
+world-space transition widths relative to the current baked grid and the
+existing shallow-water authoring range. `shore_stabilization_enabled` is the
+single runtime opt-out. The normal path applies the product rule
+`grad(W * height) = W * grad(height) + height * grad(W)`.
+
+Propagation validity (`field_texture.a` / `phase_texture.a`) remains separate
+from water presence and shoreline depth. Propagation-invalid water therefore
+still receives the depth envelope when positive depth is present; dry cells
+fade to a continuous sea-level displacement without vertex/fragment discard,
+holes, or shoreline mesh generation. Breaker detection continues to consume
+the pre-stabilized physical wave, and beach/run-up/foam presentation remain
+later layers.
+
 ## Foam
 
 ### Crest Foam
