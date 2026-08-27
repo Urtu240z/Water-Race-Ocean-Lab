@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 0
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Alcance
 
 Esta base no contiene malla, plano, shader, material, ruido, FFT, ondas, espuma, estelas ni ningún sustituto provisional de océano. `ocean_v3.tscn` es deliberadamente un nodo raíz vacío.

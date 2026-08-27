@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2A.1: OceanQueryReference WORLD-SPACE (Golden Reference)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Tarea quirúrgica: OceanQueryReference pasa a ser una **golden reference en
 coordenadas mundiales** antes de construir el evaluator rápido de Fase 2B.
 No se implementa 2B ni física del jetski.

@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2C.1C: Production AVX2 SIMD
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Resultado: éxito para producción
 
 AVX2 resuelve suficientemente OceanQuery en esta máquina: precisión PASS,

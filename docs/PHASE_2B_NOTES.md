@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2B: OceanQueryReduced (production evaluator)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Evaluador de producción de OceanQuery: world-space correcto, determinista,
 mismo H0 que la GPU, misma semántica que la Golden Reference (2A.1), con
 compresión de pares ±k y selección por importancia. No implementa jetski,

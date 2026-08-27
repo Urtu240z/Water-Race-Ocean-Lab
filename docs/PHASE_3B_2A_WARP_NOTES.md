@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 3B.2A: World→Deep Coordinate Warp (VALIDACIÓN)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Pregunta que responde esta fase
 
 ¿Podemos construir un mapping 2D estable

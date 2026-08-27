@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 1D: estados de mar, tuning y Gate 1
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Fase 1D cierra el aspecto físico del mar abierto: añade tres estados estáticos (CALM / RACE / ROUGH) y un shading de diagnóstico legible, sin tocar Stockham, el clipmap ni los 54 dispatches. No incluye material final, costa, física del jetski ni viento dinámico.
 
 ## Arquitectura SeaState

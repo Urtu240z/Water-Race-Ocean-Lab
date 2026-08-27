@@ -1,5 +1,7 @@
 # Ocean V3: persistent FFT whitecaps
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Whitecaps in Ocean V3 are derived from horizontal FFT displacement compression,
 not from height, slope, Surface Detail normals, or breaker state.
 

@@ -1,5 +1,8 @@
 # Ocean V3 Wave Spectrum Presets
 
+This is current implementation documentation. For the complete usage flow,
+see [Ocean V3 — Usage & Integration Guide](OCEAN_V3_USAGE_GUIDE.md).
+
 Ocean V3 now has one editable physical-authoring path:
 
 `OceanWavePreset / OceanV3 exports -> OpenOceanFFTConfig LONG/MID/SHORT -> H0 -> GPU FFT + OceanQuery`
@@ -20,6 +23,7 @@ uploads the four render datasets, and refreshes REDUCED plus optional Golden
 OceanQuery from the same three canonical H0 byte arrays.
 
 The dedicated Surface Foam spectrum is deliberately excluded: wave-preset
-changes neither alter its wind nor rebuild its H0. Legacy `SeaStateConfig`
-CALM/RACE/ROUGH now loads the matching base `.tres`, so it retains callers while
-using the same source of values as the authoring layer.
+changes neither alter its wind nor rebuild its H0. Crest Foam histories are
+also retained while a smooth transition changes the source/target spectrum.
+Legacy `SeaStateConfig` CALM/RACE/ROUGH loads the matching base `.tres`, so it
+retains callers while using the same source of values as the authoring layer.

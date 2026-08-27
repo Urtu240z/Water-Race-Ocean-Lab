@@ -1,8 +1,14 @@
 # Water Race — Ocean V3 — Especificación Maestra
 
-> **Documento vivo y canónico del proyecto Ocean V3.**  
-> Define objetivos, decisiones cerradas, límites de arquitectura, rendimiento y plan de validación.  
-> Git debe conservar el historial: a partir de ahora se actualiza este mismo documento.  
+> **Historical design document.** This file records the original project
+> direction and phase-era decisions. Some architecture and implementation
+> details have evolved. Use the current [Ocean V3 documentation index](docs/README.md),
+> [current architecture](docs/OCEAN_V3_ARCHITECTURE.md), and
+> [usage/integration guide](docs/OCEAN_V3_USAGE_GUIDE.md) for production use.
+
+> **Documento histórico de diseño del proyecto Ocean V3.**
+> Conserva objetivos, decisiones cerradas de la época, límites de arquitectura y plan de validación.
+> Git conserva este documento como contexto; la especificación vigente está en `docs/`.
 > **Estado actual:** **Fase 1 completada. Gate 1 APROBADO. Fases 2A/2A.1/2B completadas (OceanQueryReduced, budget 1024/1024/1024). Gate 2 APROBADO para Windows: NATIVE DIRECT en producción con ruta AVX2 runtime y fallback scalar; Godot 4.7 e2e medido RACE 16/64 = 0.491/2.136 ms y ROUGH 16/64 = 0.621/2.437 ms. La precisión AVX2 vs scalar y el fallback están validados. Linux/Steam Deck todavía no se ha compilado ni validado; queda como deuda de portabilidad y no bloquea Fase 3. Física del jetski NO iniciada.**
 
 ---

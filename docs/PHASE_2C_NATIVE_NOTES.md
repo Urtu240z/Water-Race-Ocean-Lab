@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2C: OceanQuery NATIVE (GDExtension)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Objetivo: mover el HOT PATH de OceanQueryReduced a C++ nativo SIN cambiar la
 matemática ni reducir precisión, y medir cuánto gana exactamente el mismo
 algoritmo.

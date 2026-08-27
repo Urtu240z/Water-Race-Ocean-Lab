@@ -1,5 +1,7 @@
 # Phase 3B.3 — OceanQuery coastal parity
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 OceanQuery evaluates the coastal modification inside its parametric surface,
 not as a post-process over a world-space water query:
 

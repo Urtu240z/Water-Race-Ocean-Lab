@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 1A: núcleo espectral de mar abierto
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Estado y alcance
 
 Fase 1A implementa una sola cascada Tessendorf/FFT GPU sobre una malla finita. No contiene cascadas adicionales, clipmap, horizonte, costa, espuma, whitecaps, óptica, interacción ni física del jetski.

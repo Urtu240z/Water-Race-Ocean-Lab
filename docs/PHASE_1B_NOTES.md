@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 1B: océano espectral multibanda
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Fase 1B mantiene un único módulo `open_ocean_fft` y compone internamente tres cascadas Tessendorf/Stockham independientes. No añade clipmap, horizonte, costa, batimetría, espuma, whitecaps, perturbaciones, jetski, óptica ni presets finales.
 
 ## Arquitectura

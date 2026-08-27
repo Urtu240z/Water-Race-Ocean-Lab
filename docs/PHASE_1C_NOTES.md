@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 1C: clipmap, LOD y horizonte
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Fase 1C sustituye la malla finita de inspección por un renderer clipmap centrado en cámara. No modifica Stockham, H0, Parseval, band-pass, semillas, dispersión ni los 54 dispatches de Fase 1B. Las tres cascadas siguen siendo el único campo oceánico; el clipmap sólo decide dónde se dibujan vértices.
 
 ## Warnings corregidos

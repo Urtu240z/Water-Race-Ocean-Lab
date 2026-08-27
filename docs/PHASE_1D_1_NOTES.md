@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 1D.1: cleanup pre-Gate 1
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Tarea quirúrgica previa a la aprobación visual de Gate 1. No cambia el aspecto físico del mar (Hs, direcciones, spread, wind y choppiness de CALM/RACE/ROUGH intactos), no toca Stockham, ni el clipmap, ni implementa Fase 2.
 
 ## Cambios manuales locales del usuario preservados

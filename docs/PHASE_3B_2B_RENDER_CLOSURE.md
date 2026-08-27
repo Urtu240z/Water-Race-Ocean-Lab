@@ -1,5 +1,7 @@
 # Phase 3B.2B Render Closure
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Render-space warp and normals
 
 `CoastalWarpBaker` recibe `CoastalPropagationData` y usa los campos de

@@ -1,5 +1,7 @@
 # Phase 4A — Breaking detection / pre-break field
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 **Estado:** PASS técnico (Windows / D3D12). Sin push.
 
 ## Alcance cerrado

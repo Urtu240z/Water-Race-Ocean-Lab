@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 3B: Finite-Depth Propagation V1
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Alcance cerrado
 
 3B transforma un componente monocromático representativo de **LONG** al

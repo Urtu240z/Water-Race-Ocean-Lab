@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2A: OceanQueryReference (referencia CPU)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Referencia CPU matemáticamente coherente con el océano FFT GPU. No es para
 gameplay (es lenta); es la verdad contra la que se validará la implementación
 reducida/rápida de Fase 2B. No implementa física del jetski, buoyancy ni la

@@ -1,5 +1,7 @@
 # Gate 1 — Cierre formal
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 ## Estado
 
 **Gate 1 APROBADO** por inspección visual del usuario (Fase 1 completada).

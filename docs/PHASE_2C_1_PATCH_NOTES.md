@@ -1,5 +1,7 @@
 # Ocean Lab — Fase 2C.1A: LOCAL OCEAN QUERY PATCH (PROTOTIPO)
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 Objetivo: eliminar la redundancia de OceanQuery al consultar 8-16 puntos
 cercanos del mismo racer. En vez de recorrer 3072 pares × trig × Newton por
 punto, evaluar UNA región local (patch) alrededor del racer una vez y

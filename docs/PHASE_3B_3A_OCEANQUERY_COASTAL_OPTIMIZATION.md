@@ -1,5 +1,7 @@
 # Fase 3B.3A — OceanQuery coastal exacto: optimización AVX2
 
+> **Historical implementation record.** Some architecture/details may have evolved. See [current architecture](OCEAN_V3_ARCHITECTURE.md) and [usage/integration documentation](OCEAN_V3_USAGE_GUIDE.md) for production use.
+
 La ruta native conserva el modelo coastal de 3B.3 y acelera exclusivamente
 su evaluación CPU por lote. No cambia H0, emparejamiento canónico, pesos
 angulares, presupuesto de modos, Newton ni la fórmula de corrección.
