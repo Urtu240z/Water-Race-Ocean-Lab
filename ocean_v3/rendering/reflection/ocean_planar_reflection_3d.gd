@@ -44,6 +44,13 @@ var _capture_ready := false
 var _was_active := false
 var _capture_view_projection: Projection
 var _pending_capture_view_projection: Projection
+# True Oblique owns the render projection; sampling can A/B against the
+# mirrored perspective projection captured before oblique clipping is enabled.
+var _base_sampling_projection: Projection
+var _base_sampling_projection_valid := false
+var _use_base_sampling_projection := false
+var _sampling_xyw_max_delta := 0.0
+var _sampling_z_max_delta := 0.0
 var _capture_matrix_pending := false
 var _capture_sequence := 0
 var _pending_capture_sequence := 0
@@ -172,7 +179,9 @@ func _process(delta: float) -> void:
 		# UPDATE_ONCE keeps the last texture resident and renders this viewport
 		# exactly once; the next frame returns it to UPDATE_DISABLED.
 		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
-		_pending_capture_view_projection = _reflection_camera.get_camera_projection() * Projection(_reflection_camera.get_camera_transform().affine_inverse())
+		# Keep the actual camera projection for capture, except for the LAB-only
+		# A/B that tests the pre-oblique perspective matrix for reprojection.
+		_pending_capture_view_projection = _sampling_projection_for_capture() * Projection(_reflection_camera.get_camera_transform().affine_inverse())
 		_capture_sequence += 1
 		_pending_capture_sequence = _capture_sequence
 		_capture_matrix_pending = true
@@ -207,6 +216,7 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 			return
 		_disable_oblique_camera()
 		_sync_mirrored_perspective(main_camera, plane_y)
+		_update_sampling_projection_diagnostic()
 		_active_projection_label = "TRUE OBLIQUE (%s -> PERSPECTIVE)" % ("UNAVAILABLE" if not oblique_available else "GUARDED")
 		return
 
@@ -244,6 +254,7 @@ func _sync_true_oblique(main_camera: Camera3D, plane_y: float) -> bool:
 	_reflection_camera.call(&"set_oblique_plane_position", plane_position)
 	_reflection_camera.call(&"set_oblique_plane_offset", _clip_bias_m)
 	_reflection_camera.call(&"set_use_oblique_near_plane", true)
+	_update_sampling_projection_diagnostic()
 	return bool(_reflection_camera.call(&"get_use_oblique_near_plane"))
 
 
@@ -303,6 +314,10 @@ func _sync_mirrored_perspective(main_camera: Camera3D, plane_y: float) -> void:
 	_reflection_camera.v_offset = main_camera.v_offset
 	_reflection_camera.environment = main_camera.environment
 	_reflection_camera.cull_mask = _cull_mask
+	# This is sampled immediately before _sync_true_oblique enables the custom
+	# clip plane, so the base matrix remains the true mirrored perspective one.
+	_base_sampling_projection = _reflection_camera.get_camera_projection()
+	_base_sampling_projection_valid = true
 
 
 func _sync_off_axis_frustum(main_camera: Camera3D, plane_y: float) -> bool:
@@ -512,6 +527,55 @@ func capture_rate_hz() -> float:
 
 func projection_mode_label() -> String:
 	return _active_projection_label
+
+
+func toggle_sampling_projection_debug() -> void:
+	_use_base_sampling_projection = not _use_base_sampling_projection
+	_invalidate_capture_state()
+
+
+func sampling_projection_label() -> String:
+	if _projection_mode != PROJECTION_MODE_TRUE_OBLIQUE:
+		return "N/A (TRUE OBLIQUE ONLY)"
+	return "BASE PERSPECTIVE" if _use_base_sampling_projection else "OBLIQUE"
+
+
+func sampling_projection_diagnostic() -> Dictionary:
+	return {
+		"xyw_max_delta": _sampling_xyw_max_delta,
+		"z_max_delta": _sampling_z_max_delta,
+	}
+
+
+func _sampling_projection_for_capture() -> Projection:
+	if _projection_mode == PROJECTION_MODE_TRUE_OBLIQUE and _use_base_sampling_projection and _base_sampling_projection_valid:
+		return _base_sampling_projection
+	return _reflection_camera.get_camera_projection()
+
+
+func _update_sampling_projection_diagnostic() -> void:
+	if not _base_sampling_projection_valid or _projection_mode != PROJECTION_MODE_TRUE_OBLIQUE:
+		_sampling_xyw_max_delta = 0.0
+		_sampling_z_max_delta = 0.0
+		return
+	var oblique_projection := _reflection_camera.get_camera_projection()
+	var basis_vectors := [
+		Vector4(1.0, 0.0, 0.0, 0.0),
+		Vector4(0.0, 1.0, 0.0, 0.0),
+		Vector4(0.0, 0.0, 1.0, 0.0),
+		Vector4(0.0, 0.0, 0.0, 1.0),
+	]
+	var xyw_delta := 0.0
+	var z_delta := 0.0
+	for basis_vector in basis_vectors:
+		var base_clip: Vector4 = _base_sampling_projection * basis_vector
+		var oblique_clip: Vector4 = oblique_projection * basis_vector
+		xyw_delta = maxf(xyw_delta, absf(base_clip.x - oblique_clip.x))
+		xyw_delta = maxf(xyw_delta, absf(base_clip.y - oblique_clip.y))
+		xyw_delta = maxf(xyw_delta, absf(base_clip.w - oblique_clip.w))
+		z_delta = maxf(z_delta, absf(base_clip.z - oblique_clip.z))
+	_sampling_xyw_max_delta = xyw_delta
+	_sampling_z_max_delta = z_delta
 
 
 func _apply_ocean_render_layer() -> void:
