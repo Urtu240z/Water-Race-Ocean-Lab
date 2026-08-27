@@ -17,6 +17,7 @@ var _main_viewport: Viewport
 var _reflection_viewport: SubViewport
 var _reflection_camera: Camera3D
 var _resolution_scale := 0.25
+var _overscan := 1.15
 var _update_hz := 30
 var _max_distance_m := 500.0
 var _max_camera_height_m := 75.0
@@ -32,10 +33,19 @@ var _capture_rate_elapsed_s := 0.0
 var _capture_count_window := 0
 var _capture_rate_hz := 0.0
 var _has_capture := false
+var _capture_ready := false
 var _was_active := false
 var _capture_view_projection: Projection
 var _pending_capture_view_projection: Projection
 var _capture_matrix_pending := false
+var _capture_sequence := 0
+var _pending_capture_sequence := 0
+var _last_active_camera_id := 0
+
+
+func _exit_tree() -> void:
+	if RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw):
+		RenderingServer.frame_post_draw.disconnect(_on_frame_post_draw)
 
 
 func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
@@ -49,15 +59,22 @@ func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
 		return
 
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	if not RenderingServer.frame_post_draw.is_connected(_on_frame_post_draw):
+		RenderingServer.frame_post_draw.connect(_on_frame_post_draw)
 	_create_render_target()
 	_apply_ocean_render_layer()
 	_initialized = _reflection_viewport != null and _reflection_camera != null
 	_sync_material_state(false)
 
 
-func set_settings(enabled: bool, resolution_scale: float, update_hz: int, max_distance_m: float, max_camera_height_m: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
+
+func set_settings(enabled: bool, resolution_scale: float, overscan: float, update_hz: int, max_distance_m: float, max_camera_height_m: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
+	var previous_enabled := _enabled
+	var previous_overscan := _overscan
+	var previous_max_distance_m := _max_distance_m
 	_enabled = enabled
 	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
+	_overscan = clampf(overscan, 1.0, 1.5)
 	var previous_update_hz := _update_hz
 	_update_hz = 0 if update_hz <= 0 else 15 if update_hz <= 15 else 30 if update_hz <= 30 else 60
 	_max_distance_m = clampf(max_distance_m, 50.0, 5000.0)
@@ -70,6 +87,8 @@ func set_settings(enabled: bool, resolution_scale: float, update_hz: int, max_di
 	if previous_update_hz != _update_hz:
 		_scheduler_elapsed_s = 0.0
 	if _initialized:
+		if previous_enabled != _enabled or not is_equal_approx(previous_overscan, _overscan) or not is_equal_approx(previous_max_distance_m, _max_distance_m):
+			_invalidate_capture_state()
 		_reflection_camera.cull_mask = _cull_mask
 		_resize_to_main_viewport()
 		_sync_material_state(_enabled)
@@ -110,24 +129,25 @@ func _process(delta: float) -> void:
 		var plane_y := _sea_plane_world_y()
 		active = absf(main_camera.global_position.y - plane_y) <= _max_camera_height_m
 	if not active:
+		_invalidate_capture_state()
 		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		_sync_material_state(false)
 		_capture_rate_hz = 0.0
 		_capture_count_window = 0
 		_capture_rate_elapsed_s = 0.0
 		_was_active = false
+		_last_active_camera_id = 0
 		return
+
+	var camera_id := main_camera.get_instance_id()
+	if _last_active_camera_id != 0 and _last_active_camera_id != camera_id:
+		_invalidate_capture_state()
+	_last_active_camera_id = camera_id
 
 	var shared_world := _main_viewport.find_world_3d()
 	if shared_world != null and _reflection_viewport.world_3d != shared_world:
 		_reflection_viewport.world_3d = shared_world
 	_sync_reflection_camera(main_camera, _sea_plane_world_y())
-	if _capture_matrix_pending:
-		# The SubViewport has rendered the request from the previous frame. Apply
-		# that capture's matrix together with the texture that is now current.
-		_capture_view_projection = _pending_capture_view_projection
-		_capture_matrix_pending = false
-		_surface_material.set_shader_parameter(&"planar_reflection_view_projection", _capture_view_projection)
 	_scheduler_elapsed_s += maxf(delta, 0.0)
 	var capture_interval_s := 1.0 / float(_update_hz) if _update_hz > 0 else 0.0
 	var capture_due := not _was_active or not _has_capture or _update_hz <= 0 or _scheduler_elapsed_s >= capture_interval_s
@@ -139,6 +159,8 @@ func _process(delta: float) -> void:
 		# exactly once; the next frame returns it to UPDATE_DISABLED.
 		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		_pending_capture_view_projection = _reflection_camera.get_camera_projection() * Projection(_reflection_camera.get_camera_transform().affine_inverse())
+		_capture_sequence += 1
+		_pending_capture_sequence = _capture_sequence
 		_capture_matrix_pending = true
 		_sync_material_state(true)
 	else:
@@ -159,13 +181,15 @@ func _resize_to_main_viewport() -> void:
 		return
 	_last_main_size = target_size
 	_reflection_viewport.size = target_size
+	if _initialized:
+		_invalidate_capture_state()
 
 
 func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
-	# Godot 4.7 exposes no clean Camera3D oblique-frustum clipping API for this
-	# pass. Keep the mirror mathematically correct and avoid an unsafe projection
-	# hack; scenes should keep below-datum geometry out of the planar pass through
-	# the public cull mask when that distinction matters.
+	# OBLIQUE CLIPPING: NOT IMPLEMENTED. Godot 4.7 exposes only standard
+	# RenderingServer camera_set_perspective/orthogonal/frustum projection calls,
+	# with no arbitrary Projection setter. Keep the mirror mathematically correct
+	# and use the public cull mask as the safe below-datum fallback.
 	# Reflect forward/up over the horizontal sea datum, then reconstruct right so
 	# the camera basis stays orthonormal and keeps Godot's +X/+Y/-Z convention.
 	var main_transform := main_camera.global_transform
@@ -183,9 +207,20 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 	_reflection_camera.global_transform = Transform3D(reflected_basis, reflected_origin)
 
 	_reflection_camera.projection = main_camera.projection
-	_reflection_camera.fov = main_camera.fov
-	_reflection_camera.size = main_camera.size
 	_reflection_camera.keep_aspect = main_camera.keep_aspect
+	if main_camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+		# Camera3D.fov is the constrained FOV axis selected by keep_aspect. Scale
+		# that same axis so both the capture texture and its projection agree.
+		_reflection_camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(main_camera.fov) * 0.5) * _overscan))
+		_reflection_camera.size = main_camera.size
+	elif main_camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		_reflection_camera.fov = main_camera.fov
+		_reflection_camera.size = main_camera.size * _overscan
+	else:
+		# Frustum projection is best effort: preserve its custom offset while
+		# widening the configured size around the same optical center.
+		_reflection_camera.fov = main_camera.fov
+		_reflection_camera.size = main_camera.size * _overscan
 	_reflection_camera.near = main_camera.near
 	_reflection_camera.far = maxf(main_camera.near + 0.001, minf(main_camera.far, _max_distance_m))
 	_reflection_camera.frustum_offset = main_camera.frustum_offset
@@ -198,12 +233,38 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 func _sync_material_state(active: bool) -> void:
 	if _surface_material == null or not is_instance_valid(_surface_material):
 		return
-	_surface_material.set_shader_parameter(&"planar_reflection_enabled", active)
+	_surface_material.set_shader_parameter(&"planar_reflection_enabled", active and _capture_ready)
 	_surface_material.set_shader_parameter(&"planar_reflection_strength", _reflection_strength)
 	_surface_material.set_shader_parameter(&"planar_reflection_distortion_strength", _distortion_strength)
 	_surface_material.set_shader_parameter(&"planar_reflection_edge_fade", _edge_fade)
 	if _reflection_viewport != null:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
+
+
+func _on_frame_post_draw() -> void:
+	if not _capture_matrix_pending or _pending_capture_sequence <= 0:
+		return
+	# frame_post_draw is emitted after RenderingServer has updated all Viewports,
+	# including the SubViewport UPDATE_ONCE requested for this sequence. Publish
+	# the matching matrix only now; the next main frame sees a coherent pair.
+	_capture_view_projection = _pending_capture_view_projection
+	_capture_matrix_pending = false
+	_pending_capture_sequence = 0
+	_capture_ready = true
+	_surface_material.set_shader_parameter(&"planar_reflection_view_projection", _capture_view_projection)
+	if _enabled and _was_active:
+		_sync_material_state(true)
+
+
+func _invalidate_capture_state() -> void:
+	_has_capture = false
+	_capture_ready = false
+	_capture_matrix_pending = false
+	_pending_capture_sequence = 0
+	_scheduler_elapsed_s = 0.0
+	if _reflection_viewport != null:
+		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_sync_material_state(false)
 
 
 func capture_rate_hz() -> float:

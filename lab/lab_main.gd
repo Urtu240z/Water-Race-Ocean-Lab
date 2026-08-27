@@ -197,9 +197,10 @@ func planar_hud_lines() -> Array[String]:
 	var planar_state := "ON" if ocean_v3.planar_reflection_enabled else "OFF"
 	var update_rate := "Every Frame" if ocean_v3.planar_reflection_update_hz <= 0 else "%d Hz" % ocean_v3.planar_reflection_update_hz
 	var lines: Array[String] = [
-		"Planar Reflection: %s | Scale: %.2fx | Rate: %s | Captures: %.1f/s" % [
+		"Planar Reflection: %s | Scale: %.2fx | Overscan: %.2fx | Rate: %s | Captures: %.1f/s" % [
 			planar_state,
 			ocean_v3.planar_reflection_resolution_scale,
+			ocean_v3.planar_reflection_overscan,
 			update_rate,
 			ocean_v3.planar_reflection_capture_rate_hz(),
 		]
@@ -225,8 +226,9 @@ func planar_hud_lines() -> Array[String]:
 				1000.0 / maxf(_planar_ab_on_avg_ms, 0.001),
 			])
 			lines.append("COST %s%.2f ms" % [cost_sign, cost_ms])
-			lines.append("Planar %.2fx @ %s | Far %.0f m" % [
+			lines.append("Planar %.2fx / %.2fx @ %s | Far %.0f m" % [
 				ocean_v3.planar_reflection_resolution_scale,
+				ocean_v3.planar_reflection_overscan,
 				planar_rate,
 				ocean_v3.planar_reflection_max_distance_m,
 			])
