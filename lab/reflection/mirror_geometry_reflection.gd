@@ -249,11 +249,11 @@ func _create_reflection_material(source_material: Material) -> ShaderMaterial:
 
 
 func _mirrored_transform(source_transform: Transform3D) -> Transform3D:
-	var basis := source_transform.basis
+	var source_basis := source_transform.basis
 	var mirrored_basis := Basis(
-		Vector3(basis.x.x, -basis.x.y, basis.x.z),
-		Vector3(basis.y.x, -basis.y.y, basis.y.z),
-		Vector3(basis.z.x, -basis.z.y, basis.z.z)
+		Vector3(source_basis.x.x, -source_basis.x.y, source_basis.x.z),
+		Vector3(source_basis.y.x, -source_basis.y.y, source_basis.y.z),
+		Vector3(source_basis.z.x, -source_basis.z.y, source_basis.z.z)
 	)
 	var mirrored_origin := source_transform.origin
 	mirrored_origin.y = 2.0 * _sea_level_y - mirrored_origin.y
