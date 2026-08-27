@@ -3,13 +3,18 @@ extends SceneTree
 ## Sin render ni readback: comprueba el contrato de shaders/inc, los mirrors CPU
 ## de edge/envelope y el comportamiento determinista del pool de slots.
 
-const PoolScript := preload("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
+var PoolScript: GDScript
 const PropagationDataScript := preload("res://ocean_v3/coastal/coastal_propagation_data.gd")
 
 var _failures := 0
 
 
-func _initialize() -> void:
+func _process(_delta: float) -> bool:
+	if PoolScript != null:
+		return false
+	if root.get_node_or_null("SimulationClock") == null:
+		return true
+	PoolScript = load("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
 	_validate_shader_contract()
 	_validate_lip_mirrors()
 	_validate_pool_logic()
@@ -19,6 +24,7 @@ func _initialize() -> void:
 	else:
 		push_error("PHASE_4B_BREAKER_GEOMETRY: %d fallos" % _failures)
 		quit(1)
+	return false
 
 
 func _validate_shader_contract() -> void:
@@ -57,13 +63,13 @@ func _validate_lip_mirrors() -> void:
 	_check(PoolScript.breaker_envelope(0.5) > 0.99, "envolvente: prebreak alto -> 1")
 	_check(PoolScript.breaker_envelope(0.1) < PoolScript.breaker_envelope(0.3), "envolvente: monótona creciente")
 
-	var fade_center := PoolScript.edge_fade(0.545, 0.5)
-	var fade_edge_u := PoolScript.edge_fade(0.005, 0.5)
-	var fade_edge_v := PoolScript.edge_fade(0.5, 0.005)
+	var fade_center: float = PoolScript.edge_fade(0.545, 0.5)
+	var fade_edge_u: float = PoolScript.edge_fade(0.005, 0.5)
+	var fade_edge_v: float = PoolScript.edge_fade(0.5, 0.005)
 	_check(fade_center > 0.95, "edge_fade: plena en el centro del ribetón")
 	_check(fade_edge_u < 0.05 and fade_edge_v < 0.05, "edge_fade: 0 en los bordes (sin seams de recorte)")
 
-	var pressure := PoolScript.estimate_depth_pressure(0.5, 0.5, 1.0, 1.0)
+	var pressure: float = PoolScript.estimate_depth_pressure(0.5, 0.5, 1.0, 1.0)
 	_check(absf(pressure - 0.5 / (0.78 * 1.0)) < 0.001, "presión de profundidad: réplica del shader (H/(gamma*h))")
 
 

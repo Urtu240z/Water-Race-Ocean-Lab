@@ -215,7 +215,7 @@ func _breaker_text() -> String:
 		var t: Dictionary = tracking[index] if index < tracking.size() else {}
 		var state_name: String = str(t.get("state", "DETECT"))
 		if state_name == "ACTIVE":
-			lines.append("slot %d ACTIVE life=%.2f stage=%.2f alpha=%.2f c=%.1fm/s" % [index, float(t.get("life_t", 0.0)), float(t.get("stage", 0.0)), float(t.get("alpha", 0.0)), float(t.get("phase_speed", 0.0))])
+			lines.append("slot %d %s life=%.2f stage=%.2f alpha=%.2f depth=%.1fm p=%.2f V/H=%.2f/%.2f d=%.1fm dir=%.2f" % [index, str(t.get("lifecycle_phase", "ACTIVE")), float(t.get("life_t", 0.0)), float(t.get("stage", 0.0)), float(t.get("alpha", 0.0)), float(t.get("current_depth_m", 0.0)), float(t.get("current_pressure", 0.0)), float(t.get("shore_vertical_weight", 1.0)), float(t.get("shore_horizontal_weight", 1.0)), float(t.get("distance_travelled_m", 0.0)), float(t.get("direction_dot", 0.0))])
 		elif state_name == "COOLDOWN":
 			lines.append("slot %d COOLDOWN remaining=%.1fs" % [index, float(t.get("remaining", 0.0))])
 		else:

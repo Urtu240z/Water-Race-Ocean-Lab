@@ -97,13 +97,21 @@ apagado, alpha = 0.
 - `ribbon_u_segments` (36) / `ribbon_v_segments` (5): resolución del ribetón.
 - `ribbon_width_m` (5.0) y `ribbon_length_lambda` (1.15): extensión local.
 - `anchor_min_depth_m` (0.35), `anchor_min_depth_pressure` (0.35),
-  `anchor_max_depth_pressure` (1.6): ventana de colocación de slots.
+  `anchor_max_depth_pressure` (1.35): ventana física de colocación; los
+  candidatos se ordenan por cercanía a la presión objetivo de prebreak, no por
+  menor profundidad.
 - `anchor_min_spacing_m` (9.0): separación mínima entre slots.
 - `breaker_fade_range_m` (6..200): fade de distancia.
 
 `breaker_lip.gdshader`: la geometría de producción usa
 `breaker_profile_lut`; los controles activos son `breaker_profile_height_hs`,
-`breaker_profile_length_scale` y `breaker_profile_forward_sign`.
+`breaker_profile_length_scale` y `breaker_profile_forward_sign`. La convención
+de producción es `direction_xz = viaje físico de la cresta` y la LUT tiene
+`x_norm` creciente en `u`, por lo que `forward_sign = +1`; el espejo `-1` es
+sólo diagnóstico.
+
+El handoff S5 sigue PREBREAK → SPAWN → ACTIVE → TAKEOVER → terminal
+near-shore. Run-up/swash quedan fuera de esta fase.
 
 ## Controles de debug
 
@@ -117,6 +125,19 @@ En `lab/coastal/phase_3b_2b_fft_demo.tscn` (demo 3B.2B/4A):
   - `OFF`: oculta la geometría.
 - HUD: `Breakers (K): ON | debug (N): LIP | slots N/8` + lista por slot:
   posición (x,z), dirección, profundidad y λ local (datos CPU deterministas).
+
+## Handoff de producción 4C-S5
+
+El pool conserva `render_direction` como dirección física de viaje (con fallback
+a `local_direction`). Los anchors se eligen por cercanía a la presión objetivo
+de onset/mid prebreak y no por el candidato más shallow. Un slot ACTIVE integra
+RK2 en pasos fijos sobre `CoastalPropagationData.sample_propagation`; no usa
+OceanQuery ni readback.
+
+La superficie publica hasta ocho footprints ACTIVE en arrays fijos. Cada máscara
+usa center, dirección, longitud, ancho, stage y alpha propios; se aplica después
+del envelope shoreline como submerge vertical suave. FORCE_LIP conserva su
+máscara debug individual separada del camino de producción.
 
 Los debug de 4A/3B.2B (B, P, V, J, M, F, G, O, D) se conservan intactos.
 
@@ -135,6 +156,10 @@ Los debug de 4A/3B.2B (B, P, V, J, M, F, G, O, D) se conservan intactos.
   batimetría/modelo → misma disposición), dirección normalizada, separación
   mínima, Hs mínima → 0 slots, disable → 0 slots y oculto.
 
+`tests/phase_4c_s5_production_handoff_validation.gd` añade orientación de LUT,
++X/-X/+Z/-Z, trayectoria determinista, ramps gentle/steep, Hs pequeño/grande,
+lifecycle, pausa y arrays multi-breaker 4/8.
+
 `tests/phase_4a_prebreak_validation.gd` sigue pasando tras el refactor del inc.
 
 ## Coste
@@ -142,7 +167,8 @@ Los debug de 4A/3B.2B (B, P, V, J, M, F, G, O, D) se conservan intactos.
 El pool añade ≈ `max_breakers × 37×6` vértices con ~30 fetches/vertex en la
 ruta opt-in del labio (sólo cuando Coastal está activo y el pool configurado).
 Frente al clipmap (≥10⁶ vértices) es <1% de fetches; sin Coastal no se crea
-nada. El coste CPU del detector se valida offline con
+nada. ACTIVE sólo hace hasta 24 pasos RK2 por slot y el detector mantiene su
+presupuesto 20 Hz/2 slots. El coste CPU del detector se valida offline con
 `tests/phase_breaker_specialized_query_validation.gd` y con el profiler runtime
 de la fase; la geometría GPU permanece fuera de esta optimización.
 
@@ -153,7 +179,7 @@ scheduler de 20 Hz (máximo 2 slots y 14 puntos por tick), lifecycle y controles
 de debug. Sólo cambia la fuente interna de muestras del pool:
 
 ```text
-DETECT/ACTIVE -> Coastal LONG height-only (q XZ directo, Warp lookup)
+DETECT -> Coastal LONG height-only (q XZ directo, Warp lookup)
 candidate    -> Coastal LONG slope-only (1 punto por candidato)
 physics/etc. -> OceanQuery general (sin cambio)
 ```

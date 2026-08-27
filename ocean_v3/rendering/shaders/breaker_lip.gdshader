@@ -36,6 +36,18 @@ uniform vec2 camera_world_xz = vec2(0.0);
 uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
 uniform vec2 mid_fade_range_m = vec2(96.0, 320.0);
 uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
+uniform bool shore_stabilization_enabled = true;
+uniform vec2 shore_vertical_depth_range_m = vec2(0.25, 6.0);
+uniform vec2 shore_horizontal_depth_range_m = vec2(0.75, 12.0);
+uniform float coastal_min_valid_depth_m = 0.25;
+uniform float coastal_cell_size_m = 1.0;
+uniform float short_geometry_strength = 0.25;
+uniform float short_vertex_normal_strength = 0.0;
+uniform float ocean_crest_sharpen_strength = 1.0;
+uniform float ocean_crest_sharpen_threshold = 0.15;
+uniform float ocean_crest_sharpen_max_gain = 0.30;
+uniform float ocean_crest_sharpen_long_weight = 1.0;
+uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform vec3 band_mask = vec3(1.0);
 uniform int sea_state_zone_count = 0;
 uniform vec4 sea_state_zone_data0[8];
@@ -71,9 +83,9 @@ uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
 uniform float breaker_profile_height_hs = 2.0;
 uniform float breaker_profile_length_scale = 0.65;
-// 4C-S3: FLIPPED (-1) = labio proyectando hacia -direction_xz, que es la
-// dirección REAL de avance del FFT (convención del evolve actual). Default.
-uniform float breaker_profile_forward_sign = -1.0;
+// S5: la LUT se horneó con x_norm creciente en u; +1 sigue el viaje físico.
+// -1 sólo queda disponible como espejo de diagnóstico.
+uniform float breaker_profile_forward_sign = 1.0;
 uniform vec2 breaker_fade_range_m = vec2(6.0, 200.0);
 // 0 LIP, 1 TAKEOVER, 2 REGION, 3 FORCE_LIP, 4 OFF.
 uniform int breaker_debug_mode = 0;
@@ -121,8 +133,8 @@ vec3 breaker_hsv2rgb(float h, float s, float v) {
 }
 
 vec3 breaker_region_color(float id, float u) {
-	// Hue estable por slot; la nariz (u alta, hacia la costa) se marca en blanco
-	// para leer la dirección de propagación de un vistazo.
+	// Hue estable por slot; la nariz (u alta, hacia delante) se marca en blanco
+	// para leer la dirección física de propagación de un vistazo.
 	vec3 color = breaker_hsv2rgb(fract(id * 0.61803398875), 0.72, 1.0);
 	if (u > 0.66) {
 		color = mix(color, vec3(1.0, 1.0, 1.0), 0.85);

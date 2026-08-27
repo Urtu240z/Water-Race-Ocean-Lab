@@ -277,7 +277,13 @@ uniform float breaker_takeover_start = 0.30;
 uniform float breaker_takeover_core_start = 0.40;
 uniform float breaker_takeover_core_end = 0.72;
 uniform float breaker_takeover_end = 0.82;
-uniform float breaker_takeover_forward_sign = -1.0;
+uniform float breaker_takeover_forward_sign = 1.0;
+// S5 production takeover: one tracked world-space mask per ACTIVE breaker.
+// data0 = center.xy + physical travel direction.zw; data1 = length, width,
+// lifecycle stage, alpha. Arrays stay fixed at the production cap (8).
+uniform int breaker_takeover_count = 0;
+uniform vec4 breaker_takeover_data0[8];
+uniform vec4 breaker_takeover_data1[8];
 // 4C-S3.2: banda longitudinal estrecha de seam (q_profile). La ventana S3.1
 // actúa sólo como bounding window; la ocultación real vive en esta banda.
 uniform float breaker_takeover_seam_center = 0.56;
@@ -566,6 +572,28 @@ float breaker_takeover_mask(vec2 world_xz) {
 	return clamp(outer_longitudinal_window * seam_mask * lateral_mask, 0.0, 1.0);
 }
 
+float breaker_takeover_production_mask(vec2 world_xz) {
+	float result = 0.0;
+	for (int index = 0; index < 8; index++) {
+		if (index >= breaker_takeover_count) break;
+		vec4 data0 = breaker_takeover_data0[index];
+		vec4 data1 = breaker_takeover_data1[index];
+		vec2 direction = normalize(data0.zw);
+		vec2 tangent = vec2(-direction.y, direction.x);
+		vec2 delta = world_xz - data0.xy;
+		float length_m = max(data1.x, 0.001);
+		float width_m = max(data1.y, 0.001);
+		float q = dot(delta, direction) / length_m + 0.5;
+		float lateral = abs(dot(delta, tangent)) / (0.5 * width_m);
+		float longitudinal = smoothstep(0.10, 0.28, q) * (1.0 - smoothstep(0.72, 0.94, q));
+		float lateral_fade = 1.0 - smoothstep(0.70, 1.05, lateral);
+		float stage = smoothstep(0.16, 0.52, data1.z);
+		float mask = longitudinal * lateral_fade * stage * clamp(data1.w, 0.0, 1.0);
+		result = max(result, mask);
+	}
+	return clamp(result, 0.0, 1.0);
+}
+
 void vertex() {
 	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 	// The FFT maps are parameterized by this undisplaced, material coordinate.
@@ -773,6 +801,14 @@ void vertex() {
 	vec2 shore_final_slope = slope * shore_vertical_weight_varying
 		+ shore_pre_envelope_height * shore_vertical_gradient;
 	ocean_normal = !module_enabled ? vec3(0.0, 1.0, 0.0) : normalize(vec3(-shore_final_slope.x, 1.0, -shore_final_slope.y));
+	// Production handoff is deliberately after the shoreline envelope: the
+	// stabilized FFT remains the host, while only the tracked breaker footprint
+	// is submerged. Alpha/stage make both borders temporal and spatially smooth.
+	if (module_enabled && breaker_takeover_count > 0) {
+		float production_takeover = breaker_takeover_production_mask(world_xz);
+		float takeover_submerge_m = max(0.15, breaking_long_hs_m * breaker_takeover_submerge_hs);
+		displacement.y -= takeover_submerge_m * production_takeover;
+	}
 	ocean_wave_height = displacement.y;
 	vec3 displaced_vertex = VERTEX + displacement;
 	ocean_world_xz = (MODEL_MATRIX * vec4(displaced_vertex, 1.0)).xz;
