@@ -195,8 +195,14 @@ func smoothed_frame_time_ms() -> float:
 
 func planar_hud_lines() -> Array[String]:
 	var planar_state := "ON" if ocean_v3.planar_reflection_enabled else "OFF"
+	var update_rate := "Every Frame" if ocean_v3.planar_reflection_update_hz <= 0 else "%d Hz" % ocean_v3.planar_reflection_update_hz
 	var lines: Array[String] = [
-		"Planar Reflection: %s | Scale: %.2fx" % [planar_state, ocean_v3.planar_reflection_resolution_scale]
+		"Planar Reflection: %s | Scale: %.2fx | Rate: %s | Captures: %.1f/s" % [
+			planar_state,
+			ocean_v3.planar_reflection_resolution_scale,
+			update_rate,
+			ocean_v3.planar_reflection_capture_rate_hz(),
+		]
 	]
 	match _planar_ab_phase:
 		PLANAR_AB_WARMUP_OFF:
@@ -210,6 +216,7 @@ func planar_hud_lines() -> Array[String]:
 		PLANAR_AB_RESULT:
 			var cost_ms := _planar_ab_on_avg_ms - _planar_ab_off_avg_ms
 			var cost_sign := "+" if cost_ms >= 0.0 else ""
+			var planar_rate := "Every Frame" if ocean_v3.planar_reflection_update_hz <= 0 else "%d Hz" % ocean_v3.planar_reflection_update_hz
 			lines.append("Planar A/B RESULT")
 			lines.append("OFF %.2f ms (~%.1f FPS) | ON %.2f ms (~%.1f FPS)" % [
 				_planar_ab_off_avg_ms,
@@ -218,6 +225,11 @@ func planar_hud_lines() -> Array[String]:
 				1000.0 / maxf(_planar_ab_on_avg_ms, 0.001),
 			])
 			lines.append("COST %s%.2f ms" % [cost_sign, cost_ms])
+			lines.append("Planar %.2fx @ %s | Far %.0f m" % [
+				ocean_v3.planar_reflection_resolution_scale,
+				planar_rate,
+				ocean_v3.planar_reflection_max_distance_m,
+			])
 	return lines
 
 

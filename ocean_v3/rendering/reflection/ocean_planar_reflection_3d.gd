@@ -8,7 +8,6 @@ class_name OceanPlanarReflection3D
 
 const OCEAN_RENDER_LAYER := 2
 const USER_RENDER_LAYER_MASK := (1 << 20) - 1
-const MAX_CAMERA_DISTANCE_TO_SURFACE_M := 2000.0
 const MIN_VIEWPORT_SIZE := Vector2i(2, 2)
 
 var _ocean_root: Node3D
@@ -17,7 +16,10 @@ var _surface_node: Node3D
 var _main_viewport: Viewport
 var _reflection_viewport: SubViewport
 var _reflection_camera: Camera3D
-var _resolution_scale := 0.10
+var _resolution_scale := 0.25
+var _update_hz := 30
+var _max_distance_m := 500.0
+var _max_camera_height_m := 75.0
 var _reflection_strength := 0.55
 var _distortion_strength := 0.035
 var _edge_fade := 0.08
@@ -25,6 +27,15 @@ var _cull_mask := USER_RENDER_LAYER_MASK & ~(1 << (OCEAN_RENDER_LAYER - 1))
 var _enabled := true
 var _initialized := false
 var _last_main_size := Vector2i.ZERO
+var _scheduler_elapsed_s := 0.0
+var _capture_rate_elapsed_s := 0.0
+var _capture_count_window := 0
+var _capture_rate_hz := 0.0
+var _has_capture := false
+var _was_active := false
+var _capture_view_projection: Projection
+var _pending_capture_view_projection: Projection
+var _capture_matrix_pending := false
 
 
 func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
@@ -44,14 +55,20 @@ func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
 	_sync_material_state(false)
 
 
-func set_settings(enabled: bool, resolution_scale: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
+func set_settings(enabled: bool, resolution_scale: float, update_hz: int, max_distance_m: float, max_camera_height_m: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
 	_enabled = enabled
 	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
+	var previous_update_hz := _update_hz
+	_update_hz = 0 if update_hz <= 0 else 15 if update_hz <= 15 else 30 if update_hz <= 30 else 60
+	_max_distance_m = clampf(max_distance_m, 50.0, 5000.0)
+	_max_camera_height_m = clampf(max_camera_height_m, 1.0, 500.0)
 	_reflection_strength = clampf(reflection_strength, 0.0, 1.0)
 	_distortion_strength = maxf(distortion_strength, 0.0)
 	_edge_fade = clampf(edge_fade, 0.001, 0.5)
 	# Ocean layer exclusion is enforced even when a level supplies a broad mask.
 	_cull_mask = cull_mask & USER_RENDER_LAYER_MASK & ~(1 << (OCEAN_RENDER_LAYER - 1))
+	if previous_update_hz != _update_hz:
+		_scheduler_elapsed_s = 0.0
 	if _initialized:
 		_reflection_camera.cull_mask = _cull_mask
 		_resize_to_main_viewport()
@@ -61,7 +78,7 @@ func set_settings(enabled: bool, resolution_scale: float, reflection_strength: f
 func _create_render_target() -> void:
 	_reflection_viewport = SubViewport.new()
 	_reflection_viewport.name = "PlanarReflectionViewport"
-	_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_reflection_viewport.render_target_clear_mode = SubViewport.CLEAR_MODE_ALWAYS
 	_reflection_viewport.transparent_bg = false
 	_reflection_viewport.msaa_3d = Viewport.MSAA_DISABLED
@@ -78,26 +95,56 @@ func _create_render_target() -> void:
 	_resize_to_main_viewport()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not _initialized:
 		return
+	_capture_rate_elapsed_s += maxf(delta, 0.0)
+	if _capture_rate_elapsed_s >= 1.0:
+		_capture_rate_hz = float(_capture_count_window) / _capture_rate_elapsed_s
+		_capture_count_window = 0
+		_capture_rate_elapsed_s = 0.0
 	_resize_to_main_viewport()
 	var main_camera := _main_viewport.get_camera_3d()
 	var active := _enabled and main_camera != null and is_instance_valid(main_camera)
 	if active:
 		var plane_y := _sea_plane_world_y()
-		active = absf(main_camera.global_position.y - plane_y) <= MAX_CAMERA_DISTANCE_TO_SURFACE_M
+		active = absf(main_camera.global_position.y - plane_y) <= _max_camera_height_m
 	if not active:
 		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		_sync_material_state(false)
+		_capture_rate_hz = 0.0
+		_capture_count_window = 0
+		_capture_rate_elapsed_s = 0.0
+		_was_active = false
 		return
 
 	var shared_world := _main_viewport.find_world_3d()
 	if shared_world != null and _reflection_viewport.world_3d != shared_world:
 		_reflection_viewport.world_3d = shared_world
 	_sync_reflection_camera(main_camera, _sea_plane_world_y())
-	_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	_sync_material_state(true)
+	if _capture_matrix_pending:
+		# The SubViewport has rendered the request from the previous frame. Apply
+		# that capture's matrix together with the texture that is now current.
+		_capture_view_projection = _pending_capture_view_projection
+		_capture_matrix_pending = false
+		_surface_material.set_shader_parameter(&"planar_reflection_view_projection", _capture_view_projection)
+	_scheduler_elapsed_s += maxf(delta, 0.0)
+	var capture_interval_s := 1.0 / float(_update_hz) if _update_hz > 0 else 0.0
+	var capture_due := not _was_active or not _has_capture or _update_hz <= 0 or _scheduler_elapsed_s >= capture_interval_s
+	if capture_due:
+		_scheduler_elapsed_s = 0.0
+		_has_capture = true
+		_capture_count_window += 1
+		# UPDATE_ONCE keeps the last texture resident and renders this viewport
+		# exactly once; the next frame returns it to UPDATE_DISABLED.
+		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_pending_capture_view_projection = _reflection_camera.get_camera_projection() * Projection(_reflection_camera.get_camera_transform().affine_inverse())
+		_capture_matrix_pending = true
+		_sync_material_state(true)
+	else:
+		_reflection_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		_sync_material_state(true)
+	_was_active = true
 
 
 func _resize_to_main_viewport() -> void:
@@ -140,7 +187,7 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 	_reflection_camera.size = main_camera.size
 	_reflection_camera.keep_aspect = main_camera.keep_aspect
 	_reflection_camera.near = main_camera.near
-	_reflection_camera.far = main_camera.far
+	_reflection_camera.far = maxf(main_camera.near + 0.001, minf(main_camera.far, _max_distance_m))
 	_reflection_camera.frustum_offset = main_camera.frustum_offset
 	_reflection_camera.h_offset = main_camera.h_offset
 	_reflection_camera.v_offset = main_camera.v_offset
@@ -157,15 +204,19 @@ func _sync_material_state(active: bool) -> void:
 	_surface_material.set_shader_parameter(&"planar_reflection_edge_fade", _edge_fade)
 	if _reflection_viewport != null:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
-	if active and _reflection_camera != null:
-		var view_projection := _reflection_camera.get_camera_projection() * Projection(_reflection_camera.get_camera_transform().affine_inverse())
-		_surface_material.set_shader_parameter(&"planar_reflection_view_projection", view_projection)
+
+
+func capture_rate_hz() -> float:
+	return _capture_rate_hz
 
 
 func _apply_ocean_render_layer() -> void:
 	if _ocean_root == null:
 		return
 	var ocean_layer_mask := 1 << (OCEAN_RENDER_LAYER - 1)
+	# Keep this mask scene-owned: production levels should additionally exclude
+	# particles, VFX, helpers, underwater objects, tiny props, and secondary
+	# vegetation when those objects do not contribute to the reflection.
 	for node in _ocean_root.find_children("*", "VisualInstance3D", true, false):
 		var visual := node as VisualInstance3D
 		if visual != null:

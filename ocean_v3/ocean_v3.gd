@@ -372,9 +372,24 @@ var _wave_transition_start_short_geometry := 0.25
 		planar_reflection_enabled = value
 		_request_visual_sync()
 
-@export_range(0.10, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.10:
+@export_range(0.10, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.25:
 	set(value):
 		planar_reflection_resolution_scale = clampf(value, 0.10, 1.0)
+		_request_visual_sync()
+
+@export_enum("15 Hz:15", "30 Hz:30", "60 Hz:60", "Every Frame:0") var planar_reflection_update_hz: int = 30:
+	set(value):
+		planar_reflection_update_hz = 0 if value <= 0 else 15 if value <= 15 else 30 if value <= 30 else 60
+		_request_visual_sync()
+
+@export_range(50.0, 5000.0, 10.0) var planar_reflection_max_distance_m: float = 500.0:
+	set(value):
+		planar_reflection_max_distance_m = clampf(value, 50.0, 5000.0)
+		_request_visual_sync()
+
+@export_range(1.0, 500.0, 1.0) var planar_reflection_max_camera_height_m: float = 75.0:
+	set(value):
+		planar_reflection_max_camera_height_m = clampf(value, 1.0, 500.0)
 		_request_visual_sync()
 
 @export_range(0.0, 1.0, 0.01) var planar_reflection_strength: float = 0.55:
@@ -855,6 +870,9 @@ func _ensure_planar_reflection() -> void:
 		"set_settings",
 		planar_reflection_enabled,
 		planar_reflection_resolution_scale,
+		planar_reflection_update_hz,
+		planar_reflection_max_distance_m,
+		planar_reflection_max_camera_height_m,
 		planar_reflection_strength,
 		planar_reflection_distortion_strength,
 		planar_reflection_cull_mask,
@@ -1005,6 +1023,12 @@ func cycle_reflection_debug() -> void:
 
 func reflection_debug_name() -> String:
 	return ["OFF", "ROUGHNESS", "WAVE_ACTIVITY", "ZONE_CALMNESS", "PLANAR_UV", "PLANAR_WEIGHT", "PLANAR_ONLY"][_reflection_debug_mode]
+
+
+func planar_reflection_capture_rate_hz() -> float:
+	if _planar_reflection != null and is_instance_valid(_planar_reflection):
+		return float(_planar_reflection.call("capture_rate_hz"))
+	return 0.0
 
 
 func _refresh_sea_state_zones() -> void:
@@ -1467,6 +1491,9 @@ func _sync_water_visual_parameters() -> void:
 			"set_settings",
 			planar_reflection_enabled,
 			planar_reflection_resolution_scale,
+			planar_reflection_update_hz,
+			planar_reflection_max_distance_m,
+			planar_reflection_max_camera_height_m,
 			planar_reflection_strength,
 			planar_reflection_distortion_strength,
 			planar_reflection_cull_mask,
