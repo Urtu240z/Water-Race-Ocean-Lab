@@ -85,9 +85,16 @@ horizontal sea plane. Invalid, upward-facing, or too-distant intersections are
 made finite and projected onto the plane, then the rectangle is fitted to the
 reflection viewport aspect, scaled by the public overscan range (`1.0..2.0`),
 and clamped by `planar_reflection_max_distance_m`. The result is installed with
-the supported `Camera3D.set_frustum()` API. The near plane is based on the
-camera height minus `planar_reflection_clip_bias_m`; invalid height or depth
-conditions fall back to the existing mirrored camera behavior.
+the supported `Camera3D.set_frustum()` API. In Godot 4.7, the frustum `size` is
+the vertical extent when `flip_fov=false` and the horizontal extent is
+`size * viewport_aspect`; the implementation therefore passes the final
+near-rectangle height and does not use `KEEP_WIDTH` to reinterpret the
+frustum. The near plane is based on the camera height minus
+`planar_reflection_clip_bias_m`. The complete water-plane center and extents
+are scaled by `z_near / height_m` before deriving `frustum_offset`, so the
+offset is also expressed at the near plane. A projection sanity check maps
+that final near-plane center to the viewport center; invalid values or
+excessive `abs(offset) / size` ratios fall back before accepting the frustum.
 
 This footprint construction is inspired by the older
 [Godot Planar Reflection Plugin](https://github.com/SIsilicon/Godot-Planar-Reflection-Plugin/blob/master/addons/Silicon.vfx.planar_reflection/planar_reflector.gd),
@@ -103,7 +110,7 @@ camera a finite, water-plane-derived capture footprint, but it cannot exactly
 discard arbitrary triangles that cross the sea plane; geometry crossing or
 appearing outside the fitted frustum may still require asset/layer handling.
 Orthographic and custom-frustum main cameras, cameras at/below the water, and
-invalid ray footprints use the safe mirrored fallback. F8 in the Ocean Lab
+invalid ray footprints use the safe mirrored fallback. K in the Ocean Lab
 toggles the two modes and the HUD reports the active mode and clip-bias value.
 
 ## Alternatives

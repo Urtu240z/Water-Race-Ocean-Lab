@@ -12,6 +12,7 @@ const MIN_VIEWPORT_SIZE := Vector2i(2, 2)
 const PROJECTION_MODE_MIRRORED_PERSPECTIVE := 0
 const PROJECTION_MODE_OFF_AXIS_FRUSTUM := 1
 const SAFE_CAMERA_EPSILON_M := 0.001
+const MAX_FRUSTUM_OFFSET_RATIO := 8.0
 
 var _ocean_root: Node3D
 var _surface_material: ShaderMaterial
@@ -268,28 +269,35 @@ func _sync_off_axis_frustum(main_camera: Camera3D, plane_y: float) -> bool:
 	var reflected_basis := Basis(tangent_right, tangent_up, -forward).orthonormalized()
 	_reflection_camera.global_transform = Transform3D(reflected_basis, reflected_origin)
 
-	var footprint := _calculate_sea_plane_footprint(main_camera, plane_y, tangent_right, tangent_up)
-	if footprint.size.x <= SAFE_CAMERA_EPSILON_M or footprint.size.y <= SAFE_CAMERA_EPSILON_M:
+	var water_plane_rect := _calculate_sea_plane_footprint(main_camera, plane_y, tangent_right, tangent_up)
+	if water_plane_rect.size.x <= SAFE_CAMERA_EPSILON_M or water_plane_rect.size.y <= SAFE_CAMERA_EPSILON_M:
 		return false
 
 	var reflection_aspect := float(_reflection_viewport.size.x) / maxf(float(_reflection_viewport.size.y), 1.0)
 	if reflection_aspect <= SAFE_CAMERA_EPSILON_M:
 		return false
-	footprint = _fit_footprint_aspect(footprint, reflection_aspect)
-	footprint = _scale_footprint(footprint, _overscan)
+	water_plane_rect = _fit_footprint_aspect(water_plane_rect, reflection_aspect)
+	water_plane_rect = _scale_footprint(water_plane_rect, _overscan)
+	water_plane_rect = _clamp_rect_corners_radius(water_plane_rect, _max_distance_m)
 
-	# The footprint is measured on the water plane at height_m. Move its
-	# extents to the actual near plane, which is slightly closer by clip bias.
+	# Convert the complete water-plane rectangle into the near-plane rectangle.
+	# Scaling the center as well as the extents keeps the optical-axis offset
+	# consistent when clip bias moves the near plane toward the reflected eye.
 	var near_scale := z_near / height_m
-	footprint = _scale_footprint(footprint, near_scale)
-	footprint = _clamp_footprint_radius(footprint, _max_distance_m * near_scale)
-	if footprint.size.x <= SAFE_CAMERA_EPSILON_M or footprint.size.y <= SAFE_CAMERA_EPSILON_M:
+	var near_center := (water_plane_rect.position + water_plane_rect.size * 0.5) * near_scale
+	var near_size := water_plane_rect.size * near_scale
+	var near_plane_rect := Rect2(near_center - near_size * 0.5, near_size)
+	near_plane_rect = _clamp_rect_corners_radius(near_plane_rect, _max_distance_m * near_scale)
+	near_center = near_plane_rect.position + near_plane_rect.size * 0.5
+	near_size = near_plane_rect.size
+	if near_size.x <= SAFE_CAMERA_EPSILON_M or near_size.y <= SAFE_CAMERA_EPSILON_M:
+		return false
+	if not _is_valid_frustum_values(near_size.y, near_center, z_near, z_far):
 		return false
 
-	_reflection_camera.keep_aspect = Camera3D.KEEP_WIDTH
 	_reflection_camera.set_frustum(
-		footprint.size.x,
-		footprint.position + footprint.size * 0.5,
+		near_size.y,
+		near_center,
 		z_near,
 		z_far
 	)
@@ -297,7 +305,7 @@ func _sync_off_axis_frustum(main_camera: Camera3D, plane_y: float) -> bool:
 	_reflection_camera.v_offset = 0.0
 	_reflection_camera.environment = main_camera.environment
 	_reflection_camera.cull_mask = _cull_mask
-	return true
+	return _frustum_center_maps_to_viewport_center(near_center, z_near)
 
 
 func _stable_tangent_right(main_camera: Camera3D) -> Vector3:
@@ -369,13 +377,39 @@ func _scale_footprint(footprint: Rect2, scale: float) -> Rect2:
 	return Rect2(center - size * 0.5, size)
 
 
-func _clamp_footprint_radius(footprint: Rect2, max_radius: float) -> Rect2:
-	var center := footprint.position + footprint.size * 0.5
-	var half_size := footprint.size * 0.5
-	var corner_radius := Vector2(half_size.x, half_size.y).length()
+func _clamp_rect_corners_radius(rect: Rect2, max_radius: float) -> Rect2:
+	var corners := [
+		rect.position,
+		rect.position + Vector2(rect.size.x, 0.0),
+		rect.position + Vector2(0.0, rect.size.y),
+		rect.position + rect.size,
+	]
+	var corner_radius := 0.0
+	for corner in corners:
+		corner_radius = maxf(corner_radius, corner.length())
 	if corner_radius > max_radius and corner_radius > SAFE_CAMERA_EPSILON_M:
-		half_size *= max_radius / corner_radius
-	return Rect2(center - half_size, half_size * 2.0)
+		var scale := max_radius / corner_radius
+		return Rect2(rect.position * scale, rect.size * scale)
+	return rect
+
+
+func _is_valid_frustum_values(size: float, offset: Vector2, z_near: float, z_far: float) -> bool:
+	if not is_finite(size) or not is_finite(offset.x) or not is_finite(offset.y):
+		return false
+	if not is_finite(z_near) or not is_finite(z_far):
+		return false
+	if size <= SAFE_CAMERA_EPSILON_M or z_near <= SAFE_CAMERA_EPSILON_M or z_far <= z_near + SAFE_CAMERA_EPSILON_M:
+		return false
+	return absf(offset.x) / size <= MAX_FRUSTUM_OFFSET_RATIO and absf(offset.y) / size <= MAX_FRUSTUM_OFFSET_RATIO
+
+
+func _frustum_center_maps_to_viewport_center(near_center: Vector2, z_near: float) -> bool:
+	var local_near_point := Vector4(near_center.x, near_center.y, -z_near, 1.0)
+	var clip_point := _reflection_camera.get_camera_projection() * local_near_point
+	if not is_finite(clip_point.x) or not is_finite(clip_point.y) or not is_finite(clip_point.w) or absf(clip_point.w) <= SAFE_CAMERA_EPSILON_M:
+		return false
+	var ndc_center := Vector2(clip_point.x, clip_point.y) / clip_point.w
+	return ndc_center.length() <= 0.001
 
 
 func _sync_material_state(active: bool) -> void:
