@@ -32,6 +32,7 @@ var _reflection_strength := 0.55
 var _distortion_strength := 0.035
 var _edge_fade := 0.08
 var _sampling_anchor_mode := 0
+var _uv_orientation := 0
 var _cull_mask := USER_RENDER_LAYER_MASK & ~(1 << (OCEAN_RENDER_LAYER - 1))
 var _enabled := true
 var _initialized := false
@@ -494,6 +495,7 @@ func _sync_material_state(active: bool) -> void:
 	_surface_material.set_shader_parameter(&"planar_reflection_edge_fade", _edge_fade)
 	_surface_material.set_shader_parameter(&"planar_reflection_plane_y", _sea_plane_world_y())
 	_surface_material.set_shader_parameter(&"planar_reflection_anchor_mode", _sampling_anchor_mode)
+	_surface_material.set_shader_parameter(&"planar_reflection_uv_orientation", _uv_orientation)
 	if _reflection_viewport != null:
 		_surface_material.set_shader_parameter(&"planar_reflection_texture", _reflection_viewport.get_texture())
 
@@ -566,6 +568,25 @@ func sampling_anchor_label() -> String:
 			return "FLAT BASE XZ"
 		_:
 			return "DISPLACED WORLD"
+
+
+func cycle_uv_orientation() -> void:
+	_uv_orientation = (_uv_orientation + 1) % 4
+	if _surface_material == null or not is_instance_valid(_surface_material):
+		return
+	_surface_material.set_shader_parameter(&"planar_reflection_uv_orientation", _uv_orientation)
+
+
+func uv_orientation_label() -> String:
+	match _uv_orientation:
+		1:
+			return "NO FLIP"
+		2:
+			return "X FLIP"
+		3:
+			return "XY FLIP"
+		_:
+			return "CURRENT Y FLIP"
 
 
 func _sampling_projection_for_capture() -> Projection:

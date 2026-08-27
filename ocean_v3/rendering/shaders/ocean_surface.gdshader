@@ -185,6 +185,7 @@ uniform mat4 planar_reflection_view_projection = mat4(1.0);
 // LAB diagnostic: all values are world-space and only affect planar lookup.
 uniform float planar_reflection_plane_y = 0.0;
 uniform int planar_reflection_anchor_mode = 0;
+uniform int planar_reflection_uv_orientation = 0;
 uniform float planar_reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
 uniform float planar_reflection_distortion_strength : hint_range(0.0, 0.2, 0.001) = 0.035;
 uniform float planar_reflection_edge_fade : hint_range(0.001, 0.5, 0.005) = 0.08;
@@ -1646,9 +1647,15 @@ void fragment() {
 		if (reflection_clip.w > 0.0001) {
 			vec2 projected_uv = reflection_clip.xy / reflection_clip.w;
 			projected_uv = projected_uv * 0.5 + 0.5;
-			// Viewport textures use an upper-left origin while projection NDC uses
-			// the lower-left convention for this mapping.
-			projected_uv.y = 1.0 - projected_uv.y;
+			// Orientation is a LAB diagnostic and must precede all bounds,
+			// edge-fade, distortion, and texture sampling operations below.
+			if (planar_reflection_uv_orientation == 0) {
+				projected_uv.y = 1.0 - projected_uv.y;
+			} else if (planar_reflection_uv_orientation == 2) {
+				projected_uv.x = 1.0 - projected_uv.x;
+			} else if (planar_reflection_uv_orientation == 3) {
+				projected_uv = vec2(1.0 - projected_uv.x, 1.0 - projected_uv.y);
+			}
 			planar_reflection_uv = projected_uv;
 			vec2 inside_uv = step(vec2(0.0), projected_uv) * step(projected_uv, vec2(1.0));
 			float inside_mask = inside_uv.x * inside_uv.y;
