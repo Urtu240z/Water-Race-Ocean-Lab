@@ -9,12 +9,14 @@
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
 [ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="7_73jaq"]
 [ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
+[ext_resource type="Resource" uid="uid://skgh5pkuvd52" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/coastal_bake.tres" id="8_35bca"]
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
 [ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
 [ext_resource type="Script" uid="uid://7pdvubhcohwk" path="res://ocean_v3/bathymetry/bathymetry_baker.gd" id="13_vvhv5"]
 [ext_resource type="Script" uid="uid://b4apva6qruumm" path="res://ocean_v3/coastal/coastal_eikonal_preview_baker.gd" id="14_bk4pj"]
 [ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
+[ext_resource type="Script" uid="uid://bgmu6kdgxmpru" path="res://ocean_v3/coastal/coastal_bake_authoring.gd" id="17_4qkou"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_5myqe"]
 panorama = ExtResource("2_mi5lw")
@@ -82,6 +84,7 @@ script = ExtResource("4_metrics")
 [node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
 wave_preset = ExtResource("7_73jaq")
 global_wind_speed_mps = 18.0
+coastal_bake_asset = ExtResource("8_35bca")
 long_target_hs_m = 2.5
 long_choppiness = 2.0
 long_wind_direction = Vector2(1, 0.1)
@@ -113,6 +116,11 @@ horizon_water_alpha = 1.0
 fresnel_power = 9.4
 near_roughness = 0.2
 water_specular = 0.4
+planar_reflection_overscan = 2.0
+planar_reflection_projection_mode = 1
+planar_reflection_max_distance_m = 2000.0
+planar_reflection_strength = 1.0
+planar_reflection_edge_fade = 0.001
 foam_color = Color(2.3958, 3.4121144, 3.4269989, 1)
 foam_intensity = 4.0
 foam_fresh_color = Color(0.6971579, 0.7115656, 0.70580256, 1)
@@ -195,11 +203,11 @@ bathymetry_baker = NodePath("../BathymetryBaker")
 cut_locus_blend_passes = 24
 cut_locus_blend_strength = 0.65
 preview_mode = 7
-bake_state = 4
 
 [node name="OceanSeaStateZone3D" type="Node3D" parent="." unique_id=1747485942]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 573.061, 24.53561, 1461.6362)
 script = ExtResource("15_ody2a")
+enabled = false
 box_size_m = Vector2(519.99963, 600)
 feather_distance_m = 96.865234
 long_amplitude_multiplier = 0.12
@@ -208,5 +216,12 @@ short_amplitude_multiplier = 0.0
 choppiness_multiplier = 2.0
 foam_generation_multiplier = 0.0
 metadata/_custom_type_script = "uid://didnedvqjuvg1"
+
+[node name="CoastalBakeAuthoring" type="Node" parent="." unique_id=1647447480 node_paths=PackedStringArray("source_root")]
+script = ExtResource("17_4qkou")
+coast_id = "paradise_island_phase_test"
+source_root = NodePath("../paradise_island")
+cell_size_m = 4.0
+metadata/_custom_type_script = "uid://bgmu6kdgxmpru"
 
 [editable path="paradise_island"]

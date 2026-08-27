@@ -1,3 +1,4 @@
+@tool
 class_name OceanClipmapConfig
 extends Resource
 ## Parámetros estructurales del renderer clipmap. No alteran el campo FFT.
