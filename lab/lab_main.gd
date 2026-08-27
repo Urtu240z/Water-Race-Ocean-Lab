@@ -5,7 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | F3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | F8: Planar Projection A/B | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 const PLANAR_AB_WARMUP_S := 0.5
 const PLANAR_AB_MEASURE_S := 4.0
@@ -104,6 +104,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_toggle_planar_reflection()
 		KEY_F7:
 			_start_planar_ab_measurement()
+		KEY_F8:
+			_toggle_planar_projection_mode()
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET
@@ -158,6 +160,13 @@ func _start_planar_ab_measurement() -> void:
 	_planar_ab_phase = PLANAR_AB_WARMUP_OFF
 
 
+func _toggle_planar_projection_mode() -> void:
+	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
+		return
+	ocean_v3.planar_reflection_projection_mode = 1 - ocean_v3.planar_reflection_projection_mode
+	_update_coastal_hud()
+
+
 func _update_planar_ab_measurement(delta: float) -> void:
 	if _planar_ab_phase == PLANAR_AB_IDLE or _planar_ab_phase == PLANAR_AB_RESULT:
 		return
@@ -205,6 +214,10 @@ func planar_hud_lines() -> Array[String]:
 			ocean_v3.planar_reflection_capture_rate_hz(),
 		]
 	]
+	lines.append("Planar Projection: %s | Clip bias: %.2f m" % [
+		ocean_v3.planar_reflection_projection_label(),
+		ocean_v3.planar_reflection_clip_bias_m,
+	])
 	match _planar_ab_phase:
 		PLANAR_AB_WARMUP_OFF:
 			lines.append("Planar A/B: WARMUP OFF")

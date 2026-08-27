@@ -8,8 +8,9 @@ Status: 2026-08-27, Godot 4.7 stable.
 
 Reflection 2D keeps its shared `World3D`, mirrored `Camera3D`, `SubViewport`,
 `UPDATE_ONCE` scheduler, and `RenderingServer.frame_post_draw` matrix/texture
-synchronization. This checkpoint only extends the public overscan range to
-`1.0..2.0`; the default remains `1.15`.
+synchronization. The production default remains mirrored perspective. A
+selectable off-axis frustum experiment is also available for LAB A/B testing;
+it does not replace the default and does not require changes to the shader.
 
 ## APIs and engine source reviewed
 
@@ -57,13 +58,53 @@ the supported Godot 4.7 API. A hand-written OpenGL-style matrix would risk
 wrong reverse-Z depth, handedness, culling, and near/far behavior.
 
 The authoritative sea plane remains the existing `_sea_plane_world_y()` datum;
-no `Y = 0` assumption or clip bias was added. Therefore:
+no `Y = 0` assumption is made. Therefore:
 
 - oblique clipping: not implemented;
-- clip bias control: not applicable, no `planar_reflection_clip_bias_m` added;
+- clip bias control: the off-axis experiment uses
+  `planar_reflection_clip_bias_m` to move its near plane away from the water;
+  this is not an oblique clip-plane bias;
 - discarded half-space: not applicable;
 - current fallback: reflection cull mask for whole-object exclusions plus the
   existing `planar_reflection_max_distance_m` far-plane limit.
+
+## Off-Axis Frustum Workaround
+
+The LAB-only `Off-Axis Frustum` mode addresses the common horizontal sea-plane
+case without pretending to provide arbitrary oblique clipping. When the main
+camera is perspective and above the authoritative `_sea_plane_world_y()` datum,
+the auxiliary camera uses the mirrored eye position, looks perpendicular to the
+sea plane along `Vector3.UP`, and places its optical axis through the vertical
+projection of the main-camera eye. Its tangential basis comes from the main
+camera right vector projected onto XZ, with world right as a deterministic
+fallback; no Euler angles are used.
+
+The reflection footprint is derived from the four main-camera viewport corner
+rays (`project_ray_origin()` / `project_ray_normal()`) intersected with the
+horizontal sea plane. Invalid, upward-facing, or too-distant intersections are
+made finite and projected onto the plane, then the rectangle is fitted to the
+reflection viewport aspect, scaled by the public overscan range (`1.0..2.0`),
+and clamped by `planar_reflection_max_distance_m`. The result is installed with
+the supported `Camera3D.set_frustum()` API. The near plane is based on the
+camera height minus `planar_reflection_clip_bias_m`; invalid height or depth
+conditions fall back to the existing mirrored camera behavior.
+
+This footprint construction is inspired by the older
+[Godot Planar Reflection Plugin](https://github.com/SIsilicon/Godot-Planar-Reflection-Plugin/blob/master/addons/Silicon.vfx.planar_reflection/planar_reflector.gd),
+but it is implemented against Godot 4.7's current `Camera3D` API and the
+Ocean V3 distance/plane rules. The published shader matrix is still the actual
+`reflection_camera.get_camera_projection() *
+Projection(reflection_camera.get_camera_transform().affine_inverse())`,
+published through the existing `frame_post_draw` synchronization.
+
+This is not a true oblique projection or a renderer clip plane. It is limited to
+perspective cameras and a horizontal water datum. It gives the reflection
+camera a finite, water-plane-derived capture footprint, but it cannot exactly
+discard arbitrary triangles that cross the sea plane; geometry crossing or
+appearing outside the fitted frustum may still require asset/layer handling.
+Orthographic and custom-frustum main cameras, cameras at/below the water, and
+invalid ray footprints use the safe mirrored fallback. F8 in the Ocean Lab
+toggles the two modes and the HUD reports the active mode and clip-bias value.
 
 ## Alternatives
 
@@ -86,11 +127,17 @@ outside this Ocean V3 checkpoint and should be benchmarked and isolated first.
 ## Compatibility notes
 
 - Perspective overscan remains `2 * atan(tan(FOV / 2) * overscan)` with the
-  existing radians/degrees conversion; orthographic/frustum behavior is
-  unchanged.
+  existing radians/degrees conversion in mirrored perspective mode. Off-axis
+  mode uses the ray-derived frustum footprint instead; orthographic/frustum
+  behavior remains on the safe mirrored fallback.
 - Overscan `1.0`, `1.5`, and `2.0` remains compatible with the existing
-  scheduler and the actual reflection-camera projection.
+  scheduler and the actual reflection-camera projection. Off-axis overscan is
+  applied to the fitted footprint and is independently clamped by maximum
+  distance.
 - `frame_post_draw` synchronization is unchanged and remains the protected
   matrix/texture pairing mechanism.
+- The off-axis mode is selectable through
+  `planar_reflection_projection_mode` and defaults to `Mirrored Perspective`;
+  it is an experiment, not a production default.
 - Reflection distortion, including the intended approximate `0.20` Lab value,
   is independent of this investigation.

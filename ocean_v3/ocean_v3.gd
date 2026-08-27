@@ -382,6 +382,16 @@ var _wave_transition_start_short_geometry := 0.25
 		planar_reflection_overscan = clampf(value, 1.0, 2.0)
 		_request_visual_sync()
 
+@export_enum("Mirrored Perspective:0", "Off-Axis Frustum:1") var planar_reflection_projection_mode: int = 0:
+	set(value):
+		planar_reflection_projection_mode = clampi(value, 0, 1)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var planar_reflection_clip_bias_m: float = 0.10:
+	set(value):
+		planar_reflection_clip_bias_m = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
 @export_enum("15 Hz:15", "30 Hz:30", "60 Hz:60", "Every Frame:0") var planar_reflection_update_hz: int = 30:
 	set(value):
 		planar_reflection_update_hz = 0 if value <= 0 else 15 if value <= 15 else 30 if value <= 30 else 60
@@ -876,6 +886,8 @@ func _ensure_planar_reflection() -> void:
 		planar_reflection_enabled,
 		planar_reflection_resolution_scale,
 		planar_reflection_overscan,
+		planar_reflection_projection_mode,
+		planar_reflection_clip_bias_m,
 		planar_reflection_update_hz,
 		planar_reflection_max_distance_m,
 		planar_reflection_max_camera_height_m,
@@ -1035,6 +1047,12 @@ func planar_reflection_capture_rate_hz() -> float:
 	if _planar_reflection != null and is_instance_valid(_planar_reflection):
 		return float(_planar_reflection.call("capture_rate_hz"))
 	return 0.0
+
+
+func planar_reflection_projection_label() -> String:
+	if _planar_reflection != null and is_instance_valid(_planar_reflection):
+		return str(_planar_reflection.call("projection_mode_label"))
+	return "PERSPECTIVE"
 
 
 func _refresh_sea_state_zones() -> void:
@@ -1498,6 +1516,8 @@ func _sync_water_visual_parameters() -> void:
 			planar_reflection_enabled,
 			planar_reflection_resolution_scale,
 			planar_reflection_overscan,
+			planar_reflection_projection_mode,
+			planar_reflection_clip_bias_m,
 			planar_reflection_update_hz,
 			planar_reflection_max_distance_m,
 			planar_reflection_max_camera_height_m,

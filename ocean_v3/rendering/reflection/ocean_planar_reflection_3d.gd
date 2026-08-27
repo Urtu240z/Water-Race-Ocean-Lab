@@ -9,6 +9,9 @@ class_name OceanPlanarReflection3D
 const OCEAN_RENDER_LAYER := 2
 const USER_RENDER_LAYER_MASK := (1 << 20) - 1
 const MIN_VIEWPORT_SIZE := Vector2i(2, 2)
+const PROJECTION_MODE_MIRRORED_PERSPECTIVE := 0
+const PROJECTION_MODE_OFF_AXIS_FRUSTUM := 1
+const SAFE_CAMERA_EPSILON_M := 0.001
 
 var _ocean_root: Node3D
 var _surface_material: ShaderMaterial
@@ -18,6 +21,8 @@ var _reflection_viewport: SubViewport
 var _reflection_camera: Camera3D
 var _resolution_scale := 0.25
 var _overscan := 1.15
+var _projection_mode := PROJECTION_MODE_MIRRORED_PERSPECTIVE
+var _clip_bias_m := 0.10
 var _update_hz := 30
 var _max_distance_m := 500.0
 var _max_camera_height_m := 75.0
@@ -41,6 +46,7 @@ var _capture_matrix_pending := false
 var _capture_sequence := 0
 var _pending_capture_sequence := 0
 var _last_active_camera_id := 0
+var _active_projection_label := "PERSPECTIVE"
 
 
 func _exit_tree() -> void:
@@ -68,13 +74,17 @@ func initialize(ocean_root: Node3D, surface_material: ShaderMaterial) -> void:
 
 
 
-func set_settings(enabled: bool, resolution_scale: float, overscan: float, update_hz: int, max_distance_m: float, max_camera_height_m: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
+func set_settings(enabled: bool, resolution_scale: float, overscan: float, projection_mode: int, clip_bias_m: float, update_hz: int, max_distance_m: float, max_camera_height_m: float, reflection_strength: float, distortion_strength: float, cull_mask: int, edge_fade: float) -> void:
 	var previous_enabled := _enabled
 	var previous_overscan := _overscan
+	var previous_projection_mode := _projection_mode
+	var previous_clip_bias_m := _clip_bias_m
 	var previous_max_distance_m := _max_distance_m
 	_enabled = enabled
 	_resolution_scale = clampf(resolution_scale, 0.10, 1.0)
 	_overscan = clampf(overscan, 1.0, 2.0)
+	_projection_mode = clampi(projection_mode, PROJECTION_MODE_MIRRORED_PERSPECTIVE, PROJECTION_MODE_OFF_AXIS_FRUSTUM)
+	_clip_bias_m = clampf(clip_bias_m, 0.0, 1.0)
 	var previous_update_hz := _update_hz
 	_update_hz = 0 if update_hz <= 0 else 15 if update_hz <= 15 else 30 if update_hz <= 30 else 60
 	_max_distance_m = clampf(max_distance_m, 50.0, 5000.0)
@@ -87,7 +97,7 @@ func set_settings(enabled: bool, resolution_scale: float, overscan: float, updat
 	if previous_update_hz != _update_hz:
 		_scheduler_elapsed_s = 0.0
 	if _initialized:
-		if previous_enabled != _enabled or not is_equal_approx(previous_overscan, _overscan) or not is_equal_approx(previous_max_distance_m, _max_distance_m):
+		if previous_enabled != _enabled or not is_equal_approx(previous_overscan, _overscan) or previous_projection_mode != _projection_mode or not is_equal_approx(previous_clip_bias_m, _clip_bias_m) or not is_equal_approx(previous_max_distance_m, _max_distance_m):
 			_invalidate_capture_state()
 		_reflection_camera.cull_mask = _cull_mask
 		_resize_to_main_viewport()
@@ -186,12 +196,23 @@ func _resize_to_main_viewport() -> void:
 
 
 func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
-	# OBLIQUE CLIPPING: NOT IMPLEMENTED. Godot 4.7 exposes only standard
-	# RenderingServer camera_set_perspective/orthogonal/frustum projection calls,
-	# with no arbitrary Projection setter. Keep the mirror mathematically correct
-	# and use the public cull mask as the safe below-datum fallback.
-	# Reflect forward/up over the horizontal sea datum, then reconstruct right so
-	# the camera basis stays orthonormal and keeps Godot's +X/+Y/-Z convention.
+	if _projection_mode == PROJECTION_MODE_OFF_AXIS_FRUSTUM and main_camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+		if _sync_off_axis_frustum(main_camera, plane_y):
+			_active_projection_label = "OFF-AXIS FRUSTUM"
+			return
+
+	_sync_mirrored_perspective(main_camera, plane_y)
+	if _projection_mode == PROJECTION_MODE_MIRRORED_PERSPECTIVE:
+		_active_projection_label = "PERSPECTIVE"
+	elif main_camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
+		_active_projection_label = "PERSPECTIVE (FALLBACK)"
+	else:
+		_active_projection_label = "MIRRORED (FALLBACK)"
+
+
+func _sync_mirrored_perspective(main_camera: Camera3D, plane_y: float) -> void:
+	# Safe fallback for non-perspective cameras, near-water cameras, and any
+	# invalid off-axis footprint. Keep the original mirrored-camera behavior.
 	var main_transform := main_camera.global_transform
 	var reflected_origin := main_transform.origin
 	reflected_origin.y = 2.0 * plane_y - reflected_origin.y
@@ -209,25 +230,152 @@ func _sync_reflection_camera(main_camera: Camera3D, plane_y: float) -> void:
 	_reflection_camera.projection = main_camera.projection
 	_reflection_camera.keep_aspect = main_camera.keep_aspect
 	if main_camera.projection == Camera3D.PROJECTION_PERSPECTIVE:
-		# Camera3D.fov is the constrained FOV axis selected by keep_aspect. Scale
-		# that same axis so both the capture texture and its projection agree.
 		_reflection_camera.fov = rad_to_deg(2.0 * atan(tan(deg_to_rad(main_camera.fov) * 0.5) * _overscan))
 		_reflection_camera.size = main_camera.size
 	elif main_camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
 		_reflection_camera.fov = main_camera.fov
 		_reflection_camera.size = main_camera.size * _overscan
 	else:
-		# Frustum projection is best effort: preserve its custom offset while
-		# widening the configured size around the same optical center.
 		_reflection_camera.fov = main_camera.fov
 		_reflection_camera.size = main_camera.size * _overscan
 	_reflection_camera.near = main_camera.near
-	_reflection_camera.far = maxf(main_camera.near + 0.001, minf(main_camera.far, _max_distance_m))
+	_reflection_camera.far = maxf(main_camera.near + SAFE_CAMERA_EPSILON_M, minf(main_camera.far, _max_distance_m))
 	_reflection_camera.frustum_offset = main_camera.frustum_offset
 	_reflection_camera.h_offset = main_camera.h_offset
 	_reflection_camera.v_offset = main_camera.v_offset
 	_reflection_camera.environment = main_camera.environment
 	_reflection_camera.cull_mask = _cull_mask
+
+
+func _sync_off_axis_frustum(main_camera: Camera3D, plane_y: float) -> bool:
+	var main_position := main_camera.global_position
+	var height_m := main_position.y - plane_y
+	if height_m <= SAFE_CAMERA_EPSILON_M:
+		return false
+
+	var z_near := maxf(height_m - _clip_bias_m, SAFE_CAMERA_EPSILON_M)
+	var z_far := minf(main_camera.far, _max_distance_m)
+	if z_far <= z_near + SAFE_CAMERA_EPSILON_M:
+		return false
+
+	var tangent_right := _stable_tangent_right(main_camera)
+	var forward := Vector3.UP
+	var tangent_up := tangent_right.cross(forward).normalized()
+	if tangent_up.length_squared() <= SAFE_CAMERA_EPSILON_M:
+		return false
+	var reflected_origin := main_position
+	reflected_origin.y = 2.0 * plane_y - main_position.y
+	var reflected_basis := Basis(tangent_right, tangent_up, -forward).orthonormalized()
+	_reflection_camera.global_transform = Transform3D(reflected_basis, reflected_origin)
+
+	var footprint := _calculate_sea_plane_footprint(main_camera, plane_y, tangent_right, tangent_up)
+	if footprint.size.x <= SAFE_CAMERA_EPSILON_M or footprint.size.y <= SAFE_CAMERA_EPSILON_M:
+		return false
+
+	var reflection_aspect := float(_reflection_viewport.size.x) / maxf(float(_reflection_viewport.size.y), 1.0)
+	if reflection_aspect <= SAFE_CAMERA_EPSILON_M:
+		return false
+	footprint = _fit_footprint_aspect(footprint, reflection_aspect)
+	footprint = _scale_footprint(footprint, _overscan)
+
+	# The footprint is measured on the water plane at height_m. Move its
+	# extents to the actual near plane, which is slightly closer by clip bias.
+	var near_scale := z_near / height_m
+	footprint = _scale_footprint(footprint, near_scale)
+	footprint = _clamp_footprint_radius(footprint, _max_distance_m * near_scale)
+	if footprint.size.x <= SAFE_CAMERA_EPSILON_M or footprint.size.y <= SAFE_CAMERA_EPSILON_M:
+		return false
+
+	_reflection_camera.keep_aspect = Camera3D.KEEP_WIDTH
+	_reflection_camera.set_frustum(
+		footprint.size.x,
+		footprint.position + footprint.size * 0.5,
+		z_near,
+		z_far
+	)
+	_reflection_camera.h_offset = 0.0
+	_reflection_camera.v_offset = 0.0
+	_reflection_camera.environment = main_camera.environment
+	_reflection_camera.cull_mask = _cull_mask
+	return true
+
+
+func _stable_tangent_right(main_camera: Camera3D) -> Vector3:
+	var candidate := main_camera.global_transform.basis.x
+	candidate.y = 0.0
+	if candidate.length_squared() <= SAFE_CAMERA_EPSILON_M:
+		candidate = Vector3.RIGHT
+	return candidate.normalized()
+
+
+func _calculate_sea_plane_footprint(main_camera: Camera3D, plane_y: float, tangent_right: Vector3, tangent_up: Vector3) -> Rect2:
+	var viewport_size := _main_viewport.get_visible_rect().size
+	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		return Rect2()
+	var plane_projection := main_camera.global_position
+	plane_projection.y = plane_y
+	var corners := [
+		Vector2(0.0, 0.0),
+		Vector2(viewport_size.x, 0.0),
+		Vector2(0.0, viewport_size.y),
+		Vector2(viewport_size.x, viewport_size.y),
+	]
+	var footprint := Rect2()
+	var has_point := false
+	for corner in corners:
+		var ray_origin := main_camera.project_ray_origin(corner)
+		var ray_direction := main_camera.project_ray_normal(corner).normalized()
+		var point := _ray_to_finite_sea_plane(ray_origin, ray_direction, plane_y)
+		var horizontal_offset := point - plane_projection
+		horizontal_offset.y = 0.0
+		if horizontal_offset.length() > _max_distance_m:
+			horizontal_offset = horizontal_offset.normalized() * _max_distance_m
+		point = plane_projection + horizontal_offset
+		var local_offset := point - plane_projection
+		var planar_point := Vector2(local_offset.dot(tangent_right), local_offset.dot(tangent_up))
+		if not has_point:
+			footprint = Rect2(planar_point, Vector2.ZERO)
+			has_point = true
+		else:
+			footprint = footprint.expand(planar_point)
+	return footprint
+
+
+func _ray_to_finite_sea_plane(ray_origin: Vector3, ray_direction: Vector3, plane_y: float) -> Vector3:
+	if absf(ray_direction.y) > SAFE_CAMERA_EPSILON_M:
+		var distance := (plane_y - ray_origin.y) / ray_direction.y
+		if is_finite(distance) and distance > 0.0 and distance <= _max_distance_m:
+			var intersection := ray_origin + ray_direction * distance
+			intersection.y = plane_y
+			return intersection
+	var fallback := ray_origin + ray_direction * _max_distance_m
+	fallback.y = plane_y
+	return fallback
+
+
+func _fit_footprint_aspect(footprint: Rect2, aspect: float) -> Rect2:
+	var center := footprint.position + footprint.size * 0.5
+	var half_size := footprint.size * 0.5
+	if footprint.size.x / maxf(footprint.size.y, SAFE_CAMERA_EPSILON_M) > aspect:
+		half_size.y = half_size.x / aspect
+	else:
+		half_size.x = half_size.y * aspect
+	return Rect2(center - half_size, half_size * 2.0)
+
+
+func _scale_footprint(footprint: Rect2, scale: float) -> Rect2:
+	var center := footprint.position + footprint.size * 0.5
+	var size := footprint.size * maxf(scale, SAFE_CAMERA_EPSILON_M)
+	return Rect2(center - size * 0.5, size)
+
+
+func _clamp_footprint_radius(footprint: Rect2, max_radius: float) -> Rect2:
+	var center := footprint.position + footprint.size * 0.5
+	var half_size := footprint.size * 0.5
+	var corner_radius := Vector2(half_size.x, half_size.y).length()
+	if corner_radius > max_radius and corner_radius > SAFE_CAMERA_EPSILON_M:
+		half_size *= max_radius / corner_radius
+	return Rect2(center - half_size, half_size * 2.0)
 
 
 func _sync_material_state(active: bool) -> void:
@@ -269,6 +417,10 @@ func _invalidate_capture_state() -> void:
 
 func capture_rate_hz() -> float:
 	return _capture_rate_hz
+
+
+func projection_mode_label() -> String:
+	return _active_projection_label
 
 
 func _apply_ocean_render_layer() -> void:
