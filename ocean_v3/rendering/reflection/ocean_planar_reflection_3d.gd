@@ -71,6 +71,7 @@ func _create_render_target() -> void:
 
 	_reflection_camera = Camera3D.new()
 	_reflection_camera.name = "PlanarReflectionCamera"
+	_reflection_camera.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_reflection_camera.cull_mask = _cull_mask
 	_reflection_camera.current = true
 	_reflection_viewport.add_child(_reflection_camera)
