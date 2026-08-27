@@ -195,7 +195,11 @@ func _persist_canonical_asset(asset: CoastalBakeAsset, bathymetry: BathymetryDat
 	# owner de ResourceCache y evita que FLAG_CHANGE_PATH deje un owner anterior
 	# asociado al mismo path durante un rebake en el mismo proceso.
 	var output_dir := "%s/%s" % [OUTPUT_ROOT, safe_id]
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(output_dir))
+	var output_dir_absolute := ProjectSettings.globalize_path(output_dir)
+	var directory_error: Error = DirAccess.make_dir_recursive_absolute(output_dir_absolute)
+	if directory_error != OK and not DirAccess.dir_exists_absolute(output_dir_absolute):
+		push_error("CoastalBakeAuthoring: no se pudo preparar el directorio %s (error %d)." % [output_dir, directory_error])
+		return null
 	var bathymetry_path := "%s/bathymetry.res" % output_dir
 	var propagation_path := "%s/propagation.res" % output_dir
 	var warp_path := "%s/warp.res" % output_dir
