@@ -10,6 +10,8 @@ const BASE_WAVE_PRESET_PATHS := [
 	"res://ocean_v3/presets/waves/race.tres",
 	"res://ocean_v3/presets/waves/rough.tres",
 ]
+const PLANAR_REFLECTION_SCRIPT := preload("res://ocean_v3/rendering/reflection/ocean_planar_reflection_3d.gd")
+const PLANAR_REFLECTION_DEFAULT_CULL_MASK := ((1 << 20) - 1) & ~(1 << 1)
 
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
@@ -361,6 +363,38 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 1.0, 0.01) var reflection_zone_calm_influence: float = 0.85:
 	set(value):
 		reflection_zone_calm_influence = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+
+@export_group("Planar Reflection")
+@export var planar_reflection_enabled: bool = true:
+	set(value):
+		planar_reflection_enabled = value
+		_request_visual_sync()
+
+@export_range(0.25, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.5:
+	set(value):
+		planar_reflection_resolution_scale = clampf(value, 0.25, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var planar_reflection_strength: float = 0.55:
+	set(value):
+		planar_reflection_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 0.2, 0.001) var planar_reflection_distortion_strength: float = 0.035:
+	set(value):
+		planar_reflection_distortion_strength = maxf(value, 0.0)
+		_request_visual_sync()
+
+@export_range(0, 1048575, 1) var planar_reflection_cull_mask: int = PLANAR_REFLECTION_DEFAULT_CULL_MASK:
+	set(value):
+		planar_reflection_cull_mask = value
+		_request_visual_sync()
+
+@export_range(0.001, 0.5, 0.005) var planar_reflection_edge_fade: float = 0.08:
+	set(value):
+		planar_reflection_edge_fade = clampf(value, 0.001, 0.5)
 		_request_visual_sync()
 
 
@@ -789,6 +823,7 @@ var _sea_state_zone_uniform_data3 := PackedVector4Array()
 var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
+var _planar_reflection: Node
 
 
 func _ready() -> void:
@@ -801,7 +836,30 @@ func _ready() -> void:
 	if wave_preset != null:
 		apply_selected_wave_preset()
 	_configure_coastal_bake_asset()
+	_ensure_planar_reflection()
 	call_deferred(&"_flush_visual_sync")
+
+
+func _ensure_planar_reflection() -> void:
+	if Engine.is_editor_hint() or (_planar_reflection != null and is_instance_valid(_planar_reflection)):
+		return
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	if surface == null:
+		return
+	var planar_reflection := PLANAR_REFLECTION_SCRIPT.new() as Node
+	planar_reflection.name = "OceanPlanarReflection3D"
+	add_child(planar_reflection)
+	_planar_reflection = planar_reflection
+	planar_reflection.call("initialize", self, surface.get_surface_material())
+	planar_reflection.call(
+		"set_settings",
+		planar_reflection_enabled,
+		planar_reflection_resolution_scale,
+		planar_reflection_strength,
+		planar_reflection_distortion_strength,
+		planar_reflection_cull_mask,
+		planar_reflection_edge_fade
+	)
 
 
 func _configure_coastal_bake_asset() -> void:
@@ -941,12 +999,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 4
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 7
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "ROUGHNESS", "WAVE_ACTIVITY", "ZONE_CALMNESS"][_reflection_debug_mode]
+	return ["OFF", "ROUGHNESS", "WAVE_ACTIVITY", "ZONE_CALMNESS", "PLANAR_UV", "PLANAR_WEIGHT", "PLANAR_ONLY"][_reflection_debug_mode]
 
 
 func _refresh_sea_state_zones() -> void:
@@ -1404,6 +1462,16 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_slope_end", reflection_slope_end)
 	material.set_shader_parameter(&"reflection_zone_calm_influence", reflection_zone_calm_influence)
 	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
+	if _planar_reflection != null and is_instance_valid(_planar_reflection):
+		_planar_reflection.call(
+			"set_settings",
+			planar_reflection_enabled,
+			planar_reflection_resolution_scale,
+			planar_reflection_strength,
+			planar_reflection_distortion_strength,
+			planar_reflection_cull_mask,
+			planar_reflection_edge_fade
+		)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)

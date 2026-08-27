@@ -165,8 +165,18 @@ uniform float reflection_wave_roughness_gain : hint_range(0.0, 1.0, 0.01) = 0.35
 uniform float reflection_slope_start : hint_range(0.0, 4.0, 0.01) = 0.12;
 uniform float reflection_slope_end : hint_range(0.0, 4.0, 0.01) = 0.55;
 uniform float reflection_zone_calm_influence : hint_range(0.0, 1.0, 0.01) = 0.85;
-// 0 OFF, 1 ROUGHNESS, 2 WAVE_ACTIVITY, 3 ZONE_CALMNESS.
+// 0 OFF, 1 ROUGHNESS, 2 WAVE_ACTIVITY, 3 ZONE_CALMNESS,
+// 4 PLANAR_UV, 5 PLANAR_WEIGHT, 6 PLANAR_ONLY.
 uniform int reflection_debug_mode = 0;
+
+// Reflection 2: one world-anchored planar pass, with Environment/Sky remaining
+// the PBR fallback. The matrix is supplied by OceanPlanarReflection3D.
+uniform bool planar_reflection_enabled = false;
+uniform sampler2D planar_reflection_texture : repeat_disable, filter_linear;
+uniform mat4 planar_reflection_view_projection = mat4(1.0);
+uniform float planar_reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
+uniform float planar_reflection_distortion_strength : hint_range(0.0, 0.2, 0.001) = 0.035;
+uniform float planar_reflection_edge_fade : hint_range(0.001, 0.5, 0.005) = 0.08;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
 // spectral Jacobian compression after each FFT assemble; controls below are
@@ -271,6 +281,7 @@ uniform float breaker_takeover_submerge_hs = 0.30;
 varying vec3 derived_normal;
 varying vec2 ocean_base_xz;
 varying vec2 ocean_world_xz;
+varying vec3 ocean_world_position;
 varying vec4 coastal_field;
 varying vec4 coastal_metrics;
 varying vec4 coastal_phase_data;
@@ -648,6 +659,7 @@ void vertex() {
 	ocean_wave_height = displacement.y;
 	vec3 displaced_vertex = VERTEX + displacement;
 	ocean_world_xz = (MODEL_MATRIX * vec4(displaced_vertex, 1.0)).xz;
+	ocean_world_position = (MODEL_MATRIX * vec4(displaced_vertex, 1.0)).xyz;
 	surface_foam_displacement_xz = ocean_world_xz - world_xz;
 	VERTEX = displaced_vertex;
 	NORMAL = ocean_normal;
@@ -1373,6 +1385,129 @@ void fragment() {
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
 	}
+
+	// Build the final visual normal once. Reflection 2 uses this normal for
+	// distortion, while physical_wave_activity below still uses the FFT normal.
+	vec3 shading_normal_world;
+	if (ocean_normal_fragment) {
+		shading_normal_world = pixel_ocean_normal(ocean_base_xz);
+	} else {
+		shading_normal_world = normalize(derived_normal);
+	}
+	vec3 visual_normal = normalize((VIEW_MATRIX * vec4(shading_normal_world, 0.0)).xyz);
+	float camera_distance = distance(ocean_world_xz, camera_world_xz);
+	float foam_normal_mask = foam_fresh_mask * foam_fresh_normal_weight
+		+ foam_residual_mask * foam_residual_normal_weight
+		+ surface_foam_mask * surface_foam_normal_strength
+		+ crest_filigree_mask * crest_filigree_normal_influence;
+	if (foam_normal_mask > 0.0001 && foam_normal_strength > 0.0) {
+		vec3 foam_shape_normal_world = normalize(vec3(
+			-foam_shape_gradient.x * foam_normal_strength,
+			1.0,
+			-foam_shape_gradient.y * foam_normal_strength
+		));
+		vec3 foam_shape_offset_view = mat3(VIEW_MATRIX) * vec3(
+			foam_shape_normal_world.x / max(foam_shape_normal_world.y, 0.08),
+			0.0,
+			foam_shape_normal_world.z / max(foam_shape_normal_world.y, 0.08)
+		);
+		visual_normal = normalize(visual_normal + foam_shape_offset_view * foam_normal_mask);
+	}
+	if (surface_foam_mask > 0.0001 && surface_foam_micro_normal_strength > 0.0) {
+		vec3 micro_normal_world = normalize(vec3(
+			-surface_foam_microheight_gradient.x * surface_foam_micro_normal_strength,
+			1.0,
+			-surface_foam_microheight_gradient.y * surface_foam_micro_normal_strength
+		));
+		vec3 micro_offset_view = mat3(VIEW_MATRIX) * vec3(
+			micro_normal_world.x / max(micro_normal_world.y, 0.08),
+			0.0,
+			micro_normal_world.z / max(micro_normal_world.y, 0.08)
+		);
+		visual_normal = normalize(visual_normal + micro_offset_view * surface_foam_mask);
+	}
+	if (surface_detail_enabled) {
+		vec3 detail_normal = sample_surface_detail(surface_detail_carrier_xz(), camera_distance);
+		vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
+		vec3 detail_offset_view = mat3(VIEW_MATRIX) * vec3(
+			detail_slope.x,
+			0.0,
+			detail_slope.y
+		);
+		float foam_micro_gain = 1.0 + foam_micro_normal_strength * foam_mask;
+		visual_normal = normalize(visual_normal + detail_offset_view * surface_normal_strength * foam_micro_gain);
+	}
+	vec3 final_visual_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
+	NORMAL = visual_normal;
+	float physical_wave_activity = wave_reflection_activity(shading_normal_world);
+
+	vec3 view_direction = normalize(VIEW);
+	float facing = clamp(dot(visual_normal, view_direction), 0.0, 1.0);
+	float fresnel = pow(1.0 - facing, fresnel_power);
+	float distance_opacity = smoothstep(
+		opacity_distance_start,
+		max(opacity_distance_end, opacity_distance_start + 0.001),
+		camera_distance
+	);
+	float reflection_base_roughness = mix(
+		ocean_roughness_near,
+		ocean_roughness_far,
+		max(distance_opacity, fresnel)
+	);
+	float water_reflection_roughness = wave_aware_reflection_roughness(
+		reflection_base_roughness, physical_wave_activity, zone_calmness);
+
+	vec2 planar_reflection_uv = vec2(0.0);
+	vec3 planar_reflection_radiance = vec3(0.0);
+	float planar_reflection_validity = 0.0;
+	float planar_reflection_weight = 0.0;
+	if (planar_reflection_enabled) {
+		vec4 reflection_clip = planar_reflection_view_projection * vec4(ocean_world_position, 1.0);
+		if (reflection_clip.w > 0.0001) {
+			vec2 projected_uv = reflection_clip.xy / reflection_clip.w;
+			projected_uv = projected_uv * 0.5 + 0.5;
+			// Viewport textures use an upper-left origin while projection NDC uses
+			// the lower-left convention for this mapping.
+			projected_uv.y = 1.0 - projected_uv.y;
+			planar_reflection_uv = projected_uv;
+			vec2 inside_uv = step(vec2(0.0), projected_uv) * step(projected_uv, vec2(1.0));
+			float inside_mask = inside_uv.x * inside_uv.y;
+			float edge_distance = min(
+				min(projected_uv.x, 1.0 - projected_uv.x),
+				min(projected_uv.y, 1.0 - projected_uv.y)
+			);
+			float edge_fade = smoothstep(0.0, max(planar_reflection_edge_fade, 0.001), edge_distance);
+			// UVs are normalized, so resolution changes do not change distortion
+			// amplitude. Perspective compensation suppresses horizon-scale shifts.
+			float perspective_compensation = clamp(32.0 / max(abs(reflection_clip.w), 32.0), 0.04, 1.0);
+			vec2 distortion = final_visual_normal_world.xz
+				* planar_reflection_distortion_strength
+				* perspective_compensation;
+			vec2 sample_uv = projected_uv + distortion;
+			vec2 sample_inside_uv = step(vec2(0.0), sample_uv) * step(sample_uv, vec2(1.0));
+			float sample_inside_mask = sample_inside_uv.x * sample_inside_uv.y;
+			float sample_edge_distance = min(
+				min(sample_uv.x, 1.0 - sample_uv.x),
+				min(sample_uv.y, 1.0 - sample_uv.y)
+			);
+			float sample_edge_fade = smoothstep(0.0, max(planar_reflection_edge_fade, 0.001), sample_edge_distance);
+			planar_reflection_validity = inside_mask * sample_inside_mask * edge_fade * sample_edge_fade;
+			if (planar_reflection_validity > 0.0001) {
+				planar_reflection_radiance = textureLod(planar_reflection_texture, sample_uv, 0.0).rgb;
+			}
+			float planar_clarity = 1.0 - smoothstep(0.32, 0.82, water_reflection_roughness);
+			float foam_visibility = 1.0 - clamp(foam_mask, 0.0, 1.0) * 0.88;
+			planar_reflection_weight = clamp(
+				planar_reflection_validity
+				* planar_reflection_strength
+				* fresnel
+				* planar_clarity
+				* foam_visibility,
+				0.0,
+				1.0
+			);
+		}
+	}
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
 	} else if (debug_mode == 3) {
@@ -1487,6 +1622,12 @@ void fragment() {
 		color = vec3(debug_wave_activity);
 	} else if (reflection_debug_mode == 3) {
 		color = vec3(zone_calmness);
+	} else if (reflection_debug_mode == 4) {
+		color = vec3(clamp(planar_reflection_uv, vec2(0.0), vec2(1.0)), planar_reflection_validity);
+	} else if (reflection_debug_mode == 5) {
+		color = vec3(planar_reflection_weight);
+	} else if (reflection_debug_mode == 6) {
+		color = planar_reflection_radiance;
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || reflection_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -1508,62 +1649,6 @@ void fragment() {
 		// únicamente como A/B con G. El detalle fino SIEMPRE se añade después
 		// mediante normal maps por fragment, de modo que haya riqueza cerca y
 		// también a distancia sin marcar la cuadrícula del clipmap.
-		vec3 shading_normal_world;
-		if (ocean_normal_fragment) {
-			shading_normal_world = pixel_ocean_normal(ocean_base_xz);
-		} else {
-			shading_normal_world = normalize(derived_normal);
-		}
-
-		vec3 visual_normal = normalize((VIEW_MATRIX * vec4(shading_normal_world, 0.0)).xyz);
-		float camera_distance = distance(ocean_world_xz, camera_world_xz);
-		float foam_normal_mask = foam_fresh_mask * foam_fresh_normal_weight
-			+ foam_residual_mask * foam_residual_normal_weight
-			+ surface_foam_mask * surface_foam_normal_strength
-			+ crest_filigree_mask * crest_filigree_normal_influence;
-		if (foam_normal_mask > 0.0001 && foam_normal_strength > 0.0) {
-			vec3 foam_shape_normal_world = normalize(vec3(
-				-foam_shape_gradient.x * foam_normal_strength,
-				1.0,
-				-foam_shape_gradient.y * foam_normal_strength
-			));
-			vec3 foam_shape_offset_view = mat3(VIEW_MATRIX) * vec3(
-				foam_shape_normal_world.x / max(foam_shape_normal_world.y, 0.08),
-				0.0,
-				foam_shape_normal_world.z / max(foam_shape_normal_world.y, 0.08)
-			);
-			visual_normal = normalize(visual_normal + foam_shape_offset_view * foam_normal_mask);
-		}
-		if (surface_foam_mask > 0.0001 && surface_foam_micro_normal_strength > 0.0) {
-			vec3 micro_normal_world = normalize(vec3(
-				-surface_foam_microheight_gradient.x * surface_foam_micro_normal_strength,
-				1.0,
-				-surface_foam_microheight_gradient.y * surface_foam_micro_normal_strength
-			));
-			vec3 micro_offset_view = mat3(VIEW_MATRIX) * vec3(
-				micro_normal_world.x / max(micro_normal_world.y, 0.08),
-				0.0,
-				micro_normal_world.z / max(micro_normal_world.y, 0.08)
-			);
-			visual_normal = normalize(visual_normal + micro_offset_view * surface_foam_mask);
-		}
-
-		// Dos normal maps + warp: detalle fino sin añadir geometría ni marcar
-		// los cuadrados del clipmap.
-		if (surface_detail_enabled) {
-			vec3 detail_normal = sample_surface_detail(surface_detail_carrier_xz(), camera_distance);
-			vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
-			vec3 detail_offset_view = mat3(VIEW_MATRIX) * vec3(
-				detail_slope.x,
-				0.0,
-				detail_slope.y
-			);
-			float foam_micro_gain = 1.0 + foam_micro_normal_strength * foam_mask;
-			visual_normal = normalize(visual_normal + detail_offset_view * surface_normal_strength * foam_micro_gain);
-		}
-		NORMAL = visual_normal;
-		float physical_wave_activity = wave_reflection_activity(shading_normal_world);
-
 		if (water_optics_enabled) {
 			// 5R.3C: profundidad óptica real desde el depth buffer.
 			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
@@ -1615,14 +1700,6 @@ void fragment() {
 				0.24
 			);
 
-			vec3 view_direction = normalize(VIEW);
-			float facing = clamp(dot(visual_normal, view_direction), 0.0, 1.0);
-			float fresnel = pow(1.0 - facing, fresnel_power);
-			float distance_opacity = smoothstep(
-				opacity_distance_start,
-				max(opacity_distance_end, opacity_distance_start + 0.001),
-				camera_distance
-			);
 			float reflection_factor = clamp(
 				fresnel * reflection_strength + distance_opacity * 0.30,
 				0.0,
@@ -1639,6 +1716,10 @@ void fragment() {
 				reflection_tint.rgb,
 				reflection_factor * 0.19
 			);
+			// Explicit planar radiance is conservative: its weight includes validity,
+			// Fresnel, foam visibility and wave-aware clarity. The ambient PBR lobe
+			// is reduced below by the same weight to avoid adding two full reflections.
+			surface_color = mix(surface_color, planar_reflection_radiance, planar_reflection_weight);
 
 			// Refracción screen-space ligera. Se puede apagar de forma aislada
 			// con water_refraction_enabled si causa cualquier artefacto.
@@ -1695,19 +1776,13 @@ void fragment() {
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
-			float base_roughness = mix(
-				ocean_roughness_near,
-				ocean_roughness_far,
-				max(distance_opacity, fresnel)
-			);
-			float water_reflection_roughness = wave_aware_reflection_roughness(
-				base_roughness, physical_wave_activity, zone_calmness);
 			// Water response is established first; foam remains the final authority.
 			ROUGHNESS = water_reflection_roughness;
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
-			SPECULAR = mix(water_specular, surface_foam_specular, surface_foam_mask);
+			float water_specular_after_planar = water_specular * (1.0 - planar_reflection_weight * 0.65);
+			SPECULAR = mix(water_specular_after_planar, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
@@ -1715,7 +1790,8 @@ void fragment() {
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
-			ALBEDO = mix(base_color, surface_foam_color.rgb, surface_foam_mask);
+			ALBEDO = mix(base_color, planar_reflection_radiance, planar_reflection_weight);
+			ALBEDO = mix(ALBEDO, surface_foam_color.rgb, surface_foam_mask);
 			ALBEDO = mix(ALBEDO, residual_foam_color, foam_residual_mask);
 			ALBEDO = mix(ALBEDO, foam_fresh_color.rgb, foam_fresh_mask);
 			EMISSION = vec3(0.0);
@@ -1729,13 +1805,14 @@ void fragment() {
 				ocean_roughness_far,
 				distance_factor
 			);
-			float water_reflection_roughness = wave_aware_reflection_roughness(
+			float fallback_reflection_roughness = wave_aware_reflection_roughness(
 				base_roughness, physical_wave_activity, zone_calmness);
-			ROUGHNESS = water_reflection_roughness;
+			ROUGHNESS = fallback_reflection_roughness;
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
-			SPECULAR = mix(water_specular, surface_foam_specular, surface_foam_mask);
+			float fallback_specular_after_planar = water_specular * (1.0 - planar_reflection_weight * 0.65);
+			SPECULAR = mix(fallback_specular_after_planar, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
