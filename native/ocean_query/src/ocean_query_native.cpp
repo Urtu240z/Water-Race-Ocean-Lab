@@ -35,6 +35,7 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_coastal_profile_us"), &OceanQueryNative::get_coastal_profile_us);
     ClassDB::bind_method(D_METHOD("get_coastal_pair_counts"), &OceanQueryNative::get_coastal_pair_counts);
     ClassDB::bind_method(D_METHOD("ensure_prepared", "simulation_time"), &OceanQueryNative::ensure_prepared);
+    ClassDB::bind_method(D_METHOD("prepare_breaker_time", "simulation_time"), &OceanQueryNative::prepare_breaker_time);
     ClassDB::bind_method(D_METHOD("set_crest_sharpen", "config"), &OceanQueryNative::set_crest_sharpen);
     ClassDB::bind_method(D_METHOD("sample_world", "wx", "wz", "simulation_time"), &OceanQueryNative::sample_world);
     ClassDB::bind_method(D_METHOD("sample_prepared", "wx", "wz"), &OceanQueryNative::sample_prepared);
@@ -42,6 +43,7 @@ void OceanQueryNative::_bind_methods() {
     ClassDB::bind_method(D_METHOD("sample_batch_scalar_prepared", "positions"), &OceanQueryNative::sample_batch_scalar_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_avx2_scalar_trig_prepared", "positions"), &OceanQueryNative::sample_batch_avx2_scalar_trig_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch", "simulation_time", "positions"), &OceanQueryNative::sample_batch);
+    ClassDB::bind_method(D_METHOD("sample_coastal_breaker_batch_prepared", "positions", "include_slope"), &OceanQueryNative::sample_coastal_breaker_batch_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_true_prepared", "positions"), &OceanQueryNative::sample_batch_true_prepared);
     ClassDB::bind_method(D_METHOD("sample_batch_warm_prepared", "positions", "initial_q"), &OceanQueryNative::sample_batch_warm_prepared);
     ClassDB::bind_method(D_METHOD("get_diag_non_converged"), &OceanQueryNative::get_diag_non_converged);
@@ -145,6 +147,10 @@ void OceanQueryNative::clear_coastal() { core_.clear_coastal(); }
 
 void OceanQueryNative::ensure_prepared(double simulation_time) {
     core_.ensure_prepared(simulation_time);
+}
+
+void OceanQueryNative::prepare_breaker_time(double simulation_time) {
+    core_.ensure_breaker_prepared(simulation_time);
 }
 
 void OceanQueryNative::set_crest_sharpen(const Dictionary &config) {
@@ -281,6 +287,24 @@ PackedFloat64Array OceanQueryNative::sample_batch_warm_prepared(const PackedVect
 PackedFloat64Array OceanQueryNative::sample_batch(double simulation_time, const PackedVector3Array &positions) {
     ensure_prepared(simulation_time);
     return sample_batch_prepared(positions);
+}
+
+PackedFloat64Array OceanQueryNative::sample_coastal_breaker_batch_prepared(const PackedVector3Array &positions,
+                                                                            bool include_slope) {
+    const size_t n = static_cast<size_t>(positions.size());
+    if (n == 0) { return PackedFloat64Array(); }
+    batch_xz_.resize(2 * n);
+    for (size_t i = 0; i < n; ++i) {
+        const Vector3 p = positions[static_cast<int64_t>(i)];
+        batch_xz_[2 * i] = p.x;
+        batch_xz_[2 * i + 1] = p.z;
+    }
+    batch_out_.resize(n * oq::S_STRIDE);
+    core_.sample_coastal_breaker_prepared(batch_xz_.data(), n, batch_out_.data(), include_slope);
+    PackedFloat64Array result;
+    result.resize(static_cast<int64_t>(batch_out_.size()));
+    for (size_t i = 0; i < batch_out_.size(); ++i) { result[static_cast<int64_t>(i)] = batch_out_[i]; }
+    return result;
 }
 
 int OceanQueryNative::get_diag_non_converged() const {

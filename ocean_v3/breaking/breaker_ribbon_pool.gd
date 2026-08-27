@@ -7,9 +7,9 @@ extends Node3D
 ## los datos horneados o el modelo de energía (eventos raros, nunca por frame).
 ##
 ## SIN readback GPU→CPU: los anchors se colocan una vez desde CoastalPropagationData
-## (datos CPU horneados, no una lectura de GPU) y toda la detección/geometría del
-## labio vive en breaker_lip.gdshader usando el campo PREBREAK de 4A. El pool
-## sólo sincroniza por frame los uniforms compartidos desde el material del clipmap.
+## (datos CPU horneados, no una lectura de GPU). El campo PREBREAK/geometría del
+## labio vive en breaker_lip.gdshader; el detector CPU usa el sampler coastal
+## LONG especializado y el pool sólo sincroniza uniforms compartidos por frame.
 ##
 ## Reglas de Phase 4B:
 ##   - Sólo LONG_COASTAL (con LONG_REMAINDER) origina el labio; MID/SHORT jamás
@@ -141,7 +141,9 @@ var _debug_stage := 1.0 # 4C-S1: stage manual de la cross-section LUT (0..1).
 var _profile_forward_sign := -1.0 # 4C-S3: default FLIPPED (-1) = alineado con el avance real del FFT.
 var _takeover_mask_enabled := false # 4C-S3: Y toggle del takeover mask debug.
 var _last_fingerprint := ""
-var _query_batch: Callable = Callable() # 4C-S4: sample_water_batch_at_time del módulo.
+var _query_batch: Callable = Callable() # Legacy/tests: batch completa del módulo.
+var _breaker_height_batch: Callable = Callable() # Specialized DETECT/ACTIVE height-only batch.
+var _breaker_slope_batch: Callable = Callable() # Specialized candidate slope batch.
 var _tracking: Array[Dictionary] = [] # 4C-S4: {crest_s, stage, valid, tracked_xz, h0, h3, h6} por slot.
 var _last_track_time := 0.0 # 4C-S4: último render_time usado por el tracker (HUD).
 
@@ -162,6 +164,9 @@ var _wave_transition_alpha := 0.0
 var _next_active_crest_tracking_time := 0.0
 var _active_tracking_queries_last_tick := 0
 var _active_tracking_points_last_tick := 0
+var _detector_slope_queries_last_tick := 0
+var _detector_slope_points_last_tick := 0
+var _detector_query_elapsed_ms_last_tick := 0.0
 var _skip_next_structural_energy_update := false
 var _diagnostic_visible := true
 
@@ -203,8 +208,28 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 
 
 func set_query_source(callable: Callable) -> void:
-	## 4C-S4: Callable batch de OceanQuery (sample_water_batch_at_time del módulo).
+	## Legacy/test hook: Callable batch completa de OceanQuery.
 	_query_batch = callable
+
+
+func set_breaker_query_sources(height_callable: Callable, slope_callable: Callable) -> void:
+	## Specialized path: DETECT/ACTIVE no usa la hot path general de OceanQuery.
+	_breaker_height_batch = height_callable
+	_breaker_slope_batch = slope_callable
+
+
+func _call_breaker_heights(positions: Array[Vector3], render_time: float) -> Array:
+	if _breaker_height_batch.is_valid():
+		return _breaker_height_batch.call(positions, render_time)
+	if _query_batch.is_valid():
+		return _query_batch.call(positions, render_time)
+	return []
+
+
+func _call_breaker_slopes(positions: Array[Vector3], render_time: float) -> Array:
+	if _breaker_slope_batch.is_valid():
+		return _breaker_slope_batch.call(positions, render_time)
+	return []
 
 
 func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
@@ -504,6 +529,9 @@ func summary() -> Dictionary:
 		"active_breaker_count": active_count,
 		"active_tracking_queries_last_tick": _active_tracking_queries_last_tick,
 		"active_tracking_points_last_tick": _active_tracking_points_last_tick,
+		"detector_slope_queries_last_tick": _detector_slope_queries_last_tick,
+		"detector_slope_points_last_tick": _detector_slope_points_last_tick,
+		"detector_query_elapsed_ms_last_tick": _detector_query_elapsed_ms_last_tick,
 	}
 
 
@@ -539,7 +567,7 @@ func _update_tracking() -> void:
 	##    batch por tick. Sin catch-up de ticks perdidos.
 	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
 		return
-	if not _query_batch.is_valid():
+	if not _breaker_height_batch.is_valid() and not _query_batch.is_valid():
 		_clear_tracking()
 		return
 	var render_time: float = SimulationClock.get_render_time()
@@ -584,7 +612,7 @@ func _update_active_crest_tracking(render_time: float) -> void:
 		_active_tracking_queries_last_tick = 0
 		_active_tracking_points_last_tick = 0
 		return
-	var samples: Array = _query_batch.call(positions, render_time)
+	var samples: Array = _call_breaker_heights(positions, render_time)
 	if samples.size() != positions.size():
 		# El lifecycle continúa autónomo ante un fallo puntual de query.
 		_active_tracking_queries_last_tick = 0
@@ -668,6 +696,9 @@ func _reset_scheduler() -> void:
 	_detector_tick = 0
 	_detector_queried_slots_last_tick = 0
 	_detector_queried_points_last_tick = 0
+	_detector_slope_queries_last_tick = 0
+	_detector_slope_points_last_tick = 0
+	_detector_query_elapsed_ms_last_tick = 0.0
 
 
 func _run_detector_tick(render_time: float) -> void:
@@ -675,6 +706,9 @@ func _run_detector_tick(render_time: float) -> void:
 	## slots DETECT recorriendo circularmente desde _detector_cursor (ignora
 	## ACTIVE y COOLDOWN) y consulta TODOS en UNA única batch.
 	_detector_tick += 1
+	_detector_slope_queries_last_tick = 0
+	_detector_slope_points_last_tick = 0
+	_detector_query_elapsed_ms_last_tick = 0.0
 	var total_anchors := _anchors.size()
 	var selected: Array[int] = []
 	var inspected := 0
@@ -703,7 +737,9 @@ func _run_detector_tick(render_time: float) -> void:
 		for offset in CREST_SAMPLE_OFFSETS:
 			var xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * (float(offset) * wavelength)
 			positions.append(Vector3(xz.x, _sea_level_y, xz.y))
-	var samples: Array = _query_batch.call(positions, render_time)
+	var query_start_usec := Time.get_ticks_usec()
+	var samples: Array = _call_breaker_heights(positions, render_time)
+	_detector_query_elapsed_ms_last_tick = float(Time.get_ticks_usec() - query_start_usec) * 0.001
 	if samples.size() != positions.size():
 		_clear_tracking()
 		return
@@ -754,6 +790,16 @@ func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, s
 	var wavelength := float(anchor["wavelength_m"])
 	var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 	var candidate := _detect_candidate(heights, wavelength, samples, base)
+	if _breaker_slope_batch.is_valid() and not bool(entry.get("active", false)):
+		var travel_dir := -Vector2(anchor["direction"])
+		var candidate_xz := Vector2(anchor["xz"]) + travel_dir * float(candidate["s"])
+		var slope_start_usec := Time.get_ticks_usec()
+		var slope_samples := _call_breaker_slopes([Vector3(candidate_xz.x, _sea_level_y, candidate_xz.y)], render_time)
+		_detector_query_elapsed_ms_last_tick += float(Time.get_ticks_usec() - slope_start_usec) * 0.001
+		if slope_samples.size() == 1 and slope_samples[0] != null:
+			candidate["sample"] = slope_samples[0]
+			_detector_slope_queries_last_tick += 1
+			_detector_slope_points_last_tick += 1
 	if bool(entry.get("active", false)):
 		_update_active_breaker(index, entry, render_time)
 	else:

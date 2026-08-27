@@ -901,6 +901,51 @@ func sample_water_batch_at_time(positions: Array[Vector3], simulation_time: floa
 	return []
 
 
+func sample_coastal_breaker_heights_batch_at_time(positions: Array[Vector3], simulation_time: float) -> Array:
+	## Breaker DETECT/ACTIVE: consulta especializada LONG_COASTAL, sin Newton,
+	## sin MID/SHORT, sin Jacobiano ni velocidad. El XZ recibido es q directo,
+	## igual que el dominio donde el renderer aplica CoastalWarp.
+	if not _enabled or _query_reduced == null:
+		return _breaker_invalid_results(positions.size())
+	if _native_query_can_sample_coastal() and _query_native.has_method(&"prepare_breaker_time"):
+		return _sample_native_breaker_batch(positions, simulation_time, false)
+	_query_reduced.prepare_breaker_time(simulation_time)
+	return _query_reduced.sample_coastal_breaker_heights_prepared(positions)
+
+
+func sample_coastal_breaker_slopes_batch_at_time(positions: Array[Vector3], simulation_time: float) -> Array:
+	## Breaker break_score: misma consulta especializada, pero calcula slope sólo
+	## para los candidatos ya seleccionados (no para las siete muestras del perfil).
+	if not _enabled or _query_reduced == null:
+		return _breaker_invalid_results(positions.size())
+	if _native_query_can_sample_coastal() and _query_native.has_method(&"prepare_breaker_time"):
+		return _sample_native_breaker_batch(positions, simulation_time, true)
+	_query_reduced.prepare_breaker_time(simulation_time)
+	return _query_reduced.sample_coastal_breaker_slopes_prepared(positions)
+
+
+func _sample_native_breaker_batch(positions: Array[Vector3], simulation_time: float, include_slope: bool) -> Array:
+	_query_native.prepare_breaker_time(simulation_time)
+	var packed := PackedVector3Array()
+	packed.resize(positions.size())
+	for index in positions.size():
+		packed[index] = positions[index]
+	var out: PackedFloat64Array = _query_native.sample_coastal_breaker_batch_prepared(packed, include_slope)
+	var result: Array = []
+	result.resize(positions.size())
+	for index in positions.size():
+		result[index] = _native_to_sample(out, index)
+	return result
+
+
+func _breaker_invalid_results(count: int) -> Array:
+	var result: Array = []
+	result.resize(count)
+	for index in count:
+		result[index] = QuerySampleScript.invalid()
+	return result
+
+
 func prepare_query_time(simulation_time: float) -> void:
 	if _native_query_can_sample_coastal():
 		_query_native.ensure_prepared(simulation_time)
@@ -1167,8 +1212,11 @@ func _configure_breaker_pool() -> void:
 		surface.get_surface_material(),
 	)
 	_breaker_pool.set_sea_state_zones(_sea_state_zone_descriptors)
-	# 4C-S4: el pool resuelve la batch de tracking con el MISMO evaluador OceanQuery.
-	_breaker_pool.set_query_source(Callable(self, &"sample_water_batch_at_time"))
+	# Specialized breaker path: el detector no entra en la hot path general de OceanQuery.
+	_breaker_pool.set_breaker_query_sources(
+		Callable(self, &"sample_coastal_breaker_heights_batch_at_time"),
+		Callable(self, &"sample_coastal_breaker_slopes_batch_at_time")
+	)
 
 
 func set_breakers_enabled(enabled: bool) -> void:

@@ -46,6 +46,15 @@ Durante `_ready`, OceanV3 carga el `Resource` ya horneado. OpenOceanFFT sólo
 construye las texturas GPU y publica el estado a la superficie. El coste de
 runtime no incluye BathymetryBaker, CoastalEikonalBaker ni CoastalWarpBaker.
 
+El detector de breakers es un consumidor interno del módulo. Sus muestras de
+DETECT y tracking ACTIVE usan una consulta especializada de `LONG_COASTAL`
+height-only; el slope se calcula sólo para el candidato ganador. No invoca la
+batch general de `OceanQuery`, no hace Newton/Jacobiano/velocidad y no evalúa
+MID/SHORT. La batch general sigue siendo la ruta de física, probes y cualquier
+integración externa que necesite la superficie completa. Si la DLL Native
+compatible está disponible, el mismo contrato se ejecuta en C++; en transiciones
+o con zonas locales se usa el fallback reducido determinista.
+
 La costa puede controlarse mediante la API pública de OceanV3:
 
 ```gdscript

@@ -105,6 +105,8 @@ var _cascades: Array[_CascadeData] = []
 var _sea_level := 0.0
 var _prepared_valid := false
 var _prepared_time := 0.0
+var _breaker_prepared_valid := false
+var _breaker_prepared_time := 0.0
 var _crest_sharpen: Dictionary = {} # 5R1D: config de crest sharpening (world-space).
 var _mode := MODE_REDUCED
 var _budgets: Array[int] = [DEFAULT_BUDGET, DEFAULT_BUDGET, DEFAULT_BUDGET]
@@ -170,9 +172,20 @@ var _coastal_vh := 0.0
 var _coastal_vx := 0.0
 var _coastal_vz := 0.0
 
+# Specialized Coastal breaker sampler. It intentionally keeps only the scalar
+# LONG_COASTAL height gradient; no horizontal displacement/Jacobian/velocity.
+var _breaker_long_h := 0.0
+var _breaker_long_dhx := 0.0
+var _breaker_long_dhz := 0.0
+
 
 func _init() -> void:
 	_band_acc.resize(36)
+
+
+func _invalidate_prepared() -> void:
+	_prepared_valid = false
+	_breaker_prepared_valid = false
 
 
 func set_sea_state_zones(descriptors: Array[Dictionary]) -> void:
@@ -288,7 +301,7 @@ func begin_prepared_spectrum_transition(payload: Dictionary, initial_alpha := 0.
 	_spectrum_transition_target_wind_direction = Vector2(payload.get("long_wind_direction", Vector2.RIGHT)).normalized()
 	_spectrum_transition_active = true
 	_spectrum_transition_alpha = clampf(initial_alpha, 0.0, 1.0)
-	_prepared_valid = false
+	_invalidate_prepared()
 	return true
 
 
@@ -304,7 +317,7 @@ func install_prepared_spectrum(payload: Dictionary) -> bool:
 	_spectrum_transition_active = false
 	_spectrum_transition_alpha = 0.0
 	_coastal_wind_direction = Vector2(payload.get("long_wind_direction", Vector2.RIGHT)).normalized()
-	_prepared_valid = false
+	_invalidate_prepared()
 	_sync_native()
 	return true
 
@@ -318,7 +331,7 @@ func complete_spectrum_transition() -> void:
 	_spectrum_transition_target_wind_direction = Vector2.RIGHT
 	_spectrum_transition_active = false
 	_spectrum_transition_alpha = 0.0
-	_prepared_valid = false
+	_invalidate_prepared()
 	_sync_native()
 
 
@@ -326,7 +339,7 @@ func set_spectrum_transition_alpha(alpha: float) -> void:
 	if not _spectrum_transition_active:
 		return
 	_spectrum_transition_alpha = clampf(alpha, 0.0, 1.0)
-	_prepared_valid = false
+	_invalidate_prepared()
 
 
 func spectrum_transition_active() -> bool:
@@ -501,6 +514,114 @@ func sample_water_batch_prepared(positions: Array[Vector3]) -> Array:
 	for index in positions.size():
 		result[index] = _sample_world(Vector2(positions[index].x, positions[index].z))
 	return result
+
+
+func prepare_breaker_time(simulation_time: float) -> void:
+	## Prepara sólo LONG con el mismo H0, transición y tiempo que OceanQuery.
+	if _breaker_prepared_valid and _breaker_prepared_time == simulation_time:
+		return
+	if _prepared_valid and _prepared_time == simulation_time:
+		_breaker_prepared_valid = true
+		_breaker_prepared_time = simulation_time
+		return
+	if _cascades.is_empty():
+		_breaker_prepared_valid = false
+		return
+	_prepare_cascade_time(_cascades[0], simulation_time)
+	_breaker_prepared_valid = true
+	_breaker_prepared_time = simulation_time
+
+
+func sample_coastal_breaker_heights_prepared(positions: Array[Vector3]) -> Array:
+	## Muestras para DETECT/ACTIVE: LONG_COASTAL height-only, sin Newton.
+	var result: Array = []
+	result.resize(positions.size())
+	for index in positions.size():
+		result[index] = _sample_breaker_point(Vector2(positions[index].x, positions[index].z), false)
+	return result
+
+
+func sample_coastal_breaker_slopes_prepared(positions: Array[Vector3]) -> Array:
+	## Muestras para break_score: sólo los candidatos seleccionados piden slope.
+	var result: Array = []
+	result.resize(positions.size())
+	for index in positions.size():
+		result[index] = _sample_breaker_point(Vector2(positions[index].x, positions[index].z), true)
+	return result
+
+
+func _sample_breaker_point(world_xz: Vector2, include_slope: bool):
+	var sample = SampleScript.new()
+	if not _breaker_prepared_valid or _cascades.is_empty() or _coastal_runtime == null or not _coastal_runtime.enabled:
+		sample.valid = false
+		return sample
+	_evaluate_sea_state_zones(world_xz.x, world_xz.y)
+	var confidence: float = float(_coastal_runtime.sample(world_xz.x, world_xz.y))
+	var deep_x: float = float(_coastal_runtime.deep_sample_x)
+	var deep_z: float = float(_coastal_runtime.deep_sample_z)
+	var shoaling: float = float(_coastal_runtime.effective_shoaling) if confidence > 0.0 else 1.0
+	_accumulate_breaker_long(world_xz.x, world_xz.y)
+	var open_h := _breaker_long_h
+	var open_dhx := _breaker_long_dhx
+	var open_dhz := _breaker_long_dhz
+	var composed_h := open_h
+	var composed_dhx := open_dhx
+	var composed_dhz := open_dhz
+	if confidence > 0.0:
+		_accumulate_breaker_long(deep_x, deep_z)
+		var deep_h := _breaker_long_h
+		var deep_dhx := _breaker_long_dhx
+		var deep_dhz := _breaker_long_dhz
+		var scaled_open: float = shoaling * (1.0 - confidence)
+		var scaled_deep: float = shoaling * confidence
+		composed_h = scaled_open * open_h + scaled_deep * deep_h - open_h
+		composed_dhx = scaled_open * open_dhx + scaled_deep * (_coastal_runtime.sample_j00 * deep_dhx + _coastal_runtime.sample_j10 * deep_dhz) - open_dhx
+		composed_dhz = scaled_open * open_dhz + scaled_deep * (_coastal_runtime.sample_j01 * deep_dhx + _coastal_runtime.sample_j11 * deep_dhz) - open_dhz
+	# Same LONG amplitude/product-rule convention as the full evaluator; no
+	# choppiness/Jacobian is needed for a height-only breaker sample.
+	var base_h := composed_h
+	composed_h *= _zone_long_amplitude
+	if include_slope:
+		composed_dhx = _zone_long_amplitude * composed_dhx + base_h * _zone_grad_long_x
+		composed_dhz = _zone_long_amplitude * composed_dhz + base_h * _zone_grad_long_z
+	sample.valid = true
+	sample.height = _sea_level + composed_h
+	if include_slope:
+		var normal := Vector3(-composed_dhx, 1.0, -composed_dhz)
+		sample.normal = normal.normalized() if normal.length_squared() > 1.0e-8 else Vector3.UP
+	else:
+		sample.normal = Vector3.UP
+	return sample
+
+
+func _accumulate_breaker_long(qx: float, qz: float) -> void:
+	_breaker_long_h = 0.0
+	_breaker_long_dhx = 0.0
+	_breaker_long_dhz = 0.0
+	if _cascades.is_empty():
+		return
+	var cascade: _CascadeData = _cascades[0]
+	var alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
+	var h := 0.0
+	var dhx := 0.0
+	var dhz := 0.0
+	for idx in cascade.count:
+		var h_re := cascade.coastal_weight_pos[idx] * cascade.ev_a_h_re[idx] + cascade.coastal_weight_neg[idx] * cascade.ev_b_h_re[idx]
+		var h_im := cascade.coastal_weight_pos[idx] * cascade.ev_a_h_im[idx] + cascade.coastal_weight_neg[idx] * cascade.ev_b_h_im[idx]
+		if _spectrum_transition_active:
+			var wp := lerpf(cascade.coastal_weight_pos[idx], cascade.transition_coastal_weight_pos[idx], alpha)
+			var wn := lerpf(cascade.coastal_weight_neg[idx], cascade.transition_coastal_weight_neg[idx], alpha)
+			h_re = wp * cascade.ev_a_h_re[idx] + wn * cascade.ev_b_h_re[idx]
+			h_im = wp * cascade.ev_a_h_im[idx] + wn * cascade.ev_b_h_im[idx]
+		var phi := cascade.kx[idx] * qx + cascade.ky[idx] * qz
+		var p_im := h_re * sin(phi) + h_im * cos(phi)
+		var sig := cascade.parity[idx] * cascade.weight[idx]
+		h += sig * (h_re * cos(phi) - h_im * sin(phi))
+		dhx += sig * -cascade.kx[idx] * p_im
+		dhz += sig * -cascade.ky[idx] * p_im
+	_breaker_long_h = h * cascade.inv_n2
+	_breaker_long_dhx = dhx * cascade.inv_n2
+	_breaker_long_dhz = dhz * cascade.inv_n2
 
 
 func _band_height(qx: float, qz: float, band_index: int) -> float:
@@ -1058,58 +1179,43 @@ func _prepare_time(simulation_time: float) -> void:
 	_prepared_valid = true
 	_prepared_time = simulation_time
 	for cascade in _cascades:
-		var count := cascade.count
-		var om_arr := cascade.omega
-		var h0r_arr := cascade.h0_re
-		var h0i_arr := cascade.h0_im
-		var h0nr_arr := cascade.h0n_re
-		var h0ni_arr := cascade.h0n_im
-		var target_h0r_arr := cascade.transition_h0_re
-		var target_h0i_arr := cascade.transition_h0_im
-		var target_h0nr_arr := cascade.transition_h0n_re
-		var target_h0ni_arr := cascade.transition_h0n_im
-		var alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
-		var ev_hr_arr := cascade.ev_h_re
-		var ev_hi_arr := cascade.ev_h_im
-		var ev_vr_arr := cascade.ev_v_re
-		var ev_vi_arr := cascade.ev_v_im
-		var ev_ahr_arr := cascade.ev_a_h_re
-		var ev_ahi_arr := cascade.ev_a_h_im
-		var ev_bhr_arr := cascade.ev_b_h_re
-		var ev_bhi_arr := cascade.ev_b_h_im
-		var ev_avr_arr := cascade.ev_a_v_re
-		var ev_avi_arr := cascade.ev_a_v_im
-		var ev_bvr_arr := cascade.ev_b_v_re
-		var ev_bvi_arr := cascade.ev_b_v_im
-		for idx in count:
-			var wt := om_arr[idx] * simulation_time
-			var c := cos(wt)
-			var sn := sin(wt)
-			var a_re := h0r_arr[idx] * c - h0i_arr[idx] * sn
-			var a_im := h0r_arr[idx] * sn + h0i_arr[idx] * c
-			var b_re := h0nr_arr[idx] * c + h0ni_arr[idx] * sn
-			var b_im := -h0nr_arr[idx] * sn + h0ni_arr[idx] * c
-			if _spectrum_transition_active:
-				var ta_re := target_h0r_arr[idx] * c - target_h0i_arr[idx] * sn
-				var ta_im := target_h0r_arr[idx] * sn + target_h0i_arr[idx] * c
-				var tb_re := target_h0nr_arr[idx] * c + target_h0ni_arr[idx] * sn
-				var tb_im := -target_h0nr_arr[idx] * sn + target_h0ni_arr[idx] * c
-				a_re = lerpf(a_re, ta_re, alpha)
-				a_im = lerpf(a_im, ta_im, alpha)
-				b_re = lerpf(b_re, tb_re, alpha)
-				b_im = lerpf(b_im, tb_im, alpha)
-			ev_hr_arr[idx] = a_re + b_re
-			ev_hi_arr[idx] = a_im + b_im
-			ev_vr_arr[idx] = om_arr[idx] * (-a_im + b_im)
-			ev_vi_arr[idx] = om_arr[idx] * (a_re - b_re)
-			ev_ahr_arr[idx] = a_re
-			ev_ahi_arr[idx] = a_im
-			ev_bhr_arr[idx] = b_re
-			ev_bhi_arr[idx] = b_im
-			ev_avr_arr[idx] = -om_arr[idx] * a_im
-			ev_avi_arr[idx] = om_arr[idx] * a_re
-			ev_bvr_arr[idx] = om_arr[idx] * b_im
-			ev_bvi_arr[idx] = -om_arr[idx] * b_re
+		_prepare_cascade_time(cascade, simulation_time)
+	_breaker_prepared_valid = not _cascades.is_empty()
+	_breaker_prepared_time = simulation_time
+
+
+func _prepare_cascade_time(cascade: _CascadeData, simulation_time: float) -> void:
+	var count := cascade.count
+	var alpha := _spectrum_transition_alpha if _spectrum_transition_active else 0.0
+	for idx in count:
+		var wt := cascade.omega[idx] * simulation_time
+		var c := cos(wt)
+		var sn := sin(wt)
+		var a_re := cascade.h0_re[idx] * c - cascade.h0_im[idx] * sn
+		var a_im := cascade.h0_re[idx] * sn + cascade.h0_im[idx] * c
+		var b_re := cascade.h0n_re[idx] * c + cascade.h0n_im[idx] * sn
+		var b_im := -cascade.h0n_re[idx] * sn + cascade.h0n_im[idx] * c
+		if _spectrum_transition_active:
+			var ta_re := cascade.transition_h0_re[idx] * c - cascade.transition_h0_im[idx] * sn
+			var ta_im := cascade.transition_h0_re[idx] * sn + cascade.transition_h0_im[idx] * c
+			var tb_re := cascade.transition_h0n_re[idx] * c + cascade.transition_h0n_im[idx] * sn
+			var tb_im := -cascade.transition_h0n_re[idx] * sn + cascade.transition_h0n_im[idx] * c
+			a_re = lerpf(a_re, ta_re, alpha)
+			a_im = lerpf(a_im, ta_im, alpha)
+			b_re = lerpf(b_re, tb_re, alpha)
+			b_im = lerpf(b_im, tb_im, alpha)
+		cascade.ev_h_re[idx] = a_re + b_re
+		cascade.ev_h_im[idx] = a_im + b_im
+		cascade.ev_v_re[idx] = cascade.omega[idx] * (-a_im + b_im)
+		cascade.ev_v_im[idx] = cascade.omega[idx] * (a_re - b_re)
+		cascade.ev_a_h_re[idx] = a_re
+		cascade.ev_a_h_im[idx] = a_im
+		cascade.ev_b_h_re[idx] = b_re
+		cascade.ev_b_h_im[idx] = b_im
+		cascade.ev_a_v_re[idx] = -cascade.omega[idx] * a_im
+		cascade.ev_a_v_im[idx] = cascade.omega[idx] * a_re
+		cascade.ev_b_v_re[idx] = cascade.omega[idx] * b_im
+		cascade.ev_b_v_im[idx] = -cascade.omega[idx] * b_re
 
 
 ## --- Selección ----------------------------------------------------------------
@@ -1162,7 +1268,7 @@ static func _coastal_angular_weight_for_transition(kx: float, ky: float, directi
 func _rebuild_selection() -> void:
 	for index in _cascades.size():
 		_compact_cascade(_cascades[index], _budgets[index], _mode)
-	_prepared_valid = false
+	_invalidate_prepared()
 	_sync_native()
 
 

@@ -20,9 +20,10 @@ Reglas de la fase:
 - Sólo LONG_COASTAL (con LONG_REMAINDER, como define el campo 4A) origina el
   labio. MID/SHORT pueden integrar visualmente la superficie base del ribetón,
   pero jamás deciden dónde nace un breaker.
-- Toda la detección pesada sigue en GPU. No hay readback GPU→CPU por frame ni
-  consultas masivas de OceanQuery. Los anchors se colocan una vez desde los
-  datos horneados (CoastalPropagationData es CPU, no una lectura de GPU).
+- El campo PREBREAK y la geometría siguen en GPU. El detector de eventos CPU
+  usa una consulta coastal LONG especializada y acotada; no hace readback
+  GPU→CPU por frame ni consultas de la superficie completa. Los anchors se
+  colocan una vez desde los datos horneados (CoastalPropagationData es CPU).
 - Coastal OFF, fuera de batimetría o PREBREAK inválido => ningún breaker.
 - Pausa/determinismo intactos: el ribetón es una función pura de los datos
   horneados + el reloj (vía texturas FFT); no hay estado temporal acumulado.
@@ -141,8 +142,41 @@ Los debug de 4A/3B.2B (B, P, V, J, M, F, G, O, D) se conservan intactos.
 El pool añade ≈ `max_breakers × 37×6` vértices con ~30 fetches/vertex en la
 ruta opt-in del labio (sólo cuando Coastal está activo y el pool configurado).
 Frente al clipmap (≥10⁶ vértices) es <1% de fetches; sin Coastal no se crea
-nada. Como exige la fase, no se han hecho benchmarks nuevos: se validará coste
-GPU aislado en Phase 4C con el pipeline de medición existente.
+nada. El coste CPU del detector se valida offline con
+`tests/phase_breaker_specialized_query_validation.gd` y con el profiler runtime
+de la fase; la geometría GPU permanece fuera de esta optimización.
+
+## Breaker Specialized Query
+
+La fase de optimización posterior mantiene intactos los anchors, score,
+scheduler de 20 Hz (máximo 2 slots y 14 puntos por tick), lifecycle y controles
+de debug. Sólo cambia la fuente interna de muestras del pool:
+
+```text
+DETECT/ACTIVE -> Coastal LONG height-only (q XZ directo, Warp lookup)
+candidate    -> Coastal LONG slope-only (1 punto por candidato)
+physics/etc. -> OceanQuery general (sin cambio)
+```
+
+El sampler prepara el mismo H0, seed, transición y selección compacta que
+`OceanQueryReduced`, pero sólo prepara LONG. En cada punto evalúa la composición
+coastal LONG con el warp y shoaling ya horneados, aplica la amplitud/gradiente de
+Sea State Zone y devuelve altura absoluta; no calcula inversión Newton,
+desplazamiento horizontal, Jacobiano, velocidad, sharpen, MID ni SHORT. El XZ
+del detector se interpreta como `q` directo porque coincide con el dominio
+paramétrico que usa el renderer para aplicar CoastalWarp.
+
+Cuando está disponible una DLL Native compatible, el módulo usa el mismo
+contrato LONG-only en C++ (incluida una preparación temporal sólo de LONG).
+Durante transiciones o con zonas locales se conserva el fallback GDScript
+reducido, que aplica exactamente la misma fórmula y los mismos datos.
+
+Antes, cada slot DETECT consumía siete muestras de la batch completa; con el
+scheduler actual eran hasta 14 puntos por tick y cada punto podía recorrer las
+tres bandas, composición coastal, Newton e inversión de Jacobiano. Después,
+los mismos 14 puntos recorren sólo LONG height-only y como máximo dos puntos
+adicionales calculan slope para `break_score`. No se crea un H0 ni un presupuesto
+nuevo y F2 continúa siendo sólo visibilidad; C OFF/ON conserva el mismo control.
 
 ## Limitaciones expresas para Phase 4C
 

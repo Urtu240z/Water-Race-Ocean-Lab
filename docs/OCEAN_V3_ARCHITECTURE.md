@@ -230,8 +230,10 @@ Crest Foam history and Surface Foam history.
 `PREBREAK` is a shader diagnostic/field derived from coastal validity, LONG
 energy, depth, steepness, and crest-related signals. It does not itself create
 geometry. `BreakerRibbonPool` is the optional local geometry representation:
-it detects/anchors candidate breakers, tracks active crests with the same
-OceanQuery batch source, and renders a bounded set of ribbon/lip instances.
+it detects/anchors candidate breakers, tracks active crests with a specialized
+Coastal LONG height/slope query, and renders a bounded set of ribbon/lip
+instances. The general full `OceanQuery` batch remains available to physics,
+probes, and other consumers; breaker DETECT/ACTIVE does not use that hot path.
 
 The pool is configured only when breakers are enabled, Coastal runtime is on,
 and valid propagation data exists. Coastal disabled, missing/invalid

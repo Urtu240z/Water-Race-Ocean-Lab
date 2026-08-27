@@ -134,6 +134,8 @@ public:
     double sea_level = 0.0;
     bool prepared_valid = false;
     double prepared_time = 0.0;
+    bool breaker_prepared_valid = false;
+    double breaker_prepared_time = 0.0;
     int diag_non_converged = 0;
     // 5R1D: crest sharpening (paridad render/query, world-space).
     bool crest_sharpen_enabled = false;
@@ -156,7 +158,7 @@ public:
     // ejecuta antes de decidir llamar a la translation unit AVX2 aislada.
     bool force_scalar = false;
 
-    void clear() { cascades.clear(); prepared_valid = false; }
+    void clear() { cascades.clear(); prepared_valid = false; breaker_prepared_valid = false; }
 
     void set_cascade_data(size_t cascade_index, double inv_n2,
                           const double *kx, const double *ky, const double *omega,
@@ -183,6 +185,10 @@ public:
     size_t coastal_pair_count() const;
 
     void ensure_prepared(double simulation_time);
+    // Breaker Specialized Query: prepara sólo LONG A/B para height/slope coastal.
+    void ensure_breaker_prepared(double simulation_time);
+    void sample_coastal_breaker_prepared(const double *positions_xz, size_t n,
+                                         double *out, bool include_slope) const;
 
     // 5R1D: configura el crest sharpening (misma matemática que render).
     void set_crest_sharpen(double strength, double threshold, double max_gain,
@@ -253,6 +259,8 @@ private:
     void sample_prepared_(double wx, double wz, double *out);
     double band_height_(size_t band_index, double qx, double qz) const;
     void apply_crest_sharpen_(double qx, double qz, double &h, double &dx, double &dz) const;
+    void accumulate_breaker_long_(double qx, double qz, double &h,
+                                  double &dhx, double &dhz) const;
     void finite_jacobian_(double qx, double qz, double &ja, double &jb, double &jc, double &jd);
 
     void evaluate_true_batch_(const size_t *indices, size_t active_count);

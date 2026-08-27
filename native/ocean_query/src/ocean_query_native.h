@@ -66,6 +66,7 @@ public:
     PackedInt64Array get_coastal_profile_us() const;
     PackedInt64Array get_coastal_pair_counts() const;
     void ensure_prepared(double simulation_time);
+    void prepare_breaker_time(double simulation_time);
     void set_crest_sharpen(const Dictionary &config);
 
     PackedFloat64Array sample_world(double wx, double wz, double simulation_time);
@@ -75,6 +76,8 @@ public:
     PackedFloat64Array sample_batch_scalar_prepared(const PackedVector3Array &positions);
     PackedFloat64Array sample_batch_avx2_scalar_trig_prepared(const PackedVector3Array &positions);
     PackedFloat64Array sample_batch(double simulation_time, const PackedVector3Array &positions);
+    PackedFloat64Array sample_coastal_breaker_batch_prepared(const PackedVector3Array &positions,
+                                                             bool include_slope);
     // Ruta experimental 2C.1B TRUE_BATCH. warm devuelve stride 17: los 15
     // campos normales y qx,qz resueltos para alimentar el tick siguiente.
     PackedFloat64Array sample_batch_true_prepared(const PackedVector3Array &positions);

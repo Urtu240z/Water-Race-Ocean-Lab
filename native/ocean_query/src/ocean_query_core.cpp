@@ -149,6 +149,7 @@ void OceanQueryCore::set_cascade_data(size_t cascade_index, double inv_n2,
     c.h0n_re.assign(h0n_re, h0n_re + count);
     c.h0n_im.assign(h0n_im, h0n_im + count);
     prepared_valid = false;
+    breaker_prepared_valid = false;
 }
 
 void OceanQueryCore::finalize_spectrum() {
@@ -168,6 +169,7 @@ void OceanQueryCore::finalize_spectrum() {
         c.coastal_f_dxx.assign(count, 0.0); c.coastal_f_dxz.assign(count, 0.0); c.coastal_f_dzx.assign(count, 0.0); c.coastal_f_dzz.assign(count, 0.0); c.coastal_f_vh.assign(count, 0.0); c.coastal_f_vx.assign(count, 0.0); c.coastal_f_vz.assign(count, 0.0);
     }
     prepared_valid = false;
+    breaker_prepared_valid = false;
 }
 
 void OceanQueryCore::set_coastal_long_weights(const double *pos, const double *neg, size_t count) {
@@ -245,6 +247,104 @@ void OceanQueryCore::ensure_prepared(double simulation_time) {
                 c.coastal_f_dxx[idx] = c.coastal_f_dxz[idx] = c.coastal_f_dzx[idx] = c.coastal_f_dzz[idx] = c.coastal_f_vh[idx] = c.coastal_f_vx[idx] = c.coastal_f_vz[idx] = 0.0;
             }
         }
+    }
+}
+
+void OceanQueryCore::ensure_breaker_prepared(double simulation_time) {
+    if (breaker_prepared_valid && breaker_prepared_time == simulation_time) {
+        return;
+    }
+    breaker_prepared_valid = false;
+    if (cascades.empty()) {
+        return;
+    }
+    Cascade &c = cascades[0];
+    const size_t count = c.kx.size();
+    for (size_t idx = 0; idx < count; ++idx) {
+        const double wt = c.omega[idx] * simulation_time;
+        const double cw = std::cos(wt);
+        const double sw = std::sin(wt);
+        c.ev_a_h_re[idx] = c.h0_re[idx] * cw - c.h0_im[idx] * sw;
+        c.ev_a_h_im[idx] = c.h0_re[idx] * sw + c.h0_im[idx] * cw;
+        c.ev_b_h_re[idx] = c.h0n_re[idx] * cw + c.h0n_im[idx] * sw;
+        c.ev_b_h_im[idx] = -c.h0n_re[idx] * sw + c.h0n_im[idx] * cw;
+    }
+    breaker_prepared_time = simulation_time;
+    breaker_prepared_valid = true;
+}
+
+void OceanQueryCore::accumulate_breaker_long_(double qx, double qz, double &h,
+                                               double &dhx, double &dhz) const {
+    h = dhx = dhz = 0.0;
+    if (cascades.empty()) {
+        return;
+    }
+    const Cascade &c = cascades[0];
+    for (size_t idx = 0; idx < c.kx.size(); ++idx) {
+        const double h_re = c.coastal_weight_pos[idx] * c.ev_a_h_re[idx] +
+                            c.coastal_weight_neg[idx] * c.ev_b_h_re[idx];
+        const double h_im = c.coastal_weight_pos[idx] * c.ev_a_h_im[idx] +
+                            c.coastal_weight_neg[idx] * c.ev_b_h_im[idx];
+        const double phi = c.kx[idx] * qx + c.ky[idx] * qz;
+        const double cp = std::cos(phi);
+        const double sp = std::sin(phi);
+        const double p_im = h_re * sp + h_im * cp;
+        const double sig = c.parity[idx] * c.weight[idx];
+        h += sig * (h_re * cp - h_im * sp);
+        dhx += sig * -c.kx[idx] * p_im;
+        dhz += sig * -c.ky[idx] * p_im;
+    }
+    h *= c.inv_n2;
+    dhx *= c.inv_n2;
+    dhz *= c.inv_n2;
+}
+
+void OceanQueryCore::sample_coastal_breaker_prepared(const double *positions_xz, size_t n,
+                                                      double *out, bool include_slope) const {
+    if (!breaker_prepared_valid || cascades.empty() || !coastal.enabled) {
+        for (size_t i = 0; i < n; ++i) {
+            double *dst = out + i * S_STRIDE;
+            for (int field = 0; field < S_STRIDE; ++field) dst[field] = 0.0;
+        }
+        return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const double qx = positions_xz[2 * i];
+        const double qz = positions_xz[2 * i + 1];
+        CoastalSample sample;
+        double *dst = out + i * S_STRIDE;
+        for (int field = 0; field < S_STRIDE; ++field) dst[field] = 0.0;
+        if (!coastal.sample(qx, qz, sample)) {
+            continue;
+        }
+        double open_h = 0.0, open_dhx = 0.0, open_dhz = 0.0;
+        accumulate_breaker_long_(qx, qz, open_h, open_dhx, open_dhz);
+        double composed_h = open_h;
+        double composed_dhx = open_dhx;
+        double composed_dhz = open_dhz;
+        if (sample.confidence > 0.0) {
+            double deep_h = 0.0, deep_dhx = 0.0, deep_dhz = 0.0;
+            accumulate_breaker_long_(sample.deep_x, sample.deep_z, deep_h, deep_dhx, deep_dhz);
+            const double scaled_open = sample.effective_shoaling * (1.0 - sample.confidence);
+            const double scaled_deep = sample.effective_shoaling * sample.confidence;
+            composed_h = scaled_open * open_h + scaled_deep * deep_h - open_h;
+            composed_dhx = scaled_open * open_dhx + scaled_deep * (sample.j00 * deep_dhx + sample.j10 * deep_dhz) - open_dhx;
+            composed_dhz = scaled_open * open_dhz + scaled_deep * (sample.j01 * deep_dhx + sample.j11 * deep_dhz) - open_dhz;
+        }
+        dst[S_VALID] = 1.0;
+        dst[S_HEIGHT] = sea_level + composed_h;
+        dst[S_NX] = 0.0; dst[S_NY] = 1.0; dst[S_NZ] = 0.0;
+        dst[S_JACOBIAN_DET] = 1.0;
+        if (include_slope) {
+            double nx = -composed_dhx, ny = 1.0, nz = -composed_dhz;
+            const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (length > 1.0e-8) {
+                nx /= length; ny /= length; nz /= length;
+            }
+            dst[S_NX] = nx; dst[S_NY] = ny; dst[S_NZ] = nz;
+        }
+        // Displacement, velocity, foldover, residual and Newton iterations are
+        // deliberately zero/identity: this contract is height/slope-only.
     }
 }
 
