@@ -48,7 +48,6 @@ uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
 instance uniform float clipmap_level = 0.0;
 uniform float lod_morph_ratio : hint_range(0.05, 0.30, 0.01) = 0.12;
-uniform bool lod_geomorph_enabled = true;
 uniform bool clipmap_lod_morph_debug = false;
 instance uniform float clipmap_spacing_m = 0.25;
 instance uniform float clipmap_next_spacing_m = 0.0;
@@ -144,22 +143,17 @@ void vertex() {
 	vec2 clipmap_origin_xz = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xz;
 	vec2 clipmap_local_xz = fine_world_xz - clipmap_origin_xz;
 	float lod_alpha = clipmap_lod_morph_factor(clipmap_local_xz);
-	vec2 morphed_local_xz = clipmap_local_xz;
-	if (lod_geomorph_enabled) {
-		float coarse_spacing = max(clipmap_next_spacing_m, clipmap_spacing_m * 2.0);
-		vec2 coarse_local_xz = floor(clipmap_local_xz / coarse_spacing + vec2(0.5)) * coarse_spacing;
-		float inner_boundary_delta = abs(max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y)) - clipmap_inner_extent_m);
-		float inner_boundary_morph = (clipmap_inner_extent_m > 0.0)
-			? 1.0 - smoothstep(0.0, max(clipmap_spacing_m * 0.25, 0.0001), inner_boundary_delta)
-			: 0.0;
-		float geomorph_alpha = lod_alpha * (1.0 - inner_boundary_morph);
-		morphed_local_xz = mix(clipmap_local_xz, coarse_local_xz, geomorph_alpha);
-	}
+	float coarse_spacing = max(clipmap_next_spacing_m, clipmap_spacing_m * 2.0);
+	vec2 coarse_local_xz = floor(clipmap_local_xz / coarse_spacing + vec2(0.5)) * coarse_spacing;
+	vec2 current_local_xz = floor(clipmap_local_xz / max(clipmap_spacing_m, 0.0001) + vec2(0.5))
+		* max(clipmap_spacing_m, 0.0001);
+	float inner_boundary_delta = abs(max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y)) - clipmap_inner_extent_m);
+	float inner_boundary_morph = (clipmap_inner_extent_m > 0.0)
+		? 1.0 - smoothstep(0.0, max(clipmap_spacing_m * 0.25, 0.0001), inner_boundary_delta)
+		: 0.0;
+	vec2 morphed_local_xz = mix(clipmap_local_xz, coarse_local_xz, lod_alpha);
+	morphed_local_xz = mix(morphed_local_xz, current_local_xz, inner_boundary_morph);
 	vec2 world_xz = clipmap_origin_xz + morphed_local_xz;
-	vec3 base_vertex = VERTEX;
-	if (lod_geomorph_enabled) {
-		base_vertex.xz = morphed_local_xz;
-	}
 	clipmap_lod_morph_alpha = lod_alpha;
 	ocean_world_xz = world_xz;
 	coastal_field = vec4(0.0, 1.0, 0.0, 0.0);
@@ -209,9 +203,7 @@ void vertex() {
 		}
 		displacement.xz *= shore_horizontal_weight;
 		displacement.y *= shore_vertical_weight;
-		VERTEX = base_vertex + displacement;
-	} else {
-		VERTEX = base_vertex;
+		VERTEX += displacement;
 	}
 }
 

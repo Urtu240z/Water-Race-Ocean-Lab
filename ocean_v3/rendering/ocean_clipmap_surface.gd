@@ -55,7 +55,6 @@ enum CoastalWarpEffectDebug {
 
 @export var clipmap_config := ClipmapConfigScript.new()
 @export_range(0.05, 0.30, 0.01) var lod_morph_ratio: float = 0.12
-@export var lod_geomorph_enabled: bool = true
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
 @export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
@@ -180,12 +179,6 @@ func toggle_lod_morph_debug() -> void:
 	_lod_morph_debug = not _lod_morph_debug
 	_surface_material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
 	_wireframe_material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
-
-
-func set_lod_geomorph_enabled(enabled: bool) -> void:
-	lod_geomorph_enabled = enabled
-	_surface_material.set_shader_parameter(&"lod_geomorph_enabled", enabled)
-	_wireframe_material.set_shader_parameter(&"lod_geomorph_enabled", enabled)
 
 
 func toggle_periodicity_debug() -> void:
@@ -384,7 +377,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
 		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
 		material.set_shader_parameter(&"lod_morph_ratio", clampf(lod_morph_ratio, 0.05, 0.30))
-		material.set_shader_parameter(&"lod_geomorph_enabled", lod_geomorph_enabled)
 		material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
 		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 		material.set_shader_parameter(&"coastal_propagation_enabled", false)
@@ -425,7 +417,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 func _prepare_editor_preview() -> void:
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
-	set_lod_geomorph_enabled(lod_geomorph_enabled)
 	if _levels.is_empty() and clipmap_config.is_valid():
 		_rebuild_levels()
 	_apply_debug_mode()

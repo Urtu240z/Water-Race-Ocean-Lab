@@ -62,17 +62,11 @@ func _validate_world_anchoring() -> void:
 	_check(shader_source.contains("MODEL_MATRIX * vec4(VERTEX, 1.0)"), "shader calcula UV desde posición mundial")
 	_check(not shader_source.contains("VERTEX.xz / domain"), "shader no ancla UV a coordenadas locales")
 	_check(shader_source.contains("uniform float lod_morph_ratio"), "shader expone lod_morph_ratio")
-	_check(shader_source.contains("uniform bool lod_geomorph_enabled"), "shader expone interruptor A/B de geomorph")
 	_check(shader_source.contains("instance uniform float clipmap_next_spacing_m"), "shader recibe spacing del siguiente LOD")
 	_check(shader_source.contains("instance uniform float clipmap_inner_extent_m"), "shader recibe extensión interior para stitching")
 	_check(shader_source.contains("clipmap_origin_xz"), "morph usa el origen estable del clipmap")
 	_check(shader_source.contains("clipmap_lod_morph_factor"), "shader calcula lod_alpha")
 	_check(shader_source.contains("floor(clipmap_local_xz / coarse_spacing"), "coarse grid se cuantiza en clipmap-space")
-	_check(shader_source.contains("vec3 base_vertex = VERTEX"), "la base geométrica parte del vértice fino")
-	_check(shader_source.contains("vec3 displaced_vertex = base_vertex + displacement"), "la base y el muestreo comparten coordenada morfada")
-	_check(shader_source.contains("if (lod_geomorph_enabled)"), "A/B puede conservar alpha sin influencia geométrica")
-	_check(shader_source.contains("base_vertex.xz = morphed_local_xz"), "geomorph aplica la misma base XZ que el muestreo")
-	_check(shader_source.contains("float geomorph_alpha = lod_alpha * (1.0 - inner_boundary_morph)"), "stitch conserva el borde fino sin redondeo incompatible")
 
 
 func _validate_module_api() -> void:
