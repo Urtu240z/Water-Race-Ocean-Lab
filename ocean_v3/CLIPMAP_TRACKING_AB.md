@@ -23,26 +23,47 @@ hecho.
 - `CONTINUOUS`: comportamiento baseline, siguiendo XZ de cámara cada frame.
 - `FROZEN`: captura la posición XZ actual al entrar y deja de mover la lattice.
   Y continúa en `sea_level`.
+- `SNAPPED`: cuantiza el root completo a una rejilla world-space estable. El
+  tamaño se controla con `clipmap_tracking_snap_m` (por defecto `0.25 m`).
 
-En ambos modos `camera_world_xz` se actualiza con la cámara real en cada frame.
+En los tres modos `camera_world_xz` se actualiza con la cámara real en cada frame.
 No se toca SimulationClock, FFT, texturas, fades, normals, foam, reflections,
-coastal, breaking ni stitching. `Shift+F` cambia el modo en runtime y el HUD
-muestra una sola línea `Clipmap Tracking: CONTINUOUS/FROZEN`.
+coastal, breaking ni stitching. `Shift+F` cicla en runtime
+`CONTINUOUS → FROZEN → SNAPPED → CONTINUOUS` y el HUD muestra el modo y el
+tamaño de snap.
 
-## Protocolo visual
+En `SNAPPED`, cada celda se calcula directamente desde la cámara:
 
-Con Sea State RACE y `P` pausado, repetir la misma trayectoria lenta de 20–40 m:
+```gdscript
+cell = Vector2i(roundi(camera_world_xz.x / snap_m), roundi(camera_world_xz.y / snap_m))
+clipmap_xz = Vector2(cell.x * snap_m, cell.y * snap_m)
+```
 
-| Caso | Tracking | Vista |
+La cuantización usa coordenadas absolutas world-space y origen `(0, 0)`, sin
+acumular deltas. Sólo el `OceanClipmapSurface` cambia de transform; todos los
+LOD son hijos del mismo root. `camera_world_xz` conserva la posición continua
+real de cámara para los shaders.
+
+El smoke `res://tests/clipmap_tracking_snapped_runtime.gd` cubre los tamaños
+`0.25 m`, `0.50 m` y `1.00 m`, además de comprobar que el material recibe la
+posición continua de cámara.
+
+## Protocolo visual manual
+
+Con Sea State RACE, `P` pausado y normal VERTEX, repetir la misma trayectoria
+lenta hacia delante y lateralmente:
+
+| Caso | Tracking | Tamaño |
 |---|---|---|
-| A | CONTINUOUS | producción + VERTEX |
-| B | CONTINUOUS | producción + FRAGMENT |
-| C | FROZEN | producción + VERTEX |
-| D | FROZEN | producción + FRAGMENT |
+| A | CONTINUOUS | — |
+| B | FROZEN | — |
+| C | SNAPPED | 0.25 m |
+| D | SNAPPED | 0.50 m |
+| E | SNAPPED | 1.00 m |
 
-Repetir A/B con `V` en WIREFRAME y opcionalmente `L` en LOD debug. Registrar en
-movimiento flicker, popping, boiling, crestas que aparecen/desaparecen y cambio
-de silueta. No concluir desde una captura fija.
+Comparar flicker, boiling, popping, pequeños saltos periódicos y estabilidad de
+crestas. Repetir con `V` en WIREFRAME y `L` en LOD debug. No concluir desde una
+captura fija ni afirmar qué tamaño es mejor sin movimiento continuo real.
 
 ## Resultado observado en esta ejecución
 
@@ -69,5 +90,6 @@ fijas.
 - FRAGMENT mejora en ambos tracking: normal/specular domina.
 - Sólo fronteras LOD en FROZEN: investigar en una fase posterior.
 
-Esta tarea sólo aporta evidencia A/B. No implementa snapping, geomorph,
-spectral band limiting ni ninguna solución permanente.
+Esta tarea sólo aporta el diagnóstico de tracking y el modo `SNAPPED`. No
+implementa geomorph, spectral band limiting ni ninguna solución de normals,
+filtering, stitching o FFT.
