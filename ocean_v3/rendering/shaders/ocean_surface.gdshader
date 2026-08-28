@@ -165,8 +165,16 @@ uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float refraction_micro_normal_strength : hint_range(0.0, 0.5, 0.01) = 0.15;
 uniform float refraction_max_offset_px : hint_range(0.0, 64.0, 1.0) = 24.0;
 uniform float refraction_depth_tolerance_m : hint_range(0.0, 2.0, 0.01) = 0.35;
+// R3 body polish. These controls add bounded single-pass water-column
+// scattering without changing the R1 Beer-Lambert terms or the R2 ray path.
+uniform vec4 scattering_color : source_color = vec4(0.02, 0.32, 0.42, 1.0);
+uniform float scattering_strength : hint_range(0.0, 2.0, 0.01) = 0.45;
+uniform float water_turbidity : hint_range(0.0, 2.0, 0.01) = 0.35;
+uniform float crest_transmission_boost : hint_range(0.0, 0.5, 0.01) = 0.12;
+uniform float trough_density_boost : hint_range(0.0, 0.5, 0.01) = 0.10;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
-// 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY.
+// 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
+// 7 WATER_BODY_FINAL.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2627,6 +2635,56 @@ void fragment() {
 				0.24
 			);
 
+			// R3: keep the R1 Beer-Lambert values pure, then derive bounded
+			// production-only polish from them. Crest transmission uses the existing
+			// height signal; it never changes TRANSMITTANCE_RGB debug output.
+			float crest_factor = smoothstep(0.65, 1.0, height_position);
+			float crest_transmission_mix = clamp(
+				crest_factor * clamp(crest_transmission_boost, 0.0, 0.5),
+				0.0,
+				0.5
+			);
+			vec3 effective_transmittance_rgb = mix(
+				transmittance_rgb,
+				sqrt(max(transmittance_rgb, vec3(0.0))),
+				crest_transmission_mix
+			);
+			vec3 effective_absorbed_rgb = vec3(1.0) - effective_transmittance_rgb;
+			float trough_factor = 1.0 - smoothstep(0.0, 0.45, height_position);
+			float trough_density_factor = 1.0 + trough_factor
+				* clamp(trough_density_boost, 0.0, 0.5);
+
+			// Turbidity is an independent scattering density in inverse metres. The
+			// exponential grows with optical thickness and saturates in deep water;
+			// it is deliberately not derived from absorption_coeff_rgb.
+			float scattering_density_m = 0.22 * clamp(water_turbidity, 0.0, 2.0);
+			float scattering_depth_response = 1.0 - exp(
+				-max(scattering_density_m, 0.0) * max(water_thickness, 0.0)
+			);
+			float scattering_response = clamp(
+				scattering_depth_response * mix(0.55, 1.0, depth_factor),
+				0.0,
+				1.0
+			);
+			vec3 scattering_tint = mix(
+				scattering_color.rgb,
+				deep_water_color.rgb * 0.65,
+				depth_factor * 0.55
+			);
+			// Treat scattering as a bounded share of the absorbed body response.
+			// This preserves the R1 body at strength 0 and avoids stacking the
+			// deep-water color three times through transmission, body and scatter.
+			float scattering_share = clamp(
+				scattering_response * clamp(scattering_strength, 0.0, 2.0) * 0.35,
+				0.0,
+				0.45
+			);
+			vec3 body_component = body_color * effective_absorbed_rgb
+				* (1.0 - scattering_share) * trough_density_factor;
+			vec3 water_scattering = scattering_tint * effective_absorbed_rgb;
+			vec3 scattering_component = water_scattering
+				* scattering_share * trough_density_factor;
+
 			vec3 surface_color = mix(
 				body_color,
 				horizon_water_color.rgb,
@@ -2636,7 +2694,7 @@ void fragment() {
 			// R2: derive the refraction ray from the clean FFT macro normal and IOR.
 			// Surface Detail contributes only through the already sampled detail offset;
 			// foam normals deliberately stay out of this path.
-			vec3 optical_scene = body_color;
+			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
 			if (water_refraction_enabled) {
@@ -2755,9 +2813,11 @@ void fragment() {
 					final_refracted_uv,
 					0.0
 				).rgb;
-				// Beer-Lambert transmission through the water column. The body term
-				// keeps deep water from collapsing to black without adding scattering.
-				optical_scene = refracted_scene * transmittance_rgb + body_color * absorbed_rgb;
+				// R3 optical body: refracted transmission plus one bounded body/scatter
+				// response. effective_transmittance_rgb is production-only; the pure
+				// R1 transmittance_rgb remains available to debug mode 2.
+				vec3 transmitted_component = refracted_scene * effective_transmittance_rgb;
+				optical_scene = transmitted_component + body_component + scattering_component;
 			}
 
 			// The existing physical Fresnel is the single optical balance between
@@ -2783,6 +2843,7 @@ void fragment() {
 
 			// Foam is composited after water optics, so Fresnel/reflection cannot be
 			// laid back on top of it when looking into a solar highlight.
+			vec3 water_body_final_color = final_color;
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
 			final_color = mix(final_color, surface_foam_color.rgb, surface_foam_mask);
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
@@ -2803,6 +2864,10 @@ void fragment() {
 				));
 			} else if (water_optics_debug_mode == 5) {
 				final_color = vec3(refraction_validity);
+			} else if (water_optics_debug_mode == 6) {
+				final_color = scattering_component;
+			} else if (water_optics_debug_mode == 7) {
+				final_color = water_body_final_color;
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

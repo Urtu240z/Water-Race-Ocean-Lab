@@ -386,9 +386,34 @@ var _performance_overlay_label: Label
 		refraction_depth_tolerance_m = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY") var water_optics_debug_mode: int = 0:
+@export var scattering_color: Color = Color(0.02, 0.32, 0.42, 1.0):
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 5)
+		scattering_color = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var scattering_strength: float = 0.45:
+	set(value):
+		scattering_strength = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var water_turbidity: float = 0.35:
+	set(value):
+		water_turbidity = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 0.5, 0.01) var crest_transmission_boost: float = 0.12:
+	set(value):
+		crest_transmission_boost = clampf(value, 0.0, 0.5)
+		_request_visual_sync()
+
+@export_range(0.0, 0.5, 0.01) var trough_density_boost: float = 0.10:
+	set(value):
+		trough_density_boost = clampf(value, 0.0, 0.5)
+		_request_visual_sync()
+
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL") var water_optics_debug_mode: int = 0:
+	set(value):
+		water_optics_debug_mode = clampi(value, 0, 7)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1873,6 +1898,11 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"refraction_micro_normal_strength", refraction_micro_normal_strength)
 	material.set_shader_parameter(&"refraction_max_offset_px", refraction_max_offset_px)
 	material.set_shader_parameter(&"refraction_depth_tolerance_m", refraction_depth_tolerance_m)
+	material.set_shader_parameter(&"scattering_color", scattering_color)
+	material.set_shader_parameter(&"scattering_strength", scattering_strength)
+	material.set_shader_parameter(&"water_turbidity", water_turbidity)
+	material.set_shader_parameter(&"crest_transmission_boost", crest_transmission_boost)
+	material.set_shader_parameter(&"trough_density_boost", trough_density_boost)
 	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
