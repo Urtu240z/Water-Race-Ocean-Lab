@@ -5,13 +5,16 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D source_mip;
 layout(rgba16f, set = 0, binding = 1) uniform writeonly image2D destination_mip;
+layout(set = 0, binding = 2, std140) uniform KawaseParams {
+	vec4 settings;
+} params;
 
-const ivec2 SAMPLE_OFFSETS[5] = ivec2[](
-	ivec2(0, 0),
-	ivec2(-1, -1),
-	ivec2(1, -1),
-	ivec2(-1, 1),
-	ivec2(1, 1)
+const vec2 SAMPLE_OFFSETS[5] = vec2[](
+	vec2(0.0, 0.0),
+	vec2(-1.0, -1.0),
+	vec2(1.0, -1.0),
+	vec2(-1.0, 1.0),
+	vec2(1.0, 1.0)
 );
 
 void main() {
@@ -23,13 +26,13 @@ void main() {
 
 	ivec2 source_size = textureSize(source_mip, 0);
 	ivec2 source_center = destination_pixel * 2 + ivec2(1);
+	vec2 source_uv = (vec2(source_center) + 0.5) / vec2(source_size);
 	vec3 weighted_color = vec3(0.0);
 	float coverage = 0.0;
 	for (int sample_index = 0; sample_index < 5; sample_index++) {
-		ivec2 source_pixel = clamp(
-			source_center + SAMPLE_OFFSETS[sample_index],
-			ivec2(0), source_size - 1);
-		vec4 sample_value = texelFetch(source_mip, source_pixel, 0);
+		vec2 sample_uv = clamp(source_uv + SAMPLE_OFFSETS[sample_index]
+			* params.settings.x / vec2(source_size), vec2(0.0), vec2(1.0));
+		vec4 sample_value = texture(source_mip, sample_uv);
 		float sample_alpha = clamp(sample_value.a, 0.0, 1.0);
 		weighted_color += sample_value.rgb * sample_alpha;
 		coverage += sample_alpha;

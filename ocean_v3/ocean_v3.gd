@@ -347,6 +347,11 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_enabled = value
 		_request_visual_sync()
 
+@export_range(0.25, 1.0, 0.05) var reflection_sspr_resolution_scale: float = 0.50:
+	set(value):
+		reflection_sspr_resolution_scale = clampf(value, 0.25, 1.0)
+		_request_visual_sync()
+
 @export_range(0.0, 1.0, 0.01) var reflection_sspr_distortion_strength: float = 0.35:
 	set(value):
 		reflection_sspr_distortion_strength = clampf(value, 0.0, 1.0)
@@ -370,6 +375,11 @@ var _wave_transition_start_short_geometry := 0.25
 @export var reflection_sspr_kawase_enabled: bool = true:
 	set(value):
 		reflection_sspr_kawase_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.05) var reflection_sspr_kawase_radius: float = 1.0:
+	set(value):
+		reflection_sspr_kawase_radius = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
 @export var reflection_sspr_temporal_enabled: bool = true:
@@ -1010,12 +1020,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 12
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 13
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_PREFILTERED"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1491,11 +1501,13 @@ func _sync_water_visual_parameters() -> void:
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
+		_reflection_sspr_manager.set_resolution_scale(reflection_sspr_resolution_scale)
 		_reflection_sspr_manager.set_temporal_settings(
 			reflection_sspr_temporal_enabled,
 			reflection_sspr_temporal_weight,
 			reflection_sspr_temporal_depth_threshold)
 		_reflection_sspr_manager.set_kawase_enabled(reflection_sspr_kawase_enabled)
+		_reflection_sspr_manager.set_kawase_radius(reflection_sspr_kawase_radius)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
@@ -1621,6 +1633,17 @@ func set_reflection_sspr_raw_texture(texture: Texture2D, available: bool) -> voi
 	material.set_shader_parameter(&"reflection_sspr_raw_available", available)
 
 
+func set_reflection_sspr_temporal_texture(texture: Texture2D, available: bool) -> void:
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	if surface == null or not is_instance_valid(surface):
+		return
+	var material := surface.get_surface_material()
+	if material == null or not is_instance_valid(material):
+		return
+	material.set_shader_parameter(&"reflection_sspr_temporal_texture", texture)
+	material.set_shader_parameter(&"reflection_sspr_temporal_available", available)
+
+
 func get_reflection_sspr_temporal_settings() -> Dictionary:
 	return {
 		"enabled": reflection_sspr_temporal_enabled,
@@ -1631,3 +1654,19 @@ func get_reflection_sspr_temporal_settings() -> Dictionary:
 
 func get_reflection_sspr_kawase_enabled() -> bool:
 	return reflection_sspr_kawase_enabled
+
+
+func get_reflection_sspr_kawase_radius() -> float:
+	return reflection_sspr_kawase_radius
+
+
+func get_reflection_sspr_resolution_scale() -> float:
+	return reflection_sspr_resolution_scale
+
+
+func get_reflection_sspr_source_size() -> Vector2i:
+	return _reflection_sspr_manager.get_source_size() if _reflection_sspr_manager != null else Vector2i.ZERO
+
+
+func get_reflection_sspr_target_size() -> Vector2i:
+	return _reflection_sspr_manager.get_target_size() if _reflection_sspr_manager != null else Vector2i.ZERO
