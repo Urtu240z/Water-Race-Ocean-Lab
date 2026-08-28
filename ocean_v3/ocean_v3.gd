@@ -507,6 +507,31 @@ enum NearSSRQuality { LOW, MEDIUM, HIGH }
 		reflection_sspr_temporal_depth_threshold = clampf(value, 0.001, 0.25)
 		_request_visual_sync()
 
+@export_range(-2.0, 2.0, 0.05) var reflection_radiance_exposure_ev: float = 0.0:
+	set(value):
+		reflection_radiance_exposure_ev = clampf(value, -2.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.5, 2.0, 0.01) var reflection_radiance_contrast: float = 1.0:
+	set(value):
+		reflection_radiance_contrast = clampf(value, 0.5, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var reflection_radiance_saturation: float = 1.0:
+	set(value):
+		reflection_radiance_saturation = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export var reflection_radiance_tint: Color = Color(1.0, 1.0, 1.0, 1.0):
+	set(value):
+		reflection_radiance_tint = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.5, 0.01) var reflection_screen_space_weight: float = 1.0:
+	set(value):
+		reflection_screen_space_weight = clampf(value, 0.0, 1.5)
+		_request_visual_sync()
+
 
 @export_group("Whitecaps Foam")
 @export var foam_enabled: bool = true:
@@ -1811,6 +1836,11 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_near_ssr_fade_m", reflection_near_ssr_fade_m)
 	material.set_shader_parameter(&"reflection_near_ssr_thickness", reflection_near_ssr_thickness)
 	material.set_shader_parameter(&"reflection_near_ssr_quality", reflection_near_ssr_quality)
+	material.set_shader_parameter(&"reflection_radiance_exposure_ev", reflection_radiance_exposure_ev)
+	material.set_shader_parameter(&"reflection_radiance_contrast", reflection_radiance_contrast)
+	material.set_shader_parameter(&"reflection_radiance_saturation", reflection_radiance_saturation)
+	material.set_shader_parameter(&"reflection_radiance_tint", reflection_radiance_tint)
+	material.set_shader_parameter(&"reflection_screen_space_weight", reflection_screen_space_weight)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())

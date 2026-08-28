@@ -204,6 +204,11 @@ uniform float reflection_near_ssr_ray_length_m : hint_range(25.0, 500.0, 1.0) = 
 uniform float reflection_near_ssr_fade_m : hint_range(0.0, 50.0, 0.5) = 10.0;
 uniform float reflection_near_ssr_thickness : hint_range(0.01, 2.0, 0.01) = 0.35;
 uniform int reflection_near_ssr_quality = 1;
+uniform float reflection_radiance_exposure_ev : hint_range(-2.0, 2.0, 0.05) = 0.0;
+uniform float reflection_radiance_contrast : hint_range(0.5, 2.0, 0.01) = 1.0;
+uniform float reflection_radiance_saturation : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform vec4 reflection_radiance_tint : source_color = vec4(1.0);
+uniform float reflection_screen_space_weight : hint_range(0.0, 1.5, 0.01) = 1.0;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
@@ -757,6 +762,23 @@ float reflection_final_roughness(float base_roughness, float surface_foam_mask_v
 	result = mix(result, foam_residual_roughness, foam_residual_mask_value);
 	result = mix(result, foam_fresh_roughness, foam_fresh_mask_value);
 	return result;
+}
+
+
+vec3 reflection_grade_radiance(vec3 radiance) {
+	// Final art direction is applied to the fully composed screen-space
+	// radiance. Keep it in linear HDR and leave diagnostic reflection modes raw.
+	radiance *= exp2(reflection_radiance_exposure_ev);
+	float luminance = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+	float safe_luminance = max(luminance, 0.000001);
+	float contrast_luminance = max(
+		0.0,
+		pow(safe_luminance, reflection_radiance_contrast)
+	);
+	radiance *= contrast_luminance / safe_luminance;
+	float saturation_luminance = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+	radiance = mix(vec3(saturation_luminance), radiance, reflection_radiance_saturation);
+	return radiance * reflection_radiance_tint.rgb;
 }
 
 
@@ -2246,6 +2268,14 @@ void fragment() {
 			: near_ssr_color;
 		reflection_radiance_confidence = max(sspr_confidence, near_ssr_confidence);
 	}
+	// Screen-space weight controls only fallback confidence, never radiance
+	// brightness. Zero therefore restores the environment/PBR fallback.
+	reflection_radiance_confidence = clamp(
+		reflection_radiance_confidence * reflection_screen_space_weight,
+		0.0,
+		1.0
+	);
+	reflection_radiance = reflection_grade_radiance(reflection_radiance);
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
 		max(opacity_distance_end, opacity_distance_start + 0.001),
