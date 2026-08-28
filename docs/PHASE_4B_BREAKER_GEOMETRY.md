@@ -95,7 +95,9 @@ apagado, alpha = 0.
 
 - `max_breakers` (8): tope estricto de slots simultáneos.
 - `ribbon_u_segments` (36) / `ribbon_v_segments` (5): resolución del ribetón.
-- `ribbon_width_m` (5.0) y `ribbon_length_lambda` (1.15): extensión local.
+- `ribbon_width_m` (6.0) y `ribbon_length_lambda` (1.55): huella visual local
+  ampliada para que el breaker se lea como una ola longitudinal completa, sin
+  cambiar la posición del anchor ni la autoridad física del detector.
 - `anchor_min_depth_m` (0.35), `anchor_min_depth_pressure` (0.35),
   `anchor_max_depth_pressure` (1.35): ventana física de colocación; los
   candidatos se ordenan por cercanía a la presión objetivo de prebreak, no por
@@ -109,6 +111,12 @@ apagado, alpha = 0.
 de producción es `direction_xz = viaje físico de la cresta` y la LUT tiene
 `x_norm` creciente en `u`, por lo que `forward_sign = +1`; el espejo `-1` es
 sólo diagnóstico.
+
+La presentación de producción escala el perfil a `2.35 hs` de altura y `0.82`
+de longitud normalizada. Añade whitewater estable derivado de `u`, `v` y del
+stage SPAWN/GROW/LIP/PLUNGE/FADE; no usa ruido temporal, texturas adicionales ni
+lecturas GPU→CPU. El takeover del FFT comparte la misma huella y usa fades
+espaciales/temporales para evitar costuras, popping y z-fighting.
 
 El handoff S5 sigue PREBREAK → SPAWN → ACTIVE → TAKEOVER → terminal
 near-shore. Run-up/swash quedan fuera de esta fase.

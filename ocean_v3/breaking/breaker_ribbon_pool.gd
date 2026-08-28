@@ -79,8 +79,8 @@ const TRANSITION_ANCHOR_MATCH_DIRECTION_DOT := 0.85
 @export_range(1, 8, 1) var max_breakers := 8
 @export_range(8, 128, 1) var ribbon_u_segments := 96
 @export_range(2, 12, 1) var ribbon_v_segments := 5
-@export_range(2.0, 40.0, 0.5) var ribbon_width_m := 5.0
-@export_range(0.6, 2.0, 0.05) var ribbon_length_lambda := 1.15
+@export_range(2.0, 40.0, 0.5) var ribbon_width_m := 6.0
+@export_range(0.6, 2.0, 0.05) var ribbon_length_lambda := 1.55
 @export_range(0.2, 8.0, 0.1) var anchor_min_depth_m := 0.35
 @export_range(0.1, 1.0, 0.05) var anchor_min_depth_pressure := 0.35
 @export_range(0.5, 3.0, 0.1) var anchor_max_depth_pressure := 1.35
@@ -2007,11 +2007,7 @@ func _sync_takeover_mask() -> void:
 		_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", false)
 		return
 	var anchor: Dictionary = _anchors[_debug_slot]
-	var profile_scale: float = 0.65
-	if _material != null:
-		var s: Variant = _material.get_shader_parameter(&"breaker_profile_length_scale")
-		if s != null and float(s) > 0.0:
-			profile_scale = float(s)
+	var profile_scale := _profile_length_scale()
 	_surface_material.set_shader_parameter(&"breaker_takeover_debug_enabled", true)
 	_surface_material.set_shader_parameter(&"breaker_takeover_anchor_xz", Vector2(anchor["xz"]))
 	_surface_material.set_shader_parameter(&"breaker_takeover_direction_xz", Vector2(anchor["direction"]))
@@ -2031,6 +2027,7 @@ func _sync_production_takeover() -> void:
 	centers.resize(8)
 	states.resize(8)
 	var active_count := 0
+	var profile_scale := _profile_length_scale()
 	for index in mini(_tracking.size(), 8):
 		var entry: Dictionary = _tracking[index]
 		if not bool(entry.get("active", false)):
@@ -2039,7 +2036,7 @@ func _sync_production_takeover() -> void:
 		var tracked: Vector2 = Vector2(entry.get("tracked_xz", Vector2.ZERO))
 		centers[active_count] = Vector4(tracked.x, tracked.y, direction.x, direction.y)
 		states[active_count] = Vector4(
-			maxf(float(entry.get("spawn_wavelength", 1.0)) * ribbon_length_lambda * 0.65, 0.1),
+			maxf(float(entry.get("spawn_wavelength", 1.0)) * ribbon_length_lambda * profile_scale, 0.1),
 			maxf(ribbon_width_m, 0.1),
 			clampf(float(entry.get("stage", 0.0)), 0.0, 1.0),
 			clampf(float(entry.get("alpha", 0.0)), 0.0, 1.0))
@@ -2047,6 +2044,14 @@ func _sync_production_takeover() -> void:
 	_surface_material.set_shader_parameter(&"breaker_takeover_count", active_count)
 	_surface_material.set_shader_parameter(&"breaker_takeover_data0", centers)
 	_surface_material.set_shader_parameter(&"breaker_takeover_data1", states)
+
+
+func _profile_length_scale() -> float:
+	if _material != null:
+		var value: Variant = _material.get_shader_parameter(&"breaker_profile_length_scale")
+		if value != null and float(value) > 0.0:
+			return float(value)
+	return 0.82
 
 
 func _apply_visibility() -> void:

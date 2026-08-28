@@ -279,6 +279,14 @@ possible; a Sea State Zone affects eligibility through the registered zone
 descriptors. This is a local breaker representation, not a complete
 shoreline/whitewater/spray system.
 
+The production visual pass keeps that authority model intact while making the
+breaker read as a complete breaking wave: the ribbon uses a wider, longer
+world-anchored footprint, the approved LUT profile is scaled to a taller lip,
+and its whitewater is a stable procedural mask driven by ribbon UVs and
+lifecycle stage. The FFT is smoothly submerged under the same footprint during
+takeover, so the crest-to-lip-to-plunge silhouette remains coherent without
+extra textures, recurring GPU→CPU readbacks, or shoreline/run-up behavior.
+
 For runtime diagnosis, `BreakerRibbonPool` stores the detector values already
 used by the decision (`candidate_s`, previous position, advancing/window gates,
 pressure/prominence/steepness contributions, raw/final score, eligibility,

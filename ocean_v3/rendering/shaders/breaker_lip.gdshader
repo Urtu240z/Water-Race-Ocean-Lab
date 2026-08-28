@@ -81,8 +81,10 @@ uniform float sea_level_y = 0.0;
 // LIP/TAKEOVER (stage = lifecycle) y FORCE_LIP (stage = debug manual Q/E).
 uniform sampler2D breaker_profile_lut : repeat_disable, filter_linear;
 uniform float breaker_profile_debug_stage = 1.0;
-uniform float breaker_profile_height_hs = 2.0;
-uniform float breaker_profile_length_scale = 0.65;
+uniform float breaker_profile_height_hs = 2.35;
+uniform float breaker_profile_length_scale = 0.82;
+uniform vec3 breaker_whitewater_color : source_color = vec3(0.82, 0.96, 1.0);
+uniform float breaker_whitewater_strength = 1.0;
 // S5: la LUT se horneó con x_norm creciente en u; +1 sigue el viaje físico.
 // -1 sólo queda disponible como espejo de diagnóstico.
 uniform float breaker_profile_forward_sign = 1.0;
@@ -115,6 +117,7 @@ varying float breaker_alpha;
 varying float breaker_env;
 varying float breaker_u;
 varying float breaker_v;
+varying float breaker_stage;
 
 // Detector GPU compartido. Incluido después de los uniforms para que sus
 // funciones puedan referenciarlos.
@@ -162,6 +165,7 @@ void vertex() {
 		profile_center_xz = tracked_crest_xz;
 		profile_stage = breaker_lifecycle_stage;
 	}
+	breaker_stage = profile_stage;
 
 	// La base FFT se samplea en la posición REST de la LUT (stage 0), para que
 	// el stage 0 quede exactamente pegado al FFT.
@@ -291,16 +295,28 @@ void fragment() {
 	float alpha = breaker_alpha;
 	vec3 albedo = vec3(0.0);
 	vec3 emission = vec3(0.0);
+	float alpha_foam = 0.0;
 	float roughness = 0.3;
 	float specular = 0.0;
 
 	if (breaker_debug_mode == 0) {
 		// LIP (producción): aspecto de agua equivalente al océano normal.
-		// Iluminación real sobre la NORMAL ya calculada por el breaker.
-		albedo = base_color;
-		emission = vec3(0.0);
-		roughness = 0.42;
-		specular = 0.35;
+		// La banda de whitewater sigue el mismo UV world-anchored del perfil: no
+		// depende de cámara, ruido temporal ni texturas extra.
+		float growth = smoothstep(0.08, 0.42, breaker_stage);
+		float lip = smoothstep(0.30, 0.62, breaker_stage);
+		float plunge = smoothstep(0.58, 0.92, breaker_stage);
+		float crest_band = 1.0 - smoothstep(0.06, 0.22, abs(breaker_u - 0.53));
+		float impact_band = smoothstep(0.44, 0.58, breaker_u) * (1.0 - smoothstep(0.70, 0.88, breaker_u));
+		float foam_tail = smoothstep(0.54, 0.70, breaker_u) * (1.0 - smoothstep(0.86, 0.99, breaker_u));
+		float lateral = 0.62 + 0.38 * (1.0 - smoothstep(0.18, 0.50, abs(breaker_v - 0.50)));
+		float foam_mask = clamp((0.28 * crest_band * growth + 0.68 * impact_band * lip + 0.55 * foam_tail * plunge) * lateral * breaker_whitewater_strength, 0.0, 1.0);
+		alpha_foam = foam_mask;
+		vec3 water_color = base_color * (0.78 + 0.22 * growth);
+		albedo = mix(water_color, breaker_whitewater_color, foam_mask);
+		emission = breaker_whitewater_color * foam_mask * 0.16;
+		roughness = mix(0.46, 0.78, foam_mask);
+		specular = mix(0.38, 0.12, foam_mask);
 	} else if (breaker_debug_mode == 1) {
 		// TAKEOVER: heatmap por intensidad de takeover (emisivo).
 		emission = breaker_heat(breaker_env);
@@ -316,7 +332,7 @@ void fragment() {
 
 	ALBEDO = albedo;
 	EMISSION = emission;
-	ALPHA = alpha * 0.92;
+	ALPHA = alpha * mix(0.90, 0.98, alpha_foam);
 	ROUGHNESS = roughness;
 	SPECULAR = specular;
 }

@@ -156,7 +156,8 @@ uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
 // final NORMAL, ROUGHNESS and SPECULAR to provide environment radiance and
-// direct-light specular; no reflection texture is sampled here.
+// direct-light specular. Phase 2 optionally replaces part of environment
+// radiance with the quarter-resolution SSPR result through RADIANCE.
 uniform float reflection_min_roughness : hint_range(0.0, 1.0, 0.005) = 0.035;
 uniform float reflection_base_roughness : hint_range(0.0, 1.0, 0.005) = 0.055;
 uniform float reflection_distance_roughness : hint_range(0.0, 1.0, 0.005) = 0.23;
@@ -166,8 +167,11 @@ uniform float reflection_pixel_footprint_gain : hint_range(0.0, 1.0, 0.005) = 1.
 uniform float reflection_slope_variance_gain : hint_range(0.0, 1.0, 0.005) = 0.35;
 uniform vec2 reflection_roughness_distance_m = vec2(80.0, 220.0);
 uniform vec3 reflection_sun_direction_world = vec3(0.0, 0.0, 1.0);
+uniform bool reflection_sspr_enabled = true;
+uniform bool reflection_sspr_available = false;
+uniform sampler2D reflection_sspr_texture : repeat_disable, filter_linear;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
-// 6 SLOPE_VARIANCE.
+// 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -274,7 +278,7 @@ uniform float breaker_takeover_seam_center = 0.56;
 uniform float breaker_takeover_seam_half_width = 0.10;
 uniform float breaker_takeover_seam_feather = 0.06;
 // 4C-S3.3: profundidad de submerge (depresión vertical) bajo la seam S3.2.
-uniform float breaker_takeover_submerge_hs = 0.30;
+uniform float breaker_takeover_submerge_hs = 0.38;
 
 varying vec3 derived_normal;
 varying vec2 ocean_base_xz;
@@ -642,9 +646,9 @@ float breaker_takeover_production_mask(vec2 world_xz) {
 		float width_m = max(data1.y, 0.001);
 		float q = dot(delta, direction) / length_m + 0.5;
 		float lateral = abs(dot(delta, tangent)) / (0.5 * width_m);
-		float longitudinal = smoothstep(0.10, 0.28, q) * (1.0 - smoothstep(0.72, 0.94, q));
-		float lateral_fade = 1.0 - smoothstep(0.70, 1.05, lateral);
-		float stage = smoothstep(0.16, 0.52, data1.z);
+		float longitudinal = smoothstep(0.06, 0.22, q) * (1.0 - smoothstep(0.78, 0.96, q));
+		float lateral_fade = 1.0 - smoothstep(0.76, 1.12, lateral);
+		float stage = smoothstep(0.10, 0.42, data1.z);
 		float mask = longitudinal * lateral_fade * stage * clamp(data1.w, 0.0, 1.0);
 		result = max(result, mask);
 	}
@@ -1795,6 +1799,10 @@ void fragment() {
 		color = visual_normal * 0.5 + 0.5;
 	} else if (reflection_debug_mode == 6) {
 		color = vec3(debug_slope_variance);
+	} else if (reflection_debug_mode == 7) {
+		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
+	} else if (reflection_debug_mode == 8) {
+		color = vec3(textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).a);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -1803,6 +1811,7 @@ void fragment() {
 		EMISSION = color;
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
+		RADIANCE = vec4(0.0);
 		ALPHA = 1.0;
 	} else if (ocean_shape_debug) {
 		// 5R.1: vista neutra de silueta/crest/valle/choppiness. Sin foam ni emission.
@@ -1946,6 +1955,8 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
+			vec4 sspr_sample = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0);
+			RADIANCE = vec4(sspr_sample.rgb, (reflection_sspr_enabled && reflection_sspr_available) ? sspr_sample.a : 0.0);
 			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
@@ -1963,6 +1974,8 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
+			vec4 sspr_sample = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0);
+			RADIANCE = vec4(sspr_sample.rgb, (reflection_sspr_enabled && reflection_sspr_available) ? sspr_sample.a : 0.0);
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
