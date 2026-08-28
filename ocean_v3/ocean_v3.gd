@@ -315,9 +315,20 @@ var _performance_overlay_label: Label
 		crest_tint = value
 		_request_visual_sync()
 
+# Legacy scalar kept for scene/resource serialization compatibility. Water
+# optics production uses absorption_coeff_rgb below.
 @export_range(0.01, 2.0, 0.01) var absorption_density: float = 0.13:
 	set(value):
 		absorption_density = value
+		_request_visual_sync()
+
+@export var absorption_coeff_rgb: Vector3 = Vector3(0.35, 0.12, 0.055):
+	set(value):
+		absorption_coeff_rgb = Vector3(
+			maxf(value.x, 0.0),
+			maxf(value.y, 0.0),
+			maxf(value.z, 0.0)
+		)
 		_request_visual_sync()
 
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth: float = 38.0:
@@ -358,6 +369,11 @@ var _performance_overlay_label: Label
 @export_range(0.0, 0.05, 0.0005) var refraction_strength: float = 0.009:
 	set(value):
 		refraction_strength = value
+		_request_visual_sync()
+
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR") var water_optics_debug_mode: int = 0:
+	set(value):
+		water_optics_debug_mode = clampi(value, 0, 3)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1820,6 +1836,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"horizon_water_color", horizon_water_color)
 	material.set_shader_parameter(&"trough_tint", trough_tint)
 	material.set_shader_parameter(&"crest_tint", crest_tint)
+	material.set_shader_parameter(&"absorption_coeff_rgb", absorption_coeff_rgb)
+	# Keep the legacy parameter synchronized for old materials/resources; the
+	# shader no longer uses it in the production optics path.
 	material.set_shader_parameter(&"absorption_density", absorption_density)
 	material.set_shader_parameter(&"maximum_optical_depth", maximum_optical_depth)
 	material.set_shader_parameter(&"shallow_depth_range", shallow_depth_range)
@@ -1830,6 +1849,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
 	material.set_shader_parameter(&"water_refraction_enabled", perf_enable_refraction)
 	material.set_shader_parameter(&"refraction_strength", refraction_strength)
+	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
 	material.set_shader_parameter(&"reflection_distance_roughness", reflection_distance_roughness)

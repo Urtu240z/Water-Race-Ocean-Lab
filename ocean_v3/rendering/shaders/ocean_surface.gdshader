@@ -150,7 +150,10 @@ uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
 uniform vec4 horizon_water_color : source_color = vec4(0.025, 0.22, 0.34, 1.0);
 uniform vec4 trough_tint : source_color = vec4(0.002, 0.025, 0.075, 1.0);
 uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
+// Legacy scalar retained for material/resource compatibility. Production
+// water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
+uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.12, 0.055);
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
 uniform float shallow_depth_range : hint_range(0.1, 20.0, 0.1) = 5.5;
 uniform float near_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.77;
@@ -159,6 +162,8 @@ uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
+// 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR.
+uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
 // final NORMAL, ROUGHNESS and SPECULAR to provide environment radiance and
@@ -2509,13 +2514,16 @@ void fragment() {
 					maximum_optical_depth
 				);
 
-			float absorption = 1.0 - exp(-water_thickness * absorption_density);
+			vec3 transmittance_rgb = exp(-max(absorption_coeff_rgb, vec3(0.0)) * water_thickness);
+			vec3 absorbed_rgb = vec3(1.0) - transmittance_rgb;
+			float transmittance_luma = dot(transmittance_rgb, vec3(0.2126, 0.7152, 0.0722));
+			float optical_density = 1.0 - transmittance_luma;
 			float depth_factor = clamp(
 				water_thickness / max(shallow_depth_range, 0.001),
 				0.0,
 				1.0
 			);
-			float water_density = max(absorption, depth_factor * 0.48);
+			float water_density = max(optical_density, depth_factor * 0.48);
 
 			// Tinte suave por altura: valle profundo / cresta algo más transmisiva.
 			float height_scale = max(breaking_long_hs_m * 2.0, 0.25);
@@ -2546,7 +2554,7 @@ void fragment() {
 
 			// Refracción screen-space ligera. Se puede apagar de forma aislada
 			// con water_refraction_enabled si causa cualquier artefacto.
-			vec3 transmitted_scene = body_color;
+			vec3 optical_scene = body_color;
 			if (water_refraction_enabled) {
 				vec2 refraction_offset = visual_normal.xy
 					* refraction_strength
@@ -2562,19 +2570,16 @@ void fragment() {
 					refracted_uv,
 					0.0
 				).rgb;
-				transmitted_scene = refracted_scene * mix(
-					vec3(1.0),
-					shallow_water_color.rgb,
-					absorption * 0.30
-				);
+				// Beer-Lambert transmission through the water column. The body term
+				// keeps deep water from collapsing to black without adding scattering.
+				optical_scene = refracted_scene * transmittance_rgb + body_color * absorbed_rgb;
 			}
 
-			float body_mix = clamp(
-				water_density + distance_opacity * 0.72,
-				0.0,
-				1.0
-			);
-			vec3 final_color = mix(transmitted_scene, surface_color, body_mix);
+			// The existing physical Fresnel is the single optical balance between
+			// transmission and the surface/body response. The refraction offset above
+			// only uses (1 - fresnel) to control distortion magnitude.
+			float surface_weight = 1.0 - (1.0 - fresnel) * (1.0 - distance_opacity);
+			vec3 final_color = mix(optical_scene, surface_color, surface_weight);
 
 			float local_alpha = mix(
 				near_water_alpha,
@@ -2597,6 +2602,13 @@ void fragment() {
 			final_color = mix(final_color, surface_foam_color.rgb, surface_foam_mask);
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
+			if (water_optics_debug_mode == 1) {
+				final_color = vec3(water_thickness / max(maximum_optical_depth, 0.001));
+			} else if (water_optics_debug_mode == 2) {
+				final_color = transmittance_rgb;
+			} else if (water_optics_debug_mode == 3) {
+				final_color = body_color;
+			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
 			// Water response is established first; foam remains the final authority.
@@ -2608,6 +2620,14 @@ void fragment() {
 			METALLIC = 0.0;
 			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
 			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
+			if (water_optics_debug_mode > 0) {
+				ALBEDO = vec3(0.0);
+				EMISSION = final_color;
+				ROUGHNESS = 1.0;
+				SPECULAR = 0.0;
+				RADIANCE = vec4(0.0);
+				ALPHA = 1.0;
+			}
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
