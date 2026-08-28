@@ -244,7 +244,7 @@ func set_coastal_runtime_enabled(enabled: bool) -> void:
 func set_performance_profile(spectral_enabled: bool, coastal_enabled: bool,
 		crest_foam_solver_enabled: bool, surface_foam_solver_enabled: bool,
 		surface_foam_render_enabled: bool, prebreak_enabled: bool,
-		breakers_enabled: bool) -> void:
+		_breakers_enabled: bool) -> void:
 	## Performance-only shader gates. The public material controls remain unchanged.
 	var surface_available := spectral_enabled and surface_foam_solver_enabled
 	for material in [_surface_material, _wireframe_material]:
