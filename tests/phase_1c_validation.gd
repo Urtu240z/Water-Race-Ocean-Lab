@@ -61,6 +61,12 @@ func _validate_world_anchoring() -> void:
 	var shader_source := shader_file.get_as_text() if shader_file != null else ""
 	_check(shader_source.contains("MODEL_MATRIX * vec4(VERTEX, 1.0)"), "shader calcula UV desde posición mundial")
 	_check(not shader_source.contains("VERTEX.xz / domain"), "shader no ancla UV a coordenadas locales")
+	_check(shader_source.contains("uniform float lod_morph_ratio"), "shader expone lod_morph_ratio")
+	_check(shader_source.contains("instance uniform float clipmap_next_spacing_m"), "shader recibe spacing del siguiente LOD")
+	_check(shader_source.contains("instance uniform float clipmap_inner_extent_m"), "shader recibe extensión interior para stitching")
+	_check(shader_source.contains("clipmap_origin_xz"), "morph usa el origen estable del clipmap")
+	_check(shader_source.contains("clipmap_lod_morph_factor"), "shader calcula lod_alpha")
+	_check(shader_source.contains("floor(clipmap_local_xz / coarse_spacing"), "coarse grid se cuantiza en clipmap-space")
 
 
 func _validate_module_api() -> void:

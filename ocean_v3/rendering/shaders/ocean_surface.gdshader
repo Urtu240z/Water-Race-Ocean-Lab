@@ -302,6 +302,14 @@ uniform int foam_debug_mode = 0;
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
 instance uniform float clipmap_level = 0.0;
+// Geometric LOD transition. Instance values come from the same local mesh
+// metadata that builds the rings, so the next grid is exact.
+uniform float lod_morph_ratio : hint_range(0.05, 0.30, 0.01) = 0.12;
+uniform bool clipmap_lod_morph_debug = false;
+instance uniform float clipmap_spacing_m = 0.25;
+instance uniform float clipmap_next_spacing_m = 0.0;
+instance uniform float clipmap_outer_extent_m = 16.0;
+instance uniform float clipmap_inner_extent_m = 0.0;
 // 4C-S3: takeover mask debug (FORCE_LIP). Oculta el FFT base bajo el patch.
 uniform bool breaker_takeover_debug_enabled = false;
 uniform vec2 breaker_takeover_anchor_xz = vec2(0.0);
@@ -349,6 +357,7 @@ varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculad
 varying float shore_vertical_weight_varying;
 varying float shore_horizontal_weight_varying;
 varying float shore_pre_envelope_height;
+varying float clipmap_lod_morph_alpha;
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -870,8 +879,35 @@ float breaker_takeover_production_mask(vec2 world_xz) {
 	return clamp(result, 0.0, 1.0);
 }
 
+float clipmap_lod_morph_factor(vec2 clipmap_local_xz) {
+	if (clipmap_next_spacing_m <= 0.0 || clipmap_outer_extent_m <= 0.0) return 0.0;
+	float distance_metric = max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y));
+	float morph_start = clipmap_outer_extent_m * (1.0 - clamp(lod_morph_ratio, 0.0, 1.0));
+	return smoothstep(morph_start, clipmap_outer_extent_m, distance_metric);
+}
+
 void vertex() {
-	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+	vec2 fine_world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+	vec2 clipmap_origin_xz = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xz;
+	vec2 clipmap_local_xz = fine_world_xz - clipmap_origin_xz;
+	float lod_alpha = clipmap_lod_morph_factor(clipmap_local_xz);
+	// Quantize only in stable clipmap-local space. This is the exact origin and
+	// spacing used by the next ring, never a world-origin round/recenter.
+	float coarse_spacing = max(clipmap_next_spacing_m, clipmap_spacing_m * 2.0);
+	vec2 coarse_local_xz = floor(clipmap_local_xz / coarse_spacing + vec2(0.5)) * coarse_spacing;
+	vec2 current_local_xz = floor(clipmap_local_xz / max(clipmap_spacing_m, 0.0001) + vec2(0.5))
+		* max(clipmap_spacing_m, 0.0001);
+	float inner_boundary_delta = abs(max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y)) - clipmap_inner_extent_m);
+	float inner_boundary_morph = (clipmap_inner_extent_m > 0.0)
+		? 1.0 - smoothstep(0.0, max(clipmap_spacing_m * 0.25, 0.0001), inner_boundary_delta)
+		: 0.0;
+	vec2 morphed_local_xz = mix(clipmap_local_xz, coarse_local_xz, lod_alpha);
+	// Stitching keeps a fine midpoint on the coarse ring's inner boundary. Move
+	// that boundary to the current grid too, so it matches the fine ring after
+	// its outgoing morph without changing the existing triangle topology.
+	morphed_local_xz = mix(morphed_local_xz, current_local_xz, inner_boundary_morph);
+	vec2 world_xz = clipmap_origin_xz + morphed_local_xz;
+	clipmap_lod_morph_alpha = lod_alpha;
 	// The FFT maps are parameterized by this undisplaced, material coordinate.
 	// It must be carried to fragment() separately from the final world position.
 	ocean_base_xz = world_xz;
@@ -2343,6 +2379,9 @@ void fragment() {
 	if (clipmap_lod_debug) {
 		color = level_color(clipmap_level);
 	}
+	if (clipmap_lod_morph_debug) {
+		color = vec3(clipmap_lod_morph_alpha);
+	}
 	if (periodicity_debug) {
 		float lines = max(periodic_grid(ocean_base_xz, domain_long_coastal_m), max(periodic_grid(ocean_base_xz, domain_mid_m), periodic_grid(ocean_base_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
@@ -2458,7 +2497,7 @@ void fragment() {
 		color = vec3(sspr_facet_confidence);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || clipmap_lod_morph_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;

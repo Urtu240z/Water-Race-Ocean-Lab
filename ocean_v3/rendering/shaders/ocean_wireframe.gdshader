@@ -47,10 +47,17 @@ uniform float coastal_k0_rad_m = 0.392699;
 uniform float coastal_omega_rad_s = 1.962;
 uniform float coastal_time_s = 0.0;
 instance uniform float clipmap_level = 0.0;
+uniform float lod_morph_ratio : hint_range(0.05, 0.30, 0.01) = 0.12;
+uniform bool clipmap_lod_morph_debug = false;
+instance uniform float clipmap_spacing_m = 0.25;
+instance uniform float clipmap_next_spacing_m = 0.0;
+instance uniform float clipmap_outer_extent_m = 16.0;
+instance uniform float clipmap_inner_extent_m = 0.0;
 
 varying vec2 ocean_world_xz;
 varying vec4 coastal_field;
 varying vec4 coastal_metrics;
+varying float clipmap_lod_morph_alpha;
 
 vec2 spectrum_uv(vec2 world_xz, float domain_size_m) {
 	return fract(world_xz / domain_size_m + vec2(0.5));
@@ -124,8 +131,30 @@ vec4 warp_deep_sample(vec2 world_xz) {
 	return vec4(warp.xy, confidence, 0.0);
 }
 
+float clipmap_lod_morph_factor(vec2 clipmap_local_xz) {
+	if (clipmap_next_spacing_m <= 0.0 || clipmap_outer_extent_m <= 0.0) return 0.0;
+	float distance_metric = max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y));
+	float morph_start = clipmap_outer_extent_m * (1.0 - clamp(lod_morph_ratio, 0.0, 1.0));
+	return smoothstep(morph_start, clipmap_outer_extent_m, distance_metric);
+}
+
 void vertex() {
-	vec2 world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+	vec2 fine_world_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
+	vec2 clipmap_origin_xz = (MODEL_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xz;
+	vec2 clipmap_local_xz = fine_world_xz - clipmap_origin_xz;
+	float lod_alpha = clipmap_lod_morph_factor(clipmap_local_xz);
+	float coarse_spacing = max(clipmap_next_spacing_m, clipmap_spacing_m * 2.0);
+	vec2 coarse_local_xz = floor(clipmap_local_xz / coarse_spacing + vec2(0.5)) * coarse_spacing;
+	vec2 current_local_xz = floor(clipmap_local_xz / max(clipmap_spacing_m, 0.0001) + vec2(0.5))
+		* max(clipmap_spacing_m, 0.0001);
+	float inner_boundary_delta = abs(max(abs(clipmap_local_xz.x), abs(clipmap_local_xz.y)) - clipmap_inner_extent_m);
+	float inner_boundary_morph = (clipmap_inner_extent_m > 0.0)
+		? 1.0 - smoothstep(0.0, max(clipmap_spacing_m * 0.25, 0.0001), inner_boundary_delta)
+		: 0.0;
+	vec2 morphed_local_xz = mix(clipmap_local_xz, coarse_local_xz, lod_alpha);
+	morphed_local_xz = mix(morphed_local_xz, current_local_xz, inner_boundary_morph);
+	vec2 world_xz = clipmap_origin_xz + morphed_local_xz;
+	clipmap_lod_morph_alpha = lod_alpha;
 	ocean_world_xz = world_xz;
 	coastal_field = vec4(0.0, 1.0, 0.0, 0.0);
 	coastal_metrics = vec4(0.0);
@@ -180,6 +209,9 @@ void vertex() {
 
 void fragment() {
 	vec3 color = clipmap_lod_debug ? level_color(clipmap_level) : vec3(0.68, 0.91, 1.0);
+	if (clipmap_lod_morph_debug) {
+		color = vec3(clipmap_lod_morph_alpha);
+	}
 	if (periodicity_debug) {
 		float lines = max(periodic_grid(ocean_world_xz, domain_long_coastal_m), max(periodic_grid(ocean_world_xz, domain_mid_m), periodic_grid(ocean_world_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);

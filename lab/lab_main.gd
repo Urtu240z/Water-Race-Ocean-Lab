@@ -57,7 +57,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			ocean_v3.cycle_ocean_band_debug()
 		KEY_L:
-			ocean_v3.toggle_ocean_clipmap_lod_debug()
+			if event.shift_pressed:
+				ocean_v3.toggle_ocean_clipmap_lod_morph_debug()
+			else:
+				ocean_v3.toggle_ocean_clipmap_lod_debug()
 		KEY_T:
 			ocean_v3.toggle_ocean_periodicity_debug()
 		KEY_X:
