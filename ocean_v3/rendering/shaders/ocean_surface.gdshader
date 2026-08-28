@@ -659,6 +659,16 @@ float reflection_sspr_slope_confidence(vec3 final_normal_world) {
 }
 
 
+float reflection_final_roughness(float base_roughness, float surface_foam_mask_value,
+		float foam_residual_mask_value, float foam_fresh_mask_value) {
+	float result = base_roughness;
+	result = mix(result, surface_foam_roughness, surface_foam_mask_value);
+	result = mix(result, foam_residual_roughness, foam_residual_mask_value);
+	result = mix(result, foam_fresh_roughness, foam_fresh_mask_value);
+	return result;
+}
+
+
 float sun_specular_brdf(vec3 normal, vec3 view_direction, float roughness) {
 	vec3 light_direction = normalize(reflection_sun_direction_world);
 	vec3 half_vector = normalize(light_direction + view_direction);
@@ -1775,6 +1785,8 @@ void fragment() {
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	water_reflection_roughness = reflection_crest_shaped_roughness(
 		water_reflection_roughness, reflection_and_mono_state.x, reflection_detail_metrics);
+	float sspr_filter_roughness = reflection_final_roughness(
+		water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
 	vec3 final_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
 	vec3 flat_normal_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	vec2 projection_scale = vec2(PROJECTION_MATRIX[0][0], PROJECTION_MATRIX[1][1]);
@@ -1783,6 +1795,9 @@ void fragment() {
 	vec4 sspr_distorted_sample = vec4(0.0);
 	float sspr_confidence = 0.0;
 	if (reflection_sspr_enabled && reflection_sspr_available) {
+		ivec2 sspr_size = textureSize(reflection_sspr_texture, 0);
+		float sspr_mip_max = max(log2(float(max(sspr_size.x, sspr_size.y))), 0.0);
+		float sspr_lod = clamp(sspr_filter_roughness * sspr_mip_max, 0.0, sspr_mip_max);
 		sspr_distorted_uv = reflection_sspr_distorted_uv(
 			SCREEN_UV,
 			visual_normal,
@@ -1792,7 +1807,7 @@ void fragment() {
 			projection_scale,
 			sspr_distortion_confidence
 		);
-		sspr_distorted_sample = textureLod(reflection_sspr_texture, sspr_distorted_uv, 0.0);
+		sspr_distorted_sample = textureLod(reflection_sspr_texture, sspr_distorted_uv, sspr_lod);
 		float uv_inside = float(
 			sspr_distorted_uv.x >= 0.0 && sspr_distorted_uv.x <= 1.0
 			&& sspr_distorted_uv.y >= 0.0 && sspr_distorted_uv.y <= 1.0
@@ -2094,10 +2109,8 @@ void fragment() {
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
 			// Water response is established first; foam remains the final authority.
-			ROUGHNESS = water_reflection_roughness;
-			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
+			ROUGHNESS = reflection_final_roughness(
+				water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
 			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
@@ -2112,10 +2125,8 @@ void fragment() {
 			ALBEDO = mix(ALBEDO, residual_foam_color, foam_residual_mask);
 			ALBEDO = mix(ALBEDO, foam_fresh_color.rgb, foam_fresh_mask);
 			EMISSION = vec3(0.0);
-			ROUGHNESS = water_reflection_roughness;
-			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
-			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
+			ROUGHNESS = reflection_final_roughness(
+				water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
 			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
