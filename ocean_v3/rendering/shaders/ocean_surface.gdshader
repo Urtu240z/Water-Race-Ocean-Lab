@@ -187,12 +187,14 @@ uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform bool reflection_sspr_hole_fill_enabled = true;
 uniform bool reflection_near_ssr_enabled = true;
 uniform float reflection_near_ssr_distance_m : hint_range(1.0, 100.0, 1.0) = 35.0;
+uniform float reflection_near_ssr_ray_length_m : hint_range(25.0, 500.0, 1.0) = 200.0;
 uniform float reflection_near_ssr_fade_m : hint_range(0.0, 50.0, 0.5) = 10.0;
 uniform float reflection_near_ssr_thickness : hint_range(0.01, 2.0, 0.01) = 0.35;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
-// 13 NEAR_SSR_HIT, 14 NEAR_SSR_CONFIDENCE, 15 NEAR_SSR_COLOR.
+// 13 NEAR_SSR_ACTIVE, 14 NEAR_SSR_HIT, 15 NEAR_SSR_CONFIDENCE,
+// 16 NEAR_SSR_COLOR.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -1540,8 +1542,8 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 }
 
 
-const int NEAR_SSR_COARSE_STEPS = 10;
-const int NEAR_SSR_REFINEMENT_STEPS = 2;
+const int NEAR_SSR_COARSE_STEPS = 16;
+const int NEAR_SSR_REFINEMENT_STEPS = 3;
 const float NEAR_SSR_START_EPSILON_M = 0.05;
 
 
@@ -1575,7 +1577,8 @@ float near_ssr_depth_delta(vec3 ray_view_position, vec2 uv,
 vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		vec3 view_direction, vec3 flat_normal_view, float camera_distance,
 		float final_roughness, mat4 projection, mat4 inverse_projection,
-		out float confidence, out float hit_mask) {
+		out float active_mask, out float confidence, out float hit_mask) {
+	active_mask = 0.0;
 	confidence = 0.0;
 	hit_mask = 0.0;
 	float distance_limit = max(reflection_near_ssr_distance_m, 0.001);
@@ -1599,15 +1602,17 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		return vec3(0.0);
 	}
 
+	active_mask = 1.0;
 	float start_distance = NEAR_SSR_START_EPSILON_M;
-	float coarse_step = distance_limit / float(NEAR_SSR_COARSE_STEPS);
+	float ray_length = max(reflection_near_ssr_ray_length_m, 25.0);
 	float previous_distance = start_distance;
 	float previous_delta = -reflection_near_ssr_thickness;
 	float bracket_low = 0.0;
 	float bracket_high = 0.0;
 	bool bracket_found = false;
 	for (int step = 0; step < NEAR_SSR_COARSE_STEPS; step++) {
-		float ray_distance = start_distance + coarse_step * float(step + 1);
+		float normalized_step = float(step + 1) / float(NEAR_SSR_COARSE_STEPS);
+		float ray_distance = start_distance + ray_length * normalized_step * normalized_step;
 		vec3 ray_position = water_position_view + macro_ray * ray_distance;
 		bool uv_valid = false;
 		vec2 ray_uv = near_ssr_project_view_position(ray_position, projection, uv_valid);
@@ -1680,7 +1685,7 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		0.08,
 		min(min(hit_uv.x, 1.0 - hit_uv.x), min(hit_uv.y, 1.0 - hit_uv.y))
 	);
-	float travel_fade = 1.0 - smoothstep(0.0, distance_limit, hit_distance);
+	float travel_fade = 1.0 - smoothstep(0.0, ray_length, hit_distance);
 	float depth_fade = 1.0 - smoothstep(
 		0.0,
 		max(reflection_near_ssr_thickness, 0.001),
@@ -2004,6 +2009,7 @@ void fragment() {
 		);
 	}
 	vec3 water_position_view = (VIEW_MATRIX * vec4(ocean_world_position, 1.0)).xyz;
+	float near_ssr_active = 0.0;
 	float near_ssr_confidence = 0.0;
 	float near_ssr_hit = 0.0;
 	vec3 near_ssr_color = reflection_near_ssr(
@@ -2015,6 +2021,7 @@ void fragment() {
 		sspr_filter_roughness,
 		projection_matrix,
 		inverse_projection_matrix,
+		near_ssr_active,
 		near_ssr_confidence,
 		near_ssr_hit
 	);
@@ -2183,10 +2190,12 @@ void fragment() {
 	} else if (reflection_debug_mode == 12) {
 		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
 	} else if (reflection_debug_mode == 13) {
-		color = vec3(near_ssr_hit);
+		color = vec3(near_ssr_active);
 	} else if (reflection_debug_mode == 14) {
-		color = vec3(near_ssr_confidence);
+		color = vec3(near_ssr_hit);
 	} else if (reflection_debug_mode == 15) {
+		color = vec3(near_ssr_confidence);
+	} else if (reflection_debug_mode == 16) {
 		color = near_ssr_color;
 	}
 

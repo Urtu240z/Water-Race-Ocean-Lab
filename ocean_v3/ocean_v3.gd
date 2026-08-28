@@ -382,6 +382,11 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_near_ssr_distance_m = clampf(value, 1.0, 100.0)
 		_request_visual_sync()
 
+@export_range(25.0, 500.0, 1.0) var reflection_near_ssr_ray_length_m: float = 200.0:
+	set(value):
+		reflection_near_ssr_ray_length_m = clampf(value, 25.0, 500.0)
+		_request_visual_sync()
+
 @export_range(0.0, 50.0, 0.5) var reflection_near_ssr_fade_m: float = 10.0:
 	set(value):
 		reflection_near_ssr_fade_m = clampf(value, 0.0, 50.0)
@@ -1040,12 +1045,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 16
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 17
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1520,6 +1525,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_sspr_hole_fill_enabled", reflection_sspr_hole_fill_enabled)
 	material.set_shader_parameter(&"reflection_near_ssr_enabled", reflection_near_ssr_enabled)
 	material.set_shader_parameter(&"reflection_near_ssr_distance_m", reflection_near_ssr_distance_m)
+	material.set_shader_parameter(&"reflection_near_ssr_ray_length_m", reflection_near_ssr_ray_length_m)
 	material.set_shader_parameter(&"reflection_near_ssr_fade_m", reflection_near_ssr_fade_m)
 	material.set_shader_parameter(&"reflection_near_ssr_thickness", reflection_near_ssr_thickness)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
