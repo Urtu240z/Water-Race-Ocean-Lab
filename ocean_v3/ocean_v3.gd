@@ -10,6 +10,7 @@ const BASE_WAVE_PRESET_PATHS := [
 	"res://ocean_v3/presets/waves/race.tres",
 	"res://ocean_v3/presets/waves/rough.tres",
 ]
+const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
 var _applying_wave_preset := false
@@ -339,6 +340,11 @@ var _wave_transition_start_short_geometry := 0.25
 @export var reflection_roughness_distance_m: Vector2 = Vector2(80.0, 220.0):
 	set(value):
 		reflection_roughness_distance_m = Vector2(maxf(value.x, 0.0), maxf(value.y, value.x + 0.001))
+		_request_visual_sync()
+
+@export var reflection_sspr_enabled: bool = true:
+	set(value):
+		reflection_sspr_enabled = value
 		_request_visual_sync()
 
 
@@ -768,6 +774,7 @@ var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
+var _reflection_sspr_manager: Node
 
 
 func _ready() -> void:
@@ -780,7 +787,17 @@ func _ready() -> void:
 	if wave_preset != null:
 		apply_selected_wave_preset()
 	_configure_coastal_bake_asset()
+	if not Engine.is_editor_hint():
+		_reflection_sspr_manager = SSPR_MANAGER_SCRIPT.new()
+		_reflection_sspr_manager.name = &"OceanSSPRManager"
+		add_child(_reflection_sspr_manager)
+		_reflection_sspr_manager.configure(self, _surface_sea_level(), reflection_sspr_enabled)
 	call_deferred(&"_flush_visual_sync")
+
+
+func _surface_sea_level() -> float:
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	return surface.clipmap_config.sea_level_y if surface != null else 0.0
 
 
 func _configure_coastal_bake_asset() -> void:
@@ -953,12 +970,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 7
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 9
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1426,6 +1443,10 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_roughness_distance_m", reflection_roughness_distance_m)
 	material.set_shader_parameter(&"reflection_sun_direction_world", _sun_direction_world)
 	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
+	material.set_shader_parameter(&"reflection_sspr_enabled", reflection_sspr_enabled)
+	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
+		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
+		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
@@ -1527,3 +1548,14 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"foam_debug_mode", effective_foam_debug_mode)
 
 	_visual_sync_pending = false
+
+
+func set_reflection_sspr_texture(texture: Texture2D, available: bool) -> void:
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	if surface == null or not is_instance_valid(surface):
+		return
+	var material := surface.get_surface_material()
+	if material == null or not is_instance_valid(material):
+		return
+	material.set_shader_parameter(&"reflection_sspr_texture", texture)
+	material.set_shader_parameter(&"reflection_sspr_available", available)
