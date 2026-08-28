@@ -11,6 +11,7 @@ layout(set = 0, binding = 1, std430) readonly buffer CandidateBuffer {
 };
 
 layout(set = 0, binding = 2, rgba16f) uniform image2D reflection_output;
+layout(set = 0, binding = 4, r16f) uniform image2D reflection_depth_output;
 
 layout(set = 0, binding = 3, std140) uniform Params {
 	mat4 inverse_projection;
@@ -70,6 +71,7 @@ void main() {
 		}
 		if (best_payload == INVALID_PAYLOAD) {
 			imageStore(reflection_output, destination_pixel, vec4(0.0));
+			imageStore(reflection_depth_output, destination_pixel, vec4(0.0));
 			return;
 		}
 		payload = best_payload;
@@ -82,6 +84,7 @@ void main() {
 	uint source_pixel_count = source_width * source_height;
 	if (source_width == 0u || source_height == 0u || source_id >= source_pixel_count) {
 		imageStore(reflection_output, destination_pixel, vec4(0.0));
+		imageStore(reflection_depth_output, destination_pixel, vec4(0.0));
 		return;
 	}
 
@@ -91,9 +94,12 @@ void main() {
 	vec3 reflected_scene = texture(scene_color, source_uv).rgb;
 	if (any(isnan(reflected_scene)) || any(isinf(reflected_scene))) {
 		imageStore(reflection_output, destination_pixel, vec4(0.0));
+		imageStore(reflection_depth_output, destination_pixel, vec4(0.0));
 		return;
 	}
 	// Alpha is the validity contract consumed by the spatial shader. Output is
 	// HDR/linear scene color; no tonemapping or exposure is applied here.
 	imageStore(reflection_output, destination_pixel, vec4(reflected_scene, output_alpha));
+	imageStore(reflection_depth_output, destination_pixel,
+		vec4(float(payload >> 26u) / 63.0, 0.0, 0.0, 0.0));
 }

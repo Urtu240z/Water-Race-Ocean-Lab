@@ -367,6 +367,21 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_hole_fill_enabled = value
 		_request_visual_sync()
 
+@export var reflection_sspr_temporal_enabled: bool = true:
+	set(value):
+		reflection_sspr_temporal_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 0.5, 0.01) var reflection_sspr_temporal_weight: float = 0.12:
+	set(value):
+		reflection_sspr_temporal_weight = clampf(value, 0.0, 0.5)
+		_request_visual_sync()
+
+@export_range(0.001, 0.25, 0.001) var reflection_sspr_temporal_depth_threshold: float = 0.035:
+	set(value):
+		reflection_sspr_temporal_depth_threshold = clampf(value, 0.001, 0.25)
+		_request_visual_sync()
+
 
 @export_group("Whitecaps Foam")
 @export var foam_enabled: bool = true:
@@ -1471,6 +1486,10 @@ func _sync_water_visual_parameters() -> void:
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
+		_reflection_sspr_manager.set_temporal_settings(
+			reflection_sspr_temporal_enabled,
+			reflection_sspr_temporal_weight,
+			reflection_sspr_temporal_depth_threshold)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
@@ -1583,3 +1602,11 @@ func set_reflection_sspr_texture(texture: Texture2D, available: bool) -> void:
 		return
 	material.set_shader_parameter(&"reflection_sspr_texture", texture)
 	material.set_shader_parameter(&"reflection_sspr_available", available)
+
+
+func get_reflection_sspr_temporal_settings() -> Dictionary:
+	return {
+		"enabled": reflection_sspr_temporal_enabled,
+		"weight": reflection_sspr_temporal_weight,
+		"depth_threshold": reflection_sspr_temporal_depth_threshold,
+	}

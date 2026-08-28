@@ -39,6 +39,11 @@ func set_ocean_level(value: float) -> void:
 		_effect.set_ocean_level(value)
 
 
+func set_temporal_settings(enabled: bool, weight: float, depth_threshold: float) -> void:
+	if _effect != null:
+		_effect.set_temporal_settings(enabled, weight, depth_threshold)
+
+
 func _ready() -> void:
 	if not Engine.is_editor_hint() and _ocean == null:
 		_ocean = get_parent()
@@ -68,6 +73,12 @@ func _initialize() -> void:
 	_effect.enabled = _enabled
 	_effect.set_active(_enabled)
 	_effect.set_ocean_level(_ocean_level)
+	if _ocean != null and _ocean.has_method(&"get_reflection_sspr_temporal_settings"):
+		var temporal_settings: Dictionary = _ocean.get_reflection_sspr_temporal_settings()
+		_effect.set_temporal_settings(
+			temporal_settings.get("enabled", true),
+			temporal_settings.get("weight", 0.12),
+			temporal_settings.get("depth_threshold", 0.035))
 	var target := get_tree().current_scene.find_child("WorldEnvironment", true, false) if get_tree().current_scene != null else null
 	if target is WorldEnvironment:
 		_world_environment = target

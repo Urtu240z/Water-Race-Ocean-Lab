@@ -11,21 +11,32 @@ extends CompositorEffect
 const PROJECT_SHADER_PATH := "res://ocean_v3/reflections/ocean_sspr_project.glsl"
 const RESOLVE_SHADER_PATH := "res://ocean_v3/reflections/ocean_sspr_resolve.glsl"
 const DOWNSAMPLE_SHADER_PATH := "res://ocean_v3/reflections/ocean_sspr_downsample.glsl"
+const TEMPORAL_SHADER_PATH := "res://ocean_v3/reflections/ocean_sspr_temporal.glsl"
 const THREAD_X := 8
 const THREAD_Y := 8
 const PARAMS_BYTES := 240
+const TEMPORAL_PARAMS_BYTES := 176
 
 var _rd: RenderingDevice
 var _project_shader := RID()
 var _resolve_shader := RID()
 var _downsample_shader := RID()
+var _temporal_shader := RID()
 var _project_pipeline := RID()
 var _resolve_pipeline := RID()
 var _downsample_pipeline := RID()
+var _temporal_pipeline := RID()
 var _sampler := RID()
 var _params_buffer := RID()
+var _temporal_params_buffer := RID()
 var _candidate_buffer := RID()
 var _reflection_texture := RID()
+var _current_texture := RID()
+var _current_depth_texture := RID()
+var _history_color_read := RID()
+var _history_color_write := RID()
+var _history_depth_read := RID()
+var _history_depth_write := RID()
 var _mip_views: Array[RID] = []
 var _source_size := Vector2i.ZERO
 var _destination_size := Vector2i.ZERO
@@ -33,6 +44,12 @@ var _candidate_clear_bytes := PackedByteArray()
 var _retired_texture_rids: Array[RID] = []
 var _active := true
 var _ocean_level := 0.0
+var _temporal_enabled := true
+var _temporal_weight := 0.12
+var _temporal_depth_threshold := 0.035
+var _history_valid := false
+var _has_previous_frame := false
+var _previous_view_projection := Projection()
 var _output_texture_rid := RID()
 var _mutex := Mutex.new()
 
@@ -53,6 +70,14 @@ func set_active(value: bool) -> void:
 func set_ocean_level(value: float) -> void:
 	_mutex.lock()
 	_ocean_level = value
+	_mutex.unlock()
+
+
+func set_temporal_settings(enabled: bool, weight: float, depth_threshold: float) -> void:
+	_mutex.lock()
+	_temporal_enabled = enabled
+	_temporal_weight = clampf(weight, 0.0, 0.5)
+	_temporal_depth_threshold = clampf(depth_threshold, 0.001, 0.25)
 	_mutex.unlock()
 
 
@@ -80,13 +105,15 @@ func free_resources() -> void:
 	_mutex.lock()
 	_output_texture_rid = RID()
 	_mutex.unlock()
-	for rid in [_candidate_buffer, _params_buffer, _sampler]:
+	for rid in [_candidate_buffer, _params_buffer, _temporal_params_buffer, _sampler,
+			_current_texture, _current_depth_texture, _history_color_read, _history_color_write,
+			_history_depth_read, _history_depth_write]:
 		if rid.is_valid():
 			_rd.free_rid(rid)
 	_free_mip_views()
 	if _reflection_texture.is_valid():
 		_rd.free_rid(_reflection_texture)
-	for rid in [_project_shader, _resolve_shader, _downsample_shader]:
+	for rid in [_project_shader, _resolve_shader, _downsample_shader, _temporal_shader]:
 		if rid.is_valid():
 			_rd.free_rid(rid)
 	for rid in _retired_texture_rids:
@@ -95,16 +122,26 @@ func free_resources() -> void:
 	_retired_texture_rids.clear()
 	_candidate_buffer = RID()
 	_params_buffer = RID()
+	_temporal_params_buffer = RID()
 	_sampler = RID()
 	_reflection_texture = RID()
+	_current_texture = RID()
+	_current_depth_texture = RID()
+	_history_color_read = RID()
+	_history_color_write = RID()
+	_history_depth_read = RID()
+	_history_depth_write = RID()
 	_project_shader = RID()
 	_resolve_shader = RID()
 	_downsample_shader = RID()
+	_temporal_shader = RID()
 	_project_pipeline = RID()
 	_resolve_pipeline = RID()
 	_source_size = Vector2i.ZERO
 	_destination_size = Vector2i.ZERO
 	_candidate_clear_bytes = PackedByteArray()
+	_history_valid = false
+	_has_previous_frame = false
 
 
 func _render_callback(callback_type: int, render_data: RenderData) -> void:
@@ -113,6 +150,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_mutex.lock()
 	var active := _active
 	var sea_level := _ocean_level
+	var temporal_enabled := _temporal_enabled
+	var temporal_weight := _temporal_weight
+	var temporal_depth_threshold := _temporal_depth_threshold
 	_mutex.unlock()
 	if not active or not _ensure_pipelines():
 		return
@@ -155,7 +195,19 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		destination_size,
 		sea_level
 	)
+	var temporal_params_data := _pack_temporal_params(
+		view_projection.inverse(),
+		view_projection,
+		destination_size,
+		sea_level,
+		temporal_enabled,
+		temporal_weight,
+		temporal_depth_threshold,
+		_history_valid and _has_previous_frame
+	)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params_data.to_byte_array())
+	_rd.buffer_update(_temporal_params_buffer, 0, TEMPORAL_PARAMS_BYTES,
+		temporal_params_data.to_byte_array())
 	_rd.buffer_update(_candidate_buffer, 0, _candidate_clear_bytes.size(), _candidate_clear_bytes)
 
 	var project_uniforms: Array[RDUniform] = []
@@ -192,14 +244,60 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var output_uniform := RDUniform.new()
 	output_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	output_uniform.binding = 2
-	output_uniform.add_id(_mip_views[0])
+	output_uniform.add_id(_current_texture)
 	resolve_uniforms.append(output_uniform)
 	var resolve_params := RDUniform.new()
 	resolve_params.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
 	resolve_params.binding = 3
 	resolve_params.add_id(_params_buffer)
 	resolve_uniforms.append(resolve_params)
+	var resolve_depth_output := RDUniform.new()
+	resolve_depth_output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	resolve_depth_output.binding = 4
+	resolve_depth_output.add_id(_current_depth_texture)
+	resolve_uniforms.append(resolve_depth_output)
 	var resolve_set := UniformSetCacheRD.get_cache(_resolve_shader, 0, resolve_uniforms)
+
+	var temporal_current_color := RDUniform.new()
+	temporal_current_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	temporal_current_color.binding = 0
+	temporal_current_color.add_id(_sampler)
+	temporal_current_color.add_id(_current_texture)
+	var temporal_current_depth := RDUniform.new()
+	temporal_current_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	temporal_current_depth.binding = 1
+	temporal_current_depth.add_id(_sampler)
+	temporal_current_depth.add_id(_current_depth_texture)
+	var temporal_history_color := RDUniform.new()
+	temporal_history_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	temporal_history_color.binding = 2
+	temporal_history_color.add_id(_sampler)
+	temporal_history_color.add_id(_history_color_read)
+	var temporal_history_depth := RDUniform.new()
+	temporal_history_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	temporal_history_depth.binding = 3
+	temporal_history_depth.add_id(_sampler)
+	temporal_history_depth.add_id(_history_depth_read)
+	var temporal_output := RDUniform.new()
+	temporal_output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	temporal_output.binding = 4
+	temporal_output.add_id(_mip_views[0])
+	var temporal_history_output := RDUniform.new()
+	temporal_history_output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	temporal_history_output.binding = 5
+	temporal_history_output.add_id(_history_color_write)
+	var temporal_depth_output := RDUniform.new()
+	temporal_depth_output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	temporal_depth_output.binding = 6
+	temporal_depth_output.add_id(_history_depth_write)
+	var temporal_params := RDUniform.new()
+	temporal_params.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+	temporal_params.binding = 7
+	temporal_params.add_id(_temporal_params_buffer)
+	var temporal_set := UniformSetCacheRD.get_cache(_temporal_shader, 0, [
+		temporal_current_color, temporal_current_depth, temporal_history_color,
+		temporal_history_depth, temporal_output, temporal_history_output,
+		temporal_depth_output, temporal_params])
 
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, _project_pipeline)
@@ -210,6 +308,12 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_rd.compute_list_add_barrier(list)
 	_rd.compute_list_bind_compute_pipeline(list, _resolve_pipeline)
 	_rd.compute_list_bind_uniform_set(list, resolve_set, 0)
+	_rd.compute_list_dispatch(list,
+		ceili(float(destination_size.x + THREAD_X - 1) / float(THREAD_X)),
+		ceili(float(destination_size.y + THREAD_Y - 1) / float(THREAD_Y)), 1)
+	_rd.compute_list_add_barrier(list)
+	_rd.compute_list_bind_compute_pipeline(list, _temporal_pipeline)
+	_rd.compute_list_bind_uniform_set(list, temporal_set, 0)
 	_rd.compute_list_dispatch(list,
 		ceili(float(destination_size.x + THREAD_X - 1) / float(THREAD_X)),
 		ceili(float(destination_size.y + THREAD_Y - 1) / float(THREAD_Y)), 1)
@@ -238,10 +342,15 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		if mip + 1 < _mip_views.size():
 			_rd.compute_list_add_barrier(list)
 	_rd.compute_list_end()
+	_previous_view_projection = view_projection
+	_has_previous_frame = true
+	_history_valid = true
+	_swap_history_buffers()
 
 
 func _ensure_pipelines() -> bool:
-	if _project_pipeline.is_valid() and _resolve_pipeline.is_valid():
+	if _project_pipeline.is_valid() and _resolve_pipeline.is_valid() and \
+			_downsample_pipeline.is_valid() and _temporal_pipeline.is_valid():
 		return true
 	var project_file: RDShaderFile = load(PROJECT_SHADER_PATH)
 	var resolve_file: RDShaderFile = load(RESOLVE_SHADER_PATH)
@@ -250,12 +359,16 @@ func _ensure_pipelines() -> bool:
 	_project_shader = _rd.shader_create_from_spirv(project_file.get_spirv(), "OceanSSPR.Project")
 	_resolve_shader = _rd.shader_create_from_spirv(resolve_file.get_spirv(), "OceanSSPR.Resolve")
 	_downsample_shader = _compile_compute_shader_source(DOWNSAMPLE_SHADER_PATH, "OceanSSPR.Downsample")
-	if not _project_shader.is_valid() or not _resolve_shader.is_valid() or not _downsample_shader.is_valid():
+	_temporal_shader = _compile_compute_shader_source(TEMPORAL_SHADER_PATH, "OceanSSPR.Temporal")
+	if not _project_shader.is_valid() or not _resolve_shader.is_valid() or \
+			not _downsample_shader.is_valid() or not _temporal_shader.is_valid():
 		return false
 	_project_pipeline = _rd.compute_pipeline_create(_project_shader)
 	_resolve_pipeline = _rd.compute_pipeline_create(_resolve_shader)
 	_downsample_pipeline = _rd.compute_pipeline_create(_downsample_shader)
-	return _project_pipeline.is_valid() and _resolve_pipeline.is_valid() and _downsample_pipeline.is_valid()
+	_temporal_pipeline = _rd.compute_pipeline_create(_temporal_shader)
+	return _project_pipeline.is_valid() and _resolve_pipeline.is_valid() and \
+			_downsample_pipeline.is_valid() and _temporal_pipeline.is_valid()
 
 
 func _compile_compute_shader_source(path: String, shader_name: String) -> RID:
@@ -282,7 +395,9 @@ func _compile_compute_shader_source(path: String, shader_name: String) -> RID:
 
 
 func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> bool:
-	if source_size == _source_size and destination_size == _destination_size and _reflection_texture.is_valid():
+	if source_size == _source_size and destination_size == _destination_size and \
+			_reflection_texture.is_valid() and _current_texture.is_valid() and \
+			_history_color_read.is_valid() and _history_color_write.is_valid():
 		return true
 	if _candidate_buffer.is_valid():
 		_rd.free_rid(_candidate_buffer)
@@ -290,7 +405,22 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 	if _params_buffer.is_valid():
 		_rd.free_rid(_params_buffer)
 	_params_buffer = RID()
+	if _temporal_params_buffer.is_valid():
+		_rd.free_rid(_temporal_params_buffer)
+	_temporal_params_buffer = RID()
 	_free_mip_views()
+	for rid in [_current_texture, _current_depth_texture, _history_color_read,
+			_history_color_write, _history_depth_read, _history_depth_write]:
+		if rid.is_valid():
+			_rd.free_rid(rid)
+	_current_texture = RID()
+	_current_depth_texture = RID()
+	_history_color_read = RID()
+	_history_color_write = RID()
+	_history_depth_read = RID()
+	_history_depth_write = RID()
+	_history_valid = false
+	_has_previous_frame = false
 	if _reflection_texture.is_valid():
 		_mutex.lock()
 		var old_output := _output_texture_rid
@@ -315,7 +445,9 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 	_candidate_clear_bytes = clear_values.to_byte_array()
 	_candidate_buffer = _rd.storage_buffer_create(_candidate_clear_bytes.size(), _candidate_clear_bytes)
 	_params_buffer = _rd.uniform_buffer_create(PARAMS_BYTES)
-	if not _candidate_buffer.is_valid() or not _params_buffer.is_valid():
+	_temporal_params_buffer = _rd.uniform_buffer_create(TEMPORAL_PARAMS_BYTES)
+	if not _candidate_buffer.is_valid() or not _params_buffer.is_valid() or \
+			not _temporal_params_buffer.is_valid():
 		return false
 
 	var format := RDTextureFormat.new()
@@ -339,8 +471,39 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 			_reflection_texture = RID()
 			return false
 		_mip_views.append(mip_view)
+	var working_color_format := RDTextureFormat.new()
+	working_color_format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
+	working_color_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
+	working_color_format.width = destination_size.x
+	working_color_format.height = destination_size.y
+	working_color_format.depth = 1
+	working_color_format.array_layers = 1
+	working_color_format.mipmaps = 1
+	working_color_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | \
+			RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
+	_current_texture = _rd.texture_create(working_color_format, RDTextureView.new())
+	_history_color_read = _rd.texture_create(working_color_format, RDTextureView.new())
+	_history_color_write = _rd.texture_create(working_color_format, RDTextureView.new())
+	var working_depth_format := RDTextureFormat.new()
+	working_depth_format.format = RenderingDevice.DATA_FORMAT_R16_SFLOAT
+	working_depth_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
+	working_depth_format.width = destination_size.x
+	working_depth_format.height = destination_size.y
+	working_depth_format.depth = 1
+	working_depth_format.array_layers = 1
+	working_depth_format.mipmaps = 1
+	working_depth_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | \
+			RenderingDevice.TEXTURE_USAGE_STORAGE_BIT
+	_current_depth_texture = _rd.texture_create(working_depth_format, RDTextureView.new())
+	_history_depth_read = _rd.texture_create(working_depth_format, RDTextureView.new())
+	_history_depth_write = _rd.texture_create(working_depth_format, RDTextureView.new())
+	if not _current_texture.is_valid() or not _current_depth_texture.is_valid() or \
+			not _history_color_read.is_valid() or not _history_color_write.is_valid() or \
+			not _history_depth_read.is_valid() or not _history_depth_write.is_valid():
+		return false
 	_rd.set_resource_name(_candidate_buffer, "OceanSSPR.Candidates")
 	_rd.set_resource_name(_params_buffer, "OceanSSPR.Params")
+	_rd.set_resource_name(_temporal_params_buffer, "OceanSSPR.TemporalParams")
 	_rd.set_resource_name(_reflection_texture, "OceanSSPR.ReflectionRGBA16F")
 	_mutex.lock()
 	_output_texture_rid = _reflection_texture
@@ -358,6 +521,37 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 
 func _mip_count(size: Vector2i) -> int:
 	return floori(log(float(maxi(size.x, size.y))) / log(2.0)) + 1
+
+
+func _pack_temporal_params(current_inverse_view_projection: Projection,
+		previous_view_projection: Projection, destination_size: Vector2i,
+		sea_level: float, temporal_enabled: bool, temporal_weight: float,
+		depth_threshold: float, history_valid: bool) -> PackedFloat32Array:
+	var values := PackedFloat32Array()
+	_append_projection(values, current_inverse_view_projection)
+	_append_projection(values, previous_view_projection)
+	values.append(float(destination_size.x))
+	values.append(float(destination_size.y))
+	values.append(0.0)
+	values.append(0.0)
+	values.append(1.0 if temporal_enabled else 0.0)
+	values.append(temporal_weight)
+	values.append(depth_threshold)
+	values.append(1.0 if history_valid else 0.0)
+	values.append(sea_level)
+	values.append(0.0)
+	values.append(0.0)
+	values.append(0.0)
+	return values
+
+
+func _swap_history_buffers() -> void:
+	var color_buffer := _history_color_read
+	_history_color_read = _history_color_write
+	_history_color_write = color_buffer
+	var depth_buffer := _history_depth_read
+	_history_depth_read = _history_depth_write
+	_history_depth_write = depth_buffer
 
 
 func _free_mip_views() -> void:
