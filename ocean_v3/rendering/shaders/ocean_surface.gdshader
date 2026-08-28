@@ -177,8 +177,12 @@ uniform float reflection_crest_min_roughness_scale : hint_range(0.45, 1.0, 0.01)
 uniform bool reflection_sspr_enabled = true;
 uniform bool reflection_sspr_available = false;
 uniform sampler2D reflection_sspr_texture : repeat_disable, filter_linear;
+uniform float reflection_sspr_distortion_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
+uniform float reflection_sspr_edge_fade : hint_range(0.0, 0.25, 0.005) = 0.08;
+uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
-// 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY.
+// 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
+// 10 SSPR_CONFIDENCE.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -602,6 +606,55 @@ float reflection_crest_shaped_roughness(float base_roughness,
 		* clamp(reflection_crest_roughness_gain, 0.0, 1.0)
 		* (1.0 - min_scale);
 	return max(reflection_min_roughness, base_roughness * roughness_scale);
+}
+
+
+vec2 reflection_sspr_distorted_uv(vec2 planar_uv, vec3 final_normal_view,
+		vec3 view_direction, float camera_distance, vec3 flat_normal_view,
+		vec2 projection_scale, out float distortion_confidence) {
+	vec3 planar_reflection = normalize(reflect(-view_direction, flat_normal_view));
+	vec3 wave_reflection = normalize(reflect(-view_direction, final_normal_view));
+	float planar_z = max(abs(planar_reflection.z), 0.12);
+	float wave_z = max(abs(wave_reflection.z), 0.12);
+	vec2 planar_ray = planar_reflection.xy / planar_z;
+	vec2 wave_ray = wave_reflection.xy / wave_z;
+	vec2 projected_delta = (wave_ray - planar_ray) * projection_scale * 0.5;
+	float view_grazing = 1.0 - abs(dot(view_direction, flat_normal_view));
+	float view_factor = smoothstep(0.08, 0.78, view_grazing);
+	float distance_factor = clamp(
+		camera_distance / max(camera_distance + reflection_roughness_distance_m.x, 0.001),
+		0.15,
+		1.0
+	);
+	float footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
+	float footprint_factor = clamp(
+		footprint / max(reflection_roughness_distance_m.x * 0.01, 0.001),
+		0.0,
+		1.0
+	);
+	float scale = reflection_sspr_distortion_strength
+		* mix(0.65, 1.0, view_factor)
+		* distance_factor
+		* mix(0.80, 1.0, footprint_factor);
+	vec2 distortion = projected_delta * scale;
+	distortion_confidence = 1.0 - smoothstep(0.04, 0.20, length(distortion));
+	return planar_uv + distortion;
+}
+
+
+float reflection_sspr_edge_confidence(vec2 uv) {
+	if (reflection_sspr_edge_fade <= 0.0001) {
+		return 1.0;
+	}
+	float distance_to_edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+	return smoothstep(0.0, reflection_sspr_edge_fade, distance_to_edge);
+}
+
+
+float reflection_sspr_slope_confidence(vec3 final_normal_world) {
+	float up_alignment = clamp(dot(normalize(final_normal_world), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
+	float slope = 1.0 - up_alignment;
+	return 1.0 - smoothstep(reflection_sspr_slope_fade, 1.0, slope);
 }
 
 
@@ -1721,6 +1774,40 @@ void fragment() {
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	water_reflection_roughness = reflection_crest_shaped_roughness(
 		water_reflection_roughness, reflection_and_mono_state.x, reflection_detail_metrics);
+	vec3 final_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
+	vec3 flat_normal_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	vec2 projection_scale = vec2(PROJECTION_MATRIX[0][0], PROJECTION_MATRIX[1][1]);
+	float sspr_distortion_confidence = 0.0;
+	vec2 sspr_distorted_uv = SCREEN_UV;
+	vec4 sspr_distorted_sample = vec4(0.0);
+	float sspr_confidence = 0.0;
+	if (reflection_sspr_enabled && reflection_sspr_available) {
+		sspr_distorted_uv = reflection_sspr_distorted_uv(
+			SCREEN_UV,
+			visual_normal,
+			view_direction,
+			camera_distance,
+			flat_normal_view,
+			projection_scale,
+			sspr_distortion_confidence
+		);
+		sspr_distorted_sample = textureLod(reflection_sspr_texture, sspr_distorted_uv, 0.0);
+		float uv_inside = float(
+			sspr_distorted_uv.x >= 0.0 && sspr_distorted_uv.x <= 1.0
+			&& sspr_distorted_uv.y >= 0.0 && sspr_distorted_uv.y <= 1.0
+		);
+		float roughness_confidence = 1.0 - smoothstep(0.55, 0.90, water_reflection_roughness);
+		sspr_confidence = clamp(
+			sspr_distorted_sample.a
+			* reflection_sspr_edge_confidence(sspr_distorted_uv)
+			* sspr_distortion_confidence
+			* reflection_sspr_slope_confidence(final_normal_world)
+			* roughness_confidence
+			* uv_inside,
+			0.0,
+			1.0
+		);
+	}
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
 		max(opacity_distance_end, opacity_distance_start + 0.001),
@@ -1854,6 +1941,10 @@ void fragment() {
 		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
 	} else if (reflection_debug_mode == 8) {
 		color = vec3(textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).a);
+	} else if (reflection_debug_mode == 9) {
+		color = sspr_distorted_sample.rgb;
+	} else if (reflection_debug_mode == 10) {
+		color = vec3(sspr_confidence);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -2006,8 +2097,7 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			vec4 sspr_sample = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0);
-			RADIANCE = vec4(sspr_sample.rgb, (reflection_sspr_enabled && reflection_sspr_available) ? sspr_sample.a : 0.0);
+			RADIANCE = vec4(sspr_distorted_sample.rgb, sspr_confidence);
 			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
@@ -2025,8 +2115,7 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			vec4 sspr_sample = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0);
-			RADIANCE = vec4(sspr_sample.rgb, (reflection_sspr_enabled && reflection_sspr_available) ? sspr_sample.a : 0.0);
+			RADIANCE = vec4(sspr_distorted_sample.rgb, sspr_confidence);
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}

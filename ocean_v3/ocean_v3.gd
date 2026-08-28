@@ -347,6 +347,21 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_enabled = value
 		_request_visual_sync()
 
+@export_range(0.0, 1.0, 0.01) var reflection_sspr_distortion_strength: float = 0.35:
+	set(value):
+		reflection_sspr_distortion_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 0.25, 0.005) var reflection_sspr_edge_fade: float = 0.08:
+	set(value):
+		reflection_sspr_edge_fade = clampf(value, 0.0, 0.25)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var reflection_sspr_slope_fade: float = 0.65:
+	set(value):
+		reflection_sspr_slope_fade = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
 
 @export_group("Whitecaps Foam")
 @export var foam_enabled: bool = true:
@@ -970,12 +985,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 9
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 11
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1444,6 +1459,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_sun_direction_world", _sun_direction_world)
 	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
 	material.set_shader_parameter(&"reflection_sspr_enabled", reflection_sspr_enabled)
+	material.set_shader_parameter(&"reflection_sspr_distortion_strength", reflection_sspr_distortion_strength)
+	material.set_shader_parameter(&"reflection_sspr_edge_fade", reflection_sspr_edge_fade)
+	material.set_shader_parameter(&"reflection_sspr_slope_fade", reflection_sspr_slope_fade)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
