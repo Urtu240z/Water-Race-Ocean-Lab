@@ -162,7 +162,11 @@ uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
-// 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR.
+uniform float refraction_micro_normal_strength : hint_range(0.0, 0.5, 0.01) = 0.15;
+uniform float refraction_max_offset_px : hint_range(0.0, 64.0, 1.0) = 24.0;
+uniform float refraction_depth_tolerance_m : hint_range(0.0, 2.0, 0.01) = 0.35;
+// 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
+// 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1695,6 +1699,32 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 }
 
 
+const float WATER_OPTICS_EPSILON = 0.0001;
+const float WATER_OPTICS_EDGE_FADE_UV = 0.02;
+const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
+const float WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR = 0.08;
+
+
+vec2 water_optics_project_view_position(vec3 view_position, mat4 projection,
+		out bool valid) {
+	vec4 clip_position = projection * vec4(view_position, 1.0);
+	if (clip_position.w <= WATER_OPTICS_EPSILON
+			|| any(isnan(clip_position)) || any(isinf(clip_position))) {
+		valid = false;
+		return vec2(0.0);
+	}
+	vec2 uv = clip_position.xy / clip_position.w * 0.5 + 0.5;
+	valid = !(any(isnan(uv)) || any(isinf(uv)));
+	return uv;
+}
+
+
+float water_optics_edge_confidence(vec2 uv) {
+	float distance_to_edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+	return smoothstep(0.0, WATER_OPTICS_EDGE_FADE_UV, distance_to_edge);
+}
+
+
 const int NEAR_SSR_COARSE_STEPS = 16;
 const int NEAR_SSR_REFINEMENT_STEPS = 3;
 const float NEAR_SSR_START_EPSILON_M = 0.05;
@@ -2159,16 +2189,17 @@ void fragment() {
 		);
 		visual_normal = normalize(visual_normal + micro_offset_view * surface_foam_mask);
 	}
+	vec3 surface_detail_offset_view = vec3(0.0);
 	if (surface_detail_enabled) {
 		vec3 detail_normal = sample_surface_detail(surface_detail_carrier_xz(), camera_distance);
 		vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
-		vec3 detail_offset_view = mat3(VIEW_MATRIX) * vec3(
+		surface_detail_offset_view = mat3(VIEW_MATRIX) * vec3(
 			detail_slope.x,
 			0.0,
 			detail_slope.y
 		);
 		float foam_micro_gain = 1.0 + foam_micro_normal_strength * foam_mask;
-		visual_normal = normalize(visual_normal + detail_offset_view * surface_normal_strength * foam_micro_gain);
+		visual_normal = normalize(visual_normal + surface_detail_offset_view * surface_normal_strength * foam_micro_gain);
 	}
 	NORMAL = visual_normal;
 
@@ -2536,6 +2567,9 @@ void fragment() {
 			// 5R.3C: profundidad óptica real desde el depth buffer.
 			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
 			bool scene_is_sky = scene_raw_depth <= 0.000001;
+			bool scene_raw_depth_valid = scene_raw_depth > 0.000001
+				&& scene_raw_depth <= 1.000001
+				&& !isnan(scene_raw_depth) && !isinf(scene_raw_depth);
 			float scene_linear_depth = linear_depth_from_buffer(
 				SCREEN_UV,
 				scene_raw_depth,
@@ -2546,13 +2580,20 @@ void fragment() {
 				FRAGCOORD.z,
 				INV_PROJECTION_MATRIX
 			);
+			bool scene_depth_valid = scene_raw_depth_valid
+				&& scene_linear_depth > WATER_OPTICS_EPSILON
+				&& !isnan(scene_linear_depth) && !isinf(scene_linear_depth);
+			bool water_depth_valid = water_linear_depth > WATER_OPTICS_EPSILON
+				&& !isnan(water_linear_depth) && !isinf(water_linear_depth);
 			float water_thickness = scene_is_sky
 				? maximum_optical_depth
-				: clamp(
+				: scene_depth_valid && water_depth_valid
+				? clamp(
 					scene_linear_depth - water_linear_depth,
 					0.0,
 					maximum_optical_depth
-				);
+				)
+				: maximum_optical_depth;
 
 			vec3 transmittance_rgb = exp(-max(absorption_coeff_rgb, vec3(0.0)) * water_thickness);
 			vec3 absorbed_rgb = vec3(1.0) - transmittance_rgb;
@@ -2592,22 +2633,126 @@ void fragment() {
 				distance_opacity
 			);
 
-			// Refracción screen-space ligera. Se puede apagar de forma aislada
-			// con water_refraction_enabled si causa cualquier artefacto.
+			// R2: derive the refraction ray from the clean FFT macro normal and IOR.
+			// Surface Detail contributes only through the already sampled detail offset;
+			// foam normals deliberately stay out of this path.
 			vec3 optical_scene = body_color;
+			vec2 refraction_final_offset_px = vec2(0.0);
+			float refraction_validity = 0.0;
 			if (water_refraction_enabled) {
-				vec2 refraction_offset = visual_normal.xy
-					* refraction_strength
-					* (1.0 - fresnel)
-					* (1.0 - distance_opacity);
-				vec2 refracted_uv = clamp(
-					SCREEN_UV + refraction_offset,
+				vec2 refraction_screen_size = max(
+					vec2(textureSize(screen_texture, 0)),
+					vec2(1.0)
+				);
+				vec3 refraction_normal_view = normalize(
+					sspr_macro_normal_view
+					+ surface_detail_offset_view
+					* surface_normal_strength
+					* refraction_micro_normal_strength
+				);
+				vec3 incident_view = normalize(-view_direction);
+				vec3 refracted_direction_view = refract(
+					incident_view,
+					refraction_normal_view,
+					1.0 / max(WATER_IOR, WATER_OPTICS_EPSILON)
+				);
+				bool refraction_direction_valid = length(refracted_direction_view) > WATER_OPTICS_EPSILON
+					&& !any(isnan(refracted_direction_view))
+					&& !any(isinf(refracted_direction_view));
+				if (refraction_direction_valid && !scene_is_sky && scene_depth_valid && water_depth_valid) {
+					refracted_direction_view = normalize(refracted_direction_view);
+					float target_scene_depth = min(
+						scene_linear_depth,
+						water_linear_depth + min(water_thickness, maximum_optical_depth)
+					);
+					float direction_z = refracted_direction_view.z;
+					bool direction_z_valid = abs(direction_z) > WATER_OPTICS_EPSILON
+						&& !isnan(direction_z) && !isinf(direction_z);
+					float path_distance = 0.0;
+					if (direction_z_valid) {
+						path_distance = (-target_scene_depth - water_position_view.z) / direction_z;
+					}
+					bool path_valid = direction_z_valid
+						&& path_distance >= 0.0
+						&& path_distance <= max(maximum_optical_depth * 8.0, 1.0)
+						&& !isnan(path_distance) && !isinf(path_distance);
+					if (path_valid) {
+						vec3 candidate_position_view = water_position_view
+							+ refracted_direction_view * path_distance;
+						bool projection_valid;
+						vec2 candidate_refracted_uv = water_optics_project_view_position(
+							candidate_position_view, projection_matrix, projection_valid);
+						if (projection_valid) {
+							// refraction_strength remains the post-geometry artistic gain;
+							// its historic default 0.009 maps to nominal gain 1.
+							float refraction_gain = max(refraction_strength, 0.0) / 0.009;
+							candidate_refracted_uv = SCREEN_UV
+								+ (candidate_refracted_uv - SCREEN_UV) * refraction_gain;
+							vec2 candidate_offset_px = (candidate_refracted_uv - SCREEN_UV) * refraction_screen_size;
+							float candidate_offset_length_px = length(candidate_offset_px);
+							float max_offset_px = max(refraction_max_offset_px, 0.0);
+							if (max_offset_px <= WATER_OPTICS_EPSILON) {
+								candidate_offset_px = vec2(0.0);
+							} else if (candidate_offset_length_px > max_offset_px) {
+								candidate_offset_px *= max_offset_px / candidate_offset_length_px;
+							}
+							candidate_refracted_uv = SCREEN_UV + candidate_offset_px / refraction_screen_size;
+
+							float edge_confidence = water_optics_edge_confidence(candidate_refracted_uv);
+							vec2 candidate_depth_uv = clamp(
+								candidate_refracted_uv,
+								vec2(0.001),
+								vec2(0.999)
+							);
+							// R2 adds exactly one candidate depth fetch.
+							float candidate_raw_depth = textureLod(depth_texture, candidate_depth_uv, 0.0).r;
+							bool candidate_raw_depth_valid = candidate_raw_depth > 0.000001
+								&& candidate_raw_depth <= 1.000001
+								&& !isnan(candidate_raw_depth) && !isinf(candidate_raw_depth);
+							float candidate_linear_depth = linear_depth_from_buffer(
+								candidate_depth_uv,
+								candidate_raw_depth,
+								INV_PROJECTION_MATRIX
+							);
+							bool candidate_depth_valid = candidate_raw_depth_valid
+								&& candidate_linear_depth > WATER_OPTICS_EPSILON
+								&& !isnan(candidate_linear_depth) && !isinf(candidate_linear_depth);
+							float behind_water_confidence = candidate_depth_valid
+								? smoothstep(
+									water_linear_depth + WATER_OPTICS_FOREGROUND_MARGIN_M,
+									water_linear_depth + WATER_OPTICS_FOREGROUND_MARGIN_M + 0.15,
+									candidate_linear_depth
+								)
+								: 0.0;
+							float depth_tolerance = max(
+								refraction_depth_tolerance_m,
+								water_thickness * WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR
+							);
+							float closer_error = candidate_depth_valid
+								? max(scene_linear_depth - candidate_linear_depth, 0.0)
+								: depth_tolerance + 1.0;
+							float discontinuity_confidence = candidate_depth_valid
+								? 1.0 - smoothstep(depth_tolerance, depth_tolerance + 0.25, closer_error)
+								: 0.0;
+							refraction_validity = clamp(
+								edge_confidence
+								* behind_water_confidence
+								* discontinuity_confidence,
+								0.0,
+								1.0
+							);
+							refraction_final_offset_px = candidate_offset_px * refraction_validity;
+						}
+					}
+				}
+				vec2 final_refracted_uv = clamp(
+					SCREEN_UV + refraction_final_offset_px / refraction_screen_size,
 					vec2(0.001),
 					vec2(0.999)
 				);
 				vec3 refracted_scene = textureLod(
 					screen_texture,
-					refracted_uv,
+					final_refracted_uv,
 					0.0
 				).rgb;
 				// Beer-Lambert transmission through the water column. The body term
@@ -2648,6 +2793,16 @@ void fragment() {
 				final_color = transmittance_rgb;
 			} else if (water_optics_debug_mode == 3) {
 				final_color = body_color;
+			} else if (water_optics_debug_mode == 4) {
+				float debug_offset_scale = max(refraction_max_offset_px, 1.0);
+				vec2 signed_offset = clamp(refraction_final_offset_px / debug_offset_scale, -1.0, 1.0);
+				final_color = vec3(signed_offset * 0.5 + 0.5, clamp(
+					length(refraction_final_offset_px) / debug_offset_scale,
+					0.0,
+					1.0
+				));
+			} else if (water_optics_debug_mode == 5) {
+				final_color = vec3(refraction_validity);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

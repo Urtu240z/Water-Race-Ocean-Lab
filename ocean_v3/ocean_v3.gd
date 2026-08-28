@@ -371,9 +371,24 @@ var _performance_overlay_label: Label
 		refraction_strength = value
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR") var water_optics_debug_mode: int = 0:
+@export_range(0.0, 0.5, 0.01) var refraction_micro_normal_strength: float = 0.15:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 3)
+		refraction_micro_normal_strength = clampf(value, 0.0, 0.5)
+		_request_visual_sync()
+
+@export_range(0.0, 64.0, 1.0) var refraction_max_offset_px: float = 24.0:
+	set(value):
+		refraction_max_offset_px = clampf(value, 0.0, 64.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var refraction_depth_tolerance_m: float = 0.35:
+	set(value):
+		refraction_depth_tolerance_m = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY") var water_optics_debug_mode: int = 0:
+	set(value):
+		water_optics_debug_mode = clampi(value, 0, 5)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1855,6 +1870,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
 	material.set_shader_parameter(&"water_refraction_enabled", perf_enable_refraction)
 	material.set_shader_parameter(&"refraction_strength", refraction_strength)
+	material.set_shader_parameter(&"refraction_micro_normal_strength", refraction_micro_normal_strength)
+	material.set_shader_parameter(&"refraction_max_offset_px", refraction_max_offset_px)
+	material.set_shader_parameter(&"refraction_depth_tolerance_m", refraction_depth_tolerance_m)
 	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
