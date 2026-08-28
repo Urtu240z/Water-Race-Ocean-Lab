@@ -2149,7 +2149,9 @@ void fragment() {
 		);
 		vec3 sspr_source_world = vec3(0.0);
 		bool sspr_source_valid = false;
-		if (uv_inside > 0.5 && reflection_sspr_depth_available) {
+		bool sspr_source_info_needed = reflection_sspr_depth_available
+			&& (reflection_sspr_facet_gate_enabled || reflection_distance_blur_enabled);
+		if (uv_inside > 0.5 && sspr_source_info_needed) {
 			float reflected_virtual_depth = textureLod(
 				reflection_sspr_depth_texture, sspr_distorted_uv, 0.0).r;
 			sspr_source_valid = reflection_sspr_source_from_depth(

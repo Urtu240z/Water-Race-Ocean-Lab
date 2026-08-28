@@ -15,6 +15,7 @@ current implementation disagree.
 ## Current systems
 
 - [Wave presets and transitions](WAVE_SPECTRUM_PRESETS.md)
+- [Reflection production baseline and performance audit](OCEAN_V3_REFLECTIONS.md)
 - [Surface Foam implementation notes](SURFACE_FOAM_DIRECT_TOPOLOGY.md),
   [scale/LOD](SURFACE_FOAM_SCALE_LOD.md), and
   [stochastic deperiodization](SURFACE_FOAM_STOCHASTIC_TILING.md)
@@ -35,6 +36,7 @@ current implementation disagree.
 | Bathymetry and Coastal | Implemented optional V1 LONG path | [Architecture](OCEAN_V3_ARCHITECTURE.md#coastal-and-bathymetry) |
 | Crest Foam / Surface Foam / Crest Filigree | Implemented | [Architecture](OCEAN_V3_ARCHITECTURE.md#foam) |
 | Breaker Ribbon Pool | Implemented optional local representation | [Architecture](OCEAN_V3_ARCHITECTURE.md#breaking) |
+| Environment/PBR, SSPR, Near SSR reflections | Implemented; production baseline documented | [Reflection audit](OCEAN_V3_REFLECTIONS.md) |
 | Quality profiles | Infrastructure only; not a live quality switch | [Usage guide](OCEAN_V3_USAGE_GUIDE.md#project-settings-and-singletons) |
 | Ocean Lab | Implemented reference/debug scene | [Troubleshooting](OCEAN_V3_TROUBLESHOOTING.md#ocean-lab) |
 | Vehicle buoyancy/gameplay | Not part of Ocean V3 runtime | [Usage guide](OCEAN_V3_USAGE_GUIDE.md#oceanquery-for-gameplay) |

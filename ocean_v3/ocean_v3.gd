@@ -1143,6 +1143,13 @@ func _update_performance_overlay() -> void:
 		"PREBREAK       %s" % _on_off(profile["prebreak"]),
 		"BREAKERS       %s" % _on_off(profile["breakers"]),
 		"SSPR           %s" % _on_off(profile["sspr"]),
+		"Reflection     SSPR %.2f | NearSSR %s | Facet %s | DistBlur %s | Kawase %s" % [
+			reflection_sspr_resolution_scale,
+			_reflection_near_ssr_quality_name(),
+			_on_off(reflection_sspr_facet_gate_enabled),
+			_on_off(reflection_distance_blur_enabled),
+			_on_off(reflection_sspr_kawase_enabled)
+		],
 		"REFRACTION     %s" % _on_off(profile["refraction"]),
 		"FPS %d | Frame %.2f ms" % [fps, frame_ms],
 		"CPU process %.2f ms | physics %.2f ms" % [
@@ -1155,6 +1162,10 @@ func _update_performance_overlay() -> void:
 
 func _on_off(value: bool) -> String:
 	return "ON" if value else "OFF"
+
+
+func _reflection_near_ssr_quality_name() -> String:
+	return ["LOW", "MEDIUM", "HIGH"][clampi(reflection_near_ssr_quality, NearSSRQuality.LOW, NearSSRQuality.HIGH)]
 
 
 func coastal_enabled() -> bool:
