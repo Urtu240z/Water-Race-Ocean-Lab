@@ -167,6 +167,13 @@ uniform float reflection_pixel_footprint_gain : hint_range(0.0, 1.0, 0.005) = 1.
 uniform float reflection_slope_variance_gain : hint_range(0.0, 1.0, 0.005) = 0.35;
 uniform vec2 reflection_roughness_distance_m = vec2(80.0, 220.0);
 uniform vec3 reflection_sun_direction_world = vec3(0.0, 0.0, 1.0);
+// Reflection Phase 1C: local roughness shaping over existing LONG/MID crest
+// curvature. The mask only concentrates the existing PBR lobe; it adds no
+// emission, color boost, lighting model, texture, or physical wave energy.
+uniform bool reflection_crest_specular_enabled = true;
+uniform float reflection_crest_roughness_gain : hint_range(0.0, 1.0, 0.01) = 0.65;
+uniform float reflection_crest_mask_gain : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform float reflection_crest_min_roughness_scale : hint_range(0.45, 1.0, 0.01) = 0.60;
 uniform bool reflection_sspr_enabled = true;
 uniform bool reflection_sspr_available = false;
 uniform sampler2D reflection_sspr_texture : repeat_disable, filter_linear;
@@ -292,6 +299,7 @@ varying float coastal_mono_active;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
+varying float reflection_crest_mask; // 1C: convexidad LONG/MID para roughness.
 varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cresta/valle.
 varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculado por vertex().
 varying float shore_vertical_weight_varying;
@@ -574,6 +582,29 @@ float physical_ocean_roughness(float distance_to_camera, float footprint,
 }
 
 
+float reflection_crest_shaped_roughness(float base_roughness,
+		float crest_mask, vec2 unresolved_detail_metrics) {
+	if (!reflection_crest_specular_enabled) {
+		return base_roughness;
+	}
+	// MID/SHORT slope variance breaks a long macro highlight into local pieces.
+	// It only attenuates the crest support; it never creates highlight coverage.
+	float detail_variation = clamp(
+		0.45 * unresolved_detail_metrics.x + 0.55 * unresolved_detail_metrics.y,
+		0.0,
+		1.0
+	);
+	float detail_fragmentation = smoothstep(0.05, 0.65, detail_variation);
+	float shaped_crest = clamp(crest_mask * reflection_crest_mask_gain, 0.0, 1.0);
+	shaped_crest *= mix(1.0, 0.68, detail_fragmentation);
+	float min_scale = clamp(reflection_crest_min_roughness_scale, 0.45, 1.0);
+	float roughness_scale = 1.0 - shaped_crest
+		* clamp(reflection_crest_roughness_gain, 0.0, 1.0)
+		* (1.0 - min_scale);
+	return max(reflection_min_roughness, base_roughness * roughness_scale);
+}
+
+
 float sun_specular_brdf(vec3 normal, vec3 view_direction, float roughness) {
 	vec3 light_direction = normalize(reflection_sun_direction_world);
 	vec3 half_vector = normalize(light_direction + view_direction);
@@ -665,6 +696,7 @@ void vertex() {
 	coastal_warp_delta_m = 0.0;
 	breaking_indices = vec4(0.0);
 	crest_sharpen_mask = 0.0;
+	reflection_crest_mask = 0.0;
 	shore_vertical_weight_varying = 1.0;
 	shore_horizontal_weight_varying = 1.0;
 	shore_pre_envelope_height = 0.0;
@@ -823,9 +855,11 @@ void vertex() {
 		displacement.y -= takeover_submerge_m * takeover;
 	}
 
-	// 5R.1C: crest sharpening por compresión/convergencia (LONG + MID).
-	// Afila crestas que surgen por suma/interferencia. Sólo geometría, sin lip.
-	if (ocean_crest_sharpen_strength > 0.0 && module_enabled && !coastal_monochromatic_debug) {
+	// 5R.1C / Reflection 1C: ambos consumidores reutilizan la misma medida de
+	// convexidad LONG+MID. La modulación de roughness no cambia la geometría.
+	bool crest_shape_data_needed = module_enabled && !coastal_monochromatic_debug
+		&& (ocean_crest_sharpen_strength > 0.0 || reflection_crest_specular_enabled);
+	if (crest_shape_data_needed) {
 		float swell_lambda = coastal_metrics.g > 0.5 ? coastal_metrics.g : (TAU / max(coastal_k0_rad_m, 0.001));
 		float eps = max(swell_lambda * 0.12, 1.5);
 		vec2 sdir = normalize(coastal_incoming_direction_xz + vec2(0.0001, 0.0));
@@ -843,13 +877,28 @@ void vertex() {
 		float crestness = crest_long + crest_mid;
 		float face_slope = abs(l_r - l_l) / (2.0 * eps);
 		float compression = smoothstep(0.03, 0.22, face_slope);
-		float sharpen = smoothstep(ocean_crest_sharpen_threshold, ocean_crest_sharpen_threshold + 0.25, crestness)
-			* compression * band_mask.x * ocean_crest_sharpen_strength; // 5R.1D: band_mask (world-space), no camera distance.
-		float gain = ocean_crest_sharpen_max_gain;
-		// Elevación vertical acotada + compresión horizontal suave (narrow crest).
-		displacement.y += sharpen * gain * local_hs * zone_long_amplitude;
-		displacement.xz *= 1.0 + sharpen * gain * 0.35 * zone_long_amplitude * zone_choppiness;
-		crest_sharpen_mask = sharpen;
+		float crest_convexity = smoothstep(
+			ocean_crest_sharpen_threshold * 0.8,
+			ocean_crest_sharpen_threshold + 0.30,
+			crestness
+		);
+		// Mantiene soporte en el ápice (donde la pendiente es baja) y sólo añade
+		// una ligera preferencia por el frente/espalda inclinados de la cresta.
+		float crest_slope_presence = smoothstep(0.0, 0.20, face_slope);
+		float crest_support = crest_convexity
+			* mix(0.76, 1.0, crest_slope_presence)
+			* band_mask.x;
+		reflection_crest_mask = clamp(crest_support, 0.0, 1.0);
+
+		if (ocean_crest_sharpen_strength > 0.0) {
+			float sharpen = smoothstep(ocean_crest_sharpen_threshold, ocean_crest_sharpen_threshold + 0.25, crestness)
+				* compression * band_mask.x * ocean_crest_sharpen_strength; // 5R.1D: band_mask (world-space), no camera distance.
+			float gain = ocean_crest_sharpen_max_gain;
+			// Elevación vertical acotada + compresión horizontal suave (narrow crest).
+			displacement.y += sharpen * gain * local_hs * zone_long_amplitude;
+			displacement.xz *= 1.0 + sharpen * gain * 0.35 * zone_long_amplitude * zone_choppiness;
+			crest_sharpen_mask = sharpen;
+		}
 	}
 
 	// Shoreline is the final geometry envelope. It limits both the base FFT and
@@ -1472,6 +1521,8 @@ void fragment() {
 	float debug_slope_variance = debug_reflection_metrics.y;
 	float debug_reflection_roughness = physical_ocean_roughness(
 		debug_camera_distance, debug_footprint, debug_reflection_metrics);
+	debug_reflection_roughness = reflection_crest_shaped_roughness(
+		debug_reflection_roughness, reflection_crest_mask, debug_reflection_metrics);
 	float debug_sun_specular = 0.0;
 	// Keep Surface Foam's independent history/topology intact; only its
 	// presentation contribution is locally attenuated by the zone state.
@@ -1670,6 +1721,8 @@ void fragment() {
 		ocean_base_xz, reflection_pixel_footprint, zone_mid_amplitude, zone_short_amplitude);
 	float water_reflection_roughness = physical_ocean_roughness(
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
+	water_reflection_roughness = reflection_crest_shaped_roughness(
+		water_reflection_roughness, reflection_crest_mask, reflection_detail_metrics);
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
 		max(opacity_distance_end, opacity_distance_start + 0.001),

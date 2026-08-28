@@ -133,6 +133,27 @@ physical displacement, H0, or OceanQuery. It is separate from the physical
 SHORT FFT band: microdetail is not a fifth band and is not a replacement for
 SHORT.
 
+## Reflection crest shaping
+
+Reflection Phase 1C keeps the Phase 1 Fresnel, dielectric `SPECULAR`, PBR
+lighting, and environment fallback unchanged. In the water fragment shader,
+`reflection_crest_shaped_roughness()` multiplies the existing physical
+roughness by a bounded scale:
+
+```text
+detail_breakup = smoothstep(0.05, 0.65, 0.45*MID_detail + 0.55*SHORT_variance)
+shaped_crest = crest_mask * mask_gain * mix(1.0, 0.68, detail_breakup)
+roughness *= 1.0 - shaped_crest * roughness_gain * (1.0 - min_scale)
+```
+
+`crest_mask` is a smooth LONG/MID convexity support from the existing central
+second differences and a soft slope-presence gate; it is not based on height
+alone. MID/SHORT unresolved slope variance fragments the support locally, while
+the existing `reflection_min_roughness` remains the hard floor. Defaults are
+`enabled=true`, `roughness_gain=0.65`, `mask_gain=1.0`, and
+`min_roughness_scale=0.60`. No new texture, emission, reflection capture,
+lighting model, or debug system is introduced.
+
 ## OceanQuery
 
 The stable public entry point is `OceanV3`:
