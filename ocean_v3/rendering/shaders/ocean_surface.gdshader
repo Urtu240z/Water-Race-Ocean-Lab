@@ -180,10 +180,16 @@ uniform float trough_density_boost : hint_range(0.0, 0.5, 0.01) = 0.10;
 uniform float transmission_detail_fade_start_m : hint_range(0.0, 100.0, 0.5) = 10.0;
 uniform float transmission_detail_fade_end_m : hint_range(1.0, 150.0, 0.5) = 30.0;
 uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
+uniform bool caustics_enabled = true;
+uniform float caustics_strength : hint_range(0.0, 2.0, 0.01) = 0.45;
+uniform float caustics_scale_m : hint_range(0.1, 10.0, 0.1) = 1.5;
+uniform float caustics_depth_fade_start_m : hint_range(0.0, 20.0, 0.1) = 2.0;
+uniform float caustics_depth_fade_end_m : hint_range(0.1, 30.0, 0.1) = 10.0;
+uniform float caustics_wave_warp_strength : hint_range(0.0, 2.0, 0.01) = 0.35;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
-// 10 ALPHA_DEPTH_FACTOR.
+// 10 ALPHA_DEPTH_FACTOR, 11 CAUSTICS_PATTERN, 12 CAUSTICS_MASK.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1706,6 +1712,70 @@ float water_optics_edge_confidence(vec2 uv) {
 }
 
 
+bool water_optics_world_position_from_depth(vec2 uv, float raw_depth,
+		mat4 inverse_projection, mat4 inverse_view, out vec3 world_position) {
+	world_position = vec3(0.0);
+	if (!(raw_depth > 0.000001) || raw_depth > 1.000001
+			|| isnan(raw_depth) || isinf(raw_depth)) {
+		return false;
+	}
+	vec4 view_position = inverse_projection * vec4(uv * 2.0 - 1.0, raw_depth, 1.0);
+	if (abs(view_position.w) <= WATER_OPTICS_EPSILON
+			|| any(isnan(view_position)) || any(isinf(view_position))) {
+		return false;
+	}
+	view_position /= view_position.w;
+	vec4 reconstructed_world = inverse_view * vec4(view_position.xyz, 1.0);
+	if (abs(reconstructed_world.w) <= WATER_OPTICS_EPSILON
+			|| any(isnan(reconstructed_world)) || any(isinf(reconstructed_world))) {
+		return false;
+	}
+	reconstructed_world /= reconstructed_world.w;
+	world_position = reconstructed_world.xyz;
+	if (any(isnan(world_position)) || any(isinf(world_position))) {
+		world_position = vec3(0.0);
+		return false;
+	}
+	return true;
+}
+
+
+vec2 water_caustics_hash22(vec2 p) {
+	return fract(sin(vec2(
+		dot(p, vec2(127.1, 311.7)),
+		dot(p, vec2(269.5, 183.3))
+	)) * 43758.5453);
+}
+
+
+float water_caustics_pattern(vec2 position) {
+	vec2 lattice = floor(position);
+	vec2 local_position = fract(position);
+	float nearest_distance = 1000.0;
+	float second_distance = 1000.0;
+	for (int offset_y = -1; offset_y <= 1; offset_y++) {
+		for (int offset_x = -1; offset_x <= 1; offset_x++) {
+			vec2 cell_offset = vec2(float(offset_x), float(offset_y));
+			vec2 feature_point = cell_offset
+				+ water_caustics_hash22(lattice + cell_offset) * 0.86 + 0.07;
+			float feature_distance = length(feature_point - local_position);
+			if (feature_distance < nearest_distance) {
+				second_distance = nearest_distance;
+				nearest_distance = feature_distance;
+			} else if (feature_distance < second_distance) {
+				second_distance = feature_distance;
+			}
+		}
+	}
+	// Voronoi boundaries form an irregular web; nodes add small bright
+	// concentrations without turning the whole seabed into a dark mask.
+	float boundary_signal = 1.0 - smoothstep(0.025, 0.16,
+		second_distance - nearest_distance);
+	float node_signal = 1.0 - smoothstep(0.02, 0.20, nearest_distance);
+	return clamp(max(boundary_signal, node_signal * 0.65), 0.0, 1.0);
+}
+
+
 const int NEAR_SSR_COARSE_STEPS = 16;
 const int NEAR_SSR_REFINEMENT_STEPS = 3;
 const float NEAR_SSR_START_EPSILON_M = 0.05;
@@ -2710,6 +2780,17 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
+			// R4 keeps the depth associated with the accepted transmitted pixel
+			// outside R2's validation scope. Invalid/candidate-rejected paths fall
+			// back to the original screen pixel and its original scene depth.
+			vec2 accepted_transmission_uv = SCREEN_UV;
+			float accepted_transmission_raw_depth = scene_raw_depth;
+			float accepted_transmission_linear_depth = scene_linear_depth;
+			bool accepted_transmission_depth_valid = !scene_is_sky
+				&& scene_depth_valid && water_depth_valid;
+			float caustics_pattern_value = 0.0;
+			float caustics_mask = 0.0;
+			float caustic_gain = 1.0;
 			if (water_refraction_enabled) {
 				vec2 refraction_screen_size = max(
 					vec2(textureSize(screen_texture, 0)),
@@ -2813,6 +2894,12 @@ void fragment() {
 								1.0
 							);
 							refraction_final_offset_px = candidate_offset_px * refraction_validity;
+							if (refraction_validity > WATER_OPTICS_EPSILON && candidate_depth_valid) {
+								accepted_transmission_uv = candidate_refracted_uv;
+								accepted_transmission_raw_depth = candidate_raw_depth;
+								accepted_transmission_linear_depth = candidate_linear_depth;
+								accepted_transmission_depth_valid = true;
+							}
 						}
 					}
 				}
@@ -2821,6 +2908,61 @@ void fragment() {
 					vec2(0.001),
 					vec2(0.999)
 				);
+				if (accepted_transmission_depth_valid && refraction_validity > WATER_OPTICS_EPSILON) {
+					// The final UV includes R2's confidence blend; reuse its already
+					// accepted depth rather than issuing another depth read.
+					accepted_transmission_uv = final_refracted_uv;
+				}
+				if (accepted_transmission_depth_valid && !scene_is_sky) {
+					vec3 bottom_world_position;
+					bool bottom_world_position_valid = water_optics_world_position_from_depth(
+						accepted_transmission_uv,
+						accepted_transmission_raw_depth,
+						INV_PROJECTION_MATRIX,
+						INV_VIEW_MATRIX,
+						bottom_world_position
+					) && accepted_transmission_linear_depth > WATER_OPTICS_EPSILON;
+					if (bottom_world_position_valid) {
+						// The clean FFT macro normal is the only wave authority here. A
+						// bounded world-space warp moves the seabed footprint with the wave
+						// slope without introducing a scrolling screen-space texture.
+						vec2 wave_refraction_offset = shading_normal_world.xz
+							* physical_water_thickness
+							* max(caustics_wave_warp_strength, 0.0);
+						float max_wave_warp = max(caustics_scale_m, 0.1) * 4.0;
+						float wave_warp_length = length(wave_refraction_offset);
+						if (wave_warp_length > max_wave_warp) {
+							wave_refraction_offset *= max_wave_warp / wave_warp_length;
+						}
+						vec2 caustic_position = bottom_world_position.xz + wave_refraction_offset;
+						caustics_pattern_value = water_caustics_pattern(
+							caustic_position / max(caustics_scale_m, 0.1)
+						);
+						float caustics_depth_visibility = 1.0 - smoothstep(
+							caustics_depth_fade_start_m,
+							max(caustics_depth_fade_end_m, caustics_depth_fade_start_m + 0.001),
+							physical_water_thickness
+						);
+						// K = 0.08 keeps the default turbidity visible in shallow water
+						// while progressively removing contrast from deeper water.
+						float caustics_turbidity_visibility = exp(
+							-clamp(water_turbidity, 0.0, 2.0)
+							* max(physical_water_thickness, 0.0)
+							* 0.08
+						);
+						caustics_mask = clamp(
+							caustics_depth_visibility * caustics_turbidity_visibility,
+							0.0,
+							1.0
+						);
+						float requested_caustic_gain = caustics_pattern_value
+							* caustics_mask
+							* clamp(caustics_strength, 0.0, 2.0);
+						caustic_gain = 1.0 + (caustics_enabled
+							? min(requested_caustic_gain, 0.8)
+							: 0.0);
+					}
+				}
 				vec3 refracted_scene = textureLod(
 					screen_texture,
 					final_refracted_uv,
@@ -2829,7 +2971,8 @@ void fragment() {
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
 				// R1 transmittance_rgb remains available to debug mode 2.
-				vec3 transmitted_component = refracted_scene * effective_transmittance_rgb;
+				vec3 transmitted_scene = refracted_scene * caustic_gain;
+				vec3 transmitted_component = transmitted_scene * effective_transmittance_rgb;
 				optical_scene = transmitted_component + body_component + scattering_component;
 			}
 
@@ -2892,6 +3035,10 @@ void fragment() {
 				final_color = vec3(body_depth_factor);
 			} else if (water_optics_debug_mode == 10) {
 				final_color = vec3(alpha_depth_factor);
+			} else if (water_optics_debug_mode == 11) {
+				final_color = vec3(caustics_pattern_value);
+			} else if (water_optics_debug_mode == 12) {
+				final_color = vec3(caustics_mask);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
