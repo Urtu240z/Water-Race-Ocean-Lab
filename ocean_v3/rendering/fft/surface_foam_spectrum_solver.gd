@@ -38,6 +38,11 @@ var _foam_params_buffer := RID()
 var _assemble_params_buffer := RID()
 var _evolve_params_buffer := RID()
 var _fft_params_buffer := RID()
+var _topology_params_bytes := PackedByteArray()
+var _foam_params_bytes := PackedByteArray()
+var _assemble_params_bytes := PackedByteArray()
+var _evolve_params_bytes := PackedByteArray()
+var _fft_params_bytes := PackedByteArray()
 var _shaders: Array[RID] = []
 var _pipelines: Array[RID] = []
 var _sets: Array[RID] = []
@@ -90,6 +95,13 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		if not _create_pipeline(path, resource_prefix).is_valid():
 			free_resources()
 			return
+	_topology_params_bytes.resize(16)
+	_foam_params_bytes.resize(48)
+	_assemble_params_bytes.resize(16)
+	_evolve_params_bytes.resize(16)
+	_fft_params_bytes.resize(16)
+	_write_topology_params()
+	_assemble_params_bytes.encode_float(0, 1.0)
 	_h0 = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".H0", config.resolution, h0_data, true)
 	h0_upload_byte_count = h0_data.size()
 	for index in 2:
@@ -99,9 +111,9 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 		_foam[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Field%d" % index, _field_resolution)
 		_topology[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Topology%d" % index, _topology_resolution, PackedByteArray(), false, true)
 	_sampler = _create_sampler()
-	_topology_params_buffer = _rd.uniform_buffer_create(16, PackedFloat32Array([_whitecap, _crest_whitecap, _config.domain_size_m, float(_topology_resolution)]).to_byte_array())
+	_topology_params_buffer = _rd.uniform_buffer_create(16, _topology_params_bytes)
 	_foam_params_buffer = _rd.uniform_buffer_create(48, PackedByteArray())
-	_assemble_params_buffer = _rd.uniform_buffer_create(16, PackedFloat32Array([1.0, 0.0, 0.0, 0.0]).to_byte_array())
+	_assemble_params_buffer = _rd.uniform_buffer_create(16, _assemble_params_bytes)
 	_evolve_params_buffer = _rd.uniform_buffer_create(16, PackedByteArray())
 	_fft_params_buffer = _rd.uniform_buffer_create(16, PackedByteArray())
 	_evolve_set = _create_image_set(_shaders[PIPELINE_EVOLVE], [_h0, _ping_a[0], _ping_b[0]], _evolve_params_buffer)
@@ -141,7 +153,8 @@ func set_settings(enabled: bool, whitecap: float, amount: float, update_hz: floa
 	_birth_selectivity = clampf(birth_selectivity, 0.0, 1.0)
 	_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
 	if _rd != null and _topology_params_buffer.is_valid():
-		_rd.buffer_update(_topology_params_buffer, 0, 16, PackedFloat32Array([_whitecap, _crest_whitecap, _config.domain_size_m, float(_topology_resolution)]).to_byte_array())
+		_write_topology_params()
+		_rd.buffer_update(_topology_params_buffer, 0, 16, _topology_params_bytes)
 
 
 func upload_h0(h0_data: PackedByteArray) -> void:
@@ -176,24 +189,25 @@ func advance(frame_delta: float) -> void:
 	_pass_credit -= float(pass_budget)
 	var groups := ceili(float(_config.resolution) / 8.0)
 	var foam_groups := ceili(float(_field_resolution) / 8.0)
-	var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
-	_rd.buffer_update(_foam_params_buffer, 0, 48, PackedFloat32Array([
-		_whitecap, source_gain, _birth_selectivity, 1.0,
-		_job_delta, _birth_attack_s, _lifetime_s, 0.12,
-		_config.field_domain_m, _config.domain_size_m, 2.25, 0.0
-	]).to_byte_array())
-	_rd.buffer_update(_evolve_params_buffer, 0, 16, PackedFloat32Array([
-		_job_time, _config.gravity_mps2, _config.depth_m, _config.domain_size_m
-	]).to_byte_array())
 	var fft_count := 2 * _config.fft_stage_count()
 	for _unused in pass_budget:
 		if not _job_active:
 			break
-		if _job_pass > 0 and _job_pass <= fft_count:
+		if _job_pass == 0:
+			_write_evolve_params()
+			_rd.buffer_update(_evolve_params_buffer, 0, 16, _evolve_params_bytes)
+		elif _job_pass == fft_count + 1:
+			_write_foam_params()
+			_rd.buffer_update(_foam_params_buffer, 0, 48, _foam_params_bytes)
+		elif _job_pass > 0 and _job_pass <= fft_count:
 			var fft_index := _job_pass - 1
 			var axis := floori(float(fft_index) / float(_config.fft_stage_count()))
 			var stage := fft_index % _config.fft_stage_count()
-			_rd.buffer_update(_fft_params_buffer, 0, 16, PackedInt32Array([2 << stage, axis, _config.resolution, 1]).to_byte_array())
+			_fft_params_bytes.encode_s32(0, 2 << stage)
+			_fft_params_bytes.encode_s32(4, axis)
+			_fft_params_bytes.encode_s32(8, _config.resolution)
+			_fft_params_bytes.encode_s32(12, 1)
+			_rd.buffer_update(_fft_params_buffer, 0, 16, _fft_params_bytes)
 		var list := _rd.compute_list_begin()
 		_dispatch_job_pass(list, groups, foam_groups)
 		_passes_dispatched_total += 1
@@ -206,6 +220,36 @@ func advance(frame_delta: float) -> void:
 		_jobs_window = 0
 		_passes_window = 0
 		_diagnostic_window_s = 0.0
+
+
+func _write_topology_params() -> void:
+	_topology_params_bytes.encode_float(0, _whitecap)
+	_topology_params_bytes.encode_float(4, _crest_whitecap)
+	_topology_params_bytes.encode_float(8, _config.domain_size_m)
+	_topology_params_bytes.encode_float(12, float(_topology_resolution))
+
+
+func _write_foam_params() -> void:
+	var source_gain := clampf((_amount / 8.573) * 2.05, 0.0, 4.0)
+	_foam_params_bytes.encode_float(0, _whitecap)
+	_foam_params_bytes.encode_float(4, source_gain)
+	_foam_params_bytes.encode_float(8, _birth_selectivity)
+	_foam_params_bytes.encode_float(12, 1.0)
+	_foam_params_bytes.encode_float(16, _job_delta)
+	_foam_params_bytes.encode_float(20, _birth_attack_s)
+	_foam_params_bytes.encode_float(24, _lifetime_s)
+	_foam_params_bytes.encode_float(28, 0.12)
+	_foam_params_bytes.encode_float(32, _config.field_domain_m)
+	_foam_params_bytes.encode_float(36, _config.domain_size_m)
+	_foam_params_bytes.encode_float(40, 2.25)
+	_foam_params_bytes.encode_float(44, 0.0)
+
+
+func _write_evolve_params() -> void:
+	_evolve_params_bytes.encode_float(0, _job_time)
+	_evolve_params_bytes.encode_float(4, _config.gravity_mps2)
+	_evolve_params_bytes.encode_float(8, _config.depth_m)
+	_evolve_params_bytes.encode_float(12, _config.domain_size_m)
 
 
 func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:

@@ -17,27 +17,22 @@ const float TAU = 6.283185307179586;
 const float HISTORY_HYSTERESIS_WIDTH = 0.12;
 const float HISTORY_ACTIVE_EPSILON = 0.001;
 
-vec2 source_uv_a(vec2 field_world_xz) {
+vec2 deperiodized_warp(vec2 field_world_xz) {
 	float field_domain = max(params.spatial.x, 0.001);
 	float phase_x = field_world_xz.x * TAU / field_domain;
 	float phase_z = field_world_xz.y * TAU / field_domain;
 	float amplitude = max(params.spatial.z, 0.0);
-	vec2 warp = 0.5 * amplitude * vec2(
+	return 0.5 * amplitude * vec2(
 		sin(phase_x + 0.37) + sin(2.0 * phase_z + 1.11),
 		cos(phase_z + 0.71) + cos(3.0 * phase_x + 2.07)
 	);
+}
+
+vec2 source_uv_a(vec2 field_world_xz, vec2 warp) {
 	return (field_world_xz + warp) / max(params.spatial.y, 0.001);
 }
 
-vec2 source_uv_b(vec2 field_world_xz) {
-	float field_domain = max(params.spatial.x, 0.001);
-	float phase_x = field_world_xz.x * TAU / field_domain;
-	float phase_z = field_world_xz.y * TAU / field_domain;
-	float amplitude = max(params.spatial.z, 0.0);
-	vec2 warp = 0.5 * amplitude * vec2(
-		sin(phase_x + 0.37) + sin(2.0 * phase_z + 1.11),
-		cos(phase_z + 0.71) + cos(3.0 * phase_x + 2.07)
-	);
+vec2 source_uv_b(vec2 field_world_xz, vec2 warp) {
 	mat2 rotation = mat2(vec2(0.7986355, -0.6018150), vec2(0.6018150, 0.7986355));
 	vec2 transformed_warp = rotation * (warp * 1.19) + vec2(2.37, -1.41);
 	return (field_world_xz + transformed_warp) / max(params.spatial.y, 0.001);
@@ -70,8 +65,9 @@ void main() {
 	}
 	vec2 field_uv = (vec2(coord) + vec2(0.5)) / vec2(size);
 	vec2 field_world_xz = (field_uv - vec2(0.5)) * params.spatial.x;
-	float jacobian_a = textureLod(jacobian_map, source_uv_a(field_world_xz), 0.0).r;
-	float jacobian_b = textureLod(jacobian_map, source_uv_b(field_world_xz), 0.0).r;
+	vec2 warp = deperiodized_warp(field_world_xz);
+	float jacobian_a = textureLod(jacobian_map, source_uv_a(field_world_xz, warp), 0.0).r;
+	float jacobian_b = textureLod(jacobian_map, source_uv_b(field_world_xz, warp), 0.0).r;
 	if (isnan(jacobian_a) || isinf(jacobian_a)) {
 		jacobian_a = 1.0;
 	}
