@@ -155,9 +155,14 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.12, 0.055);
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
+uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
+uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
+// Deprecated compatibility uniform. Legacy only. No production effect.
 uniform float shallow_depth_range : hint_range(0.1, 20.0, 0.1) = 5.5;
 uniform float near_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.77;
 uniform float deep_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.92;
+uniform float alpha_depth_fade_start_m : hint_range(0.0, 50.0, 0.1) = 0.5;
+uniform float alpha_depth_fade_end_m : hint_range(0.1, 100.0, 0.1) = 12.0;
 uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
@@ -177,7 +182,8 @@ uniform float transmission_detail_fade_end_m : hint_range(1.0, 150.0, 0.5) = 30.
 uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
-// 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE.
+// 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
+// 10 ALPHA_DEPTH_FACTOR.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2577,14 +2583,18 @@ void fragment() {
 				-max(absorption_coeff_rgb, vec3(0.0)) * physical_water_thickness
 			);
 			vec3 absorbed_rgb = vec3(1.0) - transmittance_rgb;
-			float transmittance_luma = dot(transmittance_rgb, vec3(0.2126, 0.7152, 0.0722));
-			float optical_density = 1.0 - transmittance_luma;
-			float depth_factor = clamp(
-				bounded_water_thickness / max(shallow_depth_range, 0.001),
+			// This normalized bounded depth is only a saturation/modulation signal for
+			// R3 scattering tint and response. It is not body color or alpha authority.
+			float bounded_depth_factor = clamp(
+				bounded_water_thickness / max(maximum_optical_depth, 0.001),
 				0.0,
 				1.0
 			);
-			float water_density = max(optical_density, depth_factor * 0.48);
+			float body_depth_factor = smoothstep(
+				water_body_depth_start_m,
+				max(water_body_depth_end_m, water_body_depth_start_m + 0.001),
+				physical_water_thickness
+			);
 
 			// Tinte suave por altura: valle profundo / cresta algo más transmisiva.
 			float height_scale = max(breaking_long_hs_m * 2.0, 0.25);
@@ -2599,7 +2609,7 @@ void fragment() {
 			vec3 body_color = mix(
 				shallow_water_color.rgb,
 				deep_water_color.rgb,
-				water_density
+				body_depth_factor
 			);
 			body_color = mix(
 				body_color,
@@ -2665,14 +2675,14 @@ void fragment() {
 				-max(scattering_density_m, 0.0) * max(physical_water_thickness, 0.0)
 			);
 			float scattering_response = clamp(
-				scattering_depth_response * mix(0.55, 1.0, depth_factor),
+				scattering_depth_response * mix(0.55, 1.0, bounded_depth_factor),
 				0.0,
 				1.0
 			);
 			vec3 scattering_tint = mix(
 				scattering_color.rgb,
 				deep_water_color.rgb * 0.65,
-				depth_factor * 0.55
+				bounded_depth_factor * 0.55
 			);
 			// Treat scattering as a bounded share of the absorbed body response.
 			// This preserves the R1 body at strength 0 and avoids stacking the
@@ -2829,10 +2839,15 @@ void fragment() {
 			float surface_weight = 1.0 - (1.0 - fresnel) * (1.0 - distance_opacity);
 			vec3 final_color = mix(optical_scene, surface_color, surface_weight);
 
+			float alpha_depth_factor = smoothstep(
+				alpha_depth_fade_start_m,
+				max(alpha_depth_fade_end_m, alpha_depth_fade_start_m + 0.001),
+				physical_water_thickness
+			);
 			float local_alpha = mix(
 				near_water_alpha,
 				deep_water_alpha,
-				water_density
+				alpha_depth_factor
 			);
 			float final_alpha = clamp(
 				mix(
@@ -2873,6 +2888,10 @@ void fragment() {
 				final_color = water_body_final_color;
 			} else if (water_optics_debug_mode == 8) {
 				final_color = vec3(transmission_blur_factor);
+			} else if (water_optics_debug_mode == 9) {
+				final_color = vec3(body_depth_factor);
+			} else if (water_optics_debug_mode == 10) {
+				final_color = vec3(alpha_depth_factor);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

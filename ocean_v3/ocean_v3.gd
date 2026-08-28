@@ -336,6 +336,18 @@ var _performance_overlay_label: Label
 		maximum_optical_depth = value
 		_request_visual_sync()
 
+# Body color depth range is independent from Beer-Lambert absorption.
+@export_range(0.0, 20.0, 0.1) var water_body_depth_start_m: float = 0.5:
+	set(value):
+		water_body_depth_start_m = clampf(value, 0.0, 20.0)
+		_request_visual_sync()
+
+@export_range(0.1, 50.0, 0.1) var water_body_depth_end_m: float = 8.0:
+	set(value):
+		water_body_depth_end_m = clampf(value, 0.1, 50.0)
+		_request_visual_sync()
+
+# Deprecated compatibility field. Legacy only. No production effect.
 @export_range(0.1, 20.0, 0.1) var shallow_depth_range: float = 5.5:
 	set(value):
 		shallow_depth_range = value
@@ -349,6 +361,16 @@ var _performance_overlay_label: Label
 @export_range(0.5, 1.0, 0.01) var deep_water_alpha: float = 0.92:
 	set(value):
 		deep_water_alpha = value
+		_request_visual_sync()
+
+@export_range(0.0, 50.0, 0.1) var alpha_depth_fade_start_m: float = 0.5:
+	set(value):
+		alpha_depth_fade_start_m = clampf(value, 0.0, 50.0)
+		_request_visual_sync()
+
+@export_range(0.1, 100.0, 0.1) var alpha_depth_fade_end_m: float = 12.0:
+	set(value):
+		alpha_depth_fade_end_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
 
 @export_range(0.8, 1.0, 0.01) var horizon_water_alpha: float = 0.98:
@@ -426,9 +448,9 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR") var water_optics_debug_mode: int = 0:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 8)
+		water_optics_debug_mode = clampi(value, 0, 10)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1337,6 +1359,19 @@ func toggle_ocean_clipmap_lod_debug() -> void:
 		fft_module.toggle_clipmap_lod_debug()
 
 
+func toggle_ocean_clipmap_tracking_debug_mode() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_clipmap_tracking_debug_mode()
+
+
+func clipmap_tracking_debug_mode_name() -> String:
+	if Engine.is_editor_hint():
+		return "CONTINUOUS"
+	var fft_module := _runtime_fft_module()
+	return fft_module.clipmap_tracking_debug_mode_name() if fft_module != null else "UNAVAILABLE"
+
+
 func toggle_ocean_periodicity_debug() -> void:
 	var fft_module := _runtime_fft_module()
 	if fft_module != null:
@@ -1896,9 +1931,14 @@ func _sync_water_visual_parameters() -> void:
 	# shader no longer uses it in the production optics path.
 	material.set_shader_parameter(&"absorption_density", absorption_density)
 	material.set_shader_parameter(&"maximum_optical_depth", maximum_optical_depth)
+	# Legacy compatibility parameter; the production shader no longer uses it.
 	material.set_shader_parameter(&"shallow_depth_range", shallow_depth_range)
+	material.set_shader_parameter(&"water_body_depth_start_m", water_body_depth_start_m)
+	material.set_shader_parameter(&"water_body_depth_end_m", water_body_depth_end_m)
 	material.set_shader_parameter(&"near_water_alpha", near_water_alpha)
 	material.set_shader_parameter(&"deep_water_alpha", deep_water_alpha)
+	material.set_shader_parameter(&"alpha_depth_fade_start_m", alpha_depth_fade_start_m)
+	material.set_shader_parameter(&"alpha_depth_fade_end_m", alpha_depth_fade_end_m)
 	material.set_shader_parameter(&"horizon_water_alpha", horizon_water_alpha)
 	material.set_shader_parameter(&"opacity_distance_start", opacity_distance_start)
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
