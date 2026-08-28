@@ -180,6 +180,7 @@ uniform sampler2D reflection_sspr_texture : repeat_disable, filter_linear;
 uniform float reflection_sspr_distortion_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float reflection_sspr_edge_fade : hint_range(0.0, 0.25, 0.005) = 0.08;
 uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
+uniform bool reflection_sspr_hole_fill_enabled = true;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE.
@@ -1797,8 +1798,12 @@ void fragment() {
 			&& sspr_distorted_uv.y >= 0.0 && sspr_distorted_uv.y <= 1.0
 		);
 		float roughness_confidence = 1.0 - smoothstep(0.55, 0.90, water_reflection_roughness);
+		float sspr_validity = sspr_distorted_sample.a;
+		if (!reflection_sspr_hole_fill_enabled && sspr_validity < 0.99) {
+			sspr_validity = 0.0;
+		}
 		sspr_confidence = clamp(
-			sspr_distorted_sample.a
+			sspr_validity
 			* reflection_sspr_edge_confidence(sspr_distorted_uv)
 			* sspr_distortion_confidence
 			* reflection_sspr_slope_confidence(final_normal_world)

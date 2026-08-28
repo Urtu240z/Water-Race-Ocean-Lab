@@ -362,6 +362,11 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_slope_fade = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
+@export var reflection_sspr_hole_fill_enabled: bool = true:
+	set(value):
+		reflection_sspr_hole_fill_enabled = value
+		_request_visual_sync()
+
 
 @export_group("Whitecaps Foam")
 @export var foam_enabled: bool = true:
@@ -1462,6 +1467,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_sspr_distortion_strength", reflection_sspr_distortion_strength)
 	material.set_shader_parameter(&"reflection_sspr_edge_fade", reflection_sspr_edge_fade)
 	material.set_shader_parameter(&"reflection_sspr_slope_fade", reflection_sspr_slope_fade)
+	material.set_shader_parameter(&"reflection_sspr_hole_fill_enabled", reflection_sspr_hole_fill_enabled)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
