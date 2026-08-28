@@ -280,6 +280,7 @@ var _surface_foam_mid_history_solver = null
 var _performance_spectral_enabled := true
 var _performance_crest_foam_solver_enabled := true
 var _performance_surface_foam_solver_enabled := true
+var _performance_mid_fold_history_enabled := true
 var _performance_surface_foam_render_enabled := true
 var _performance_prebreak_enabled := true
 var _performance_breakers_enabled := true
@@ -476,7 +477,7 @@ func _process(delta: float) -> void:
 		# Independent fixed-rate scheduler: the material keeps its last completed
 		# field while this J-only FFT advances in small pass batches.
 		RenderingServer.call_on_render_thread(_surface_foam_solver.advance.bind(delta))
-	if _performance_spectral_enabled and _performance_surface_foam_solver_enabled and _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+	if _performance_spectral_enabled and _performance_mid_fold_history_enabled and _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.advance.bind(delta))
 	_dispatch_requested = false
 
@@ -486,11 +487,12 @@ func toggle_enabled() -> void:
 
 
 func set_performance_profile(profile: Dictionary) -> void:
-	## Runtime gates for PERF-1A. Resources stay resident; toggles only skip work
+	## Runtime gates for PERF-2A. Resources stay resident; toggles only skip work
 	## or switch shader inputs to deterministic neutral paths.
 	_performance_spectral_enabled = bool(profile.get("spectral", true))
 	_performance_crest_foam_solver_enabled = bool(profile.get("crest_foam_solver", true))
 	_performance_surface_foam_solver_enabled = bool(profile.get("surface_foam_solver", true))
+	_performance_mid_fold_history_enabled = bool(profile.get("mid_fold_history", true))
 	_performance_surface_foam_render_enabled = bool(profile.get("surface_foam_render", true))
 	_performance_prebreak_enabled = bool(profile.get("prebreak", true))
 	_performance_breakers_enabled = bool(profile.get("breakers", true))
@@ -520,7 +522,7 @@ func set_performance_profile(profile: Dictionary) -> void:
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
+			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_mid_fold_history_enabled,
 			_surface_foam_update_hz,
 			_surface_foam_birth_attack_s,
 			_surface_foam_lifetime_s,
@@ -536,6 +538,7 @@ func performance_profile() -> Dictionary:
 		"coastal": _coastal_performance_enabled,
 		"crest_foam_solver": _performance_crest_foam_solver_enabled,
 		"surface_foam_solver": _performance_surface_foam_solver_enabled,
+		"mid_fold_history": _performance_mid_fold_history_enabled,
 		"surface_foam_render": _performance_surface_foam_render_enabled,
 		"prebreak": _performance_prebreak_enabled,
 		"breakers": _performance_breakers_enabled,
@@ -1738,7 +1741,7 @@ func _initialize_surface_foam_mid_history() -> void:
 		_cascades[2].config.resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-		_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
+		_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_mid_fold_history_enabled,
 		_surface_foam_update_hz,
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
@@ -1890,7 +1893,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
+			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_mid_fold_history_enabled,
 			_surface_foam_update_hz,
 			_surface_foam_birth_attack_s,
 			_surface_foam_lifetime_s,

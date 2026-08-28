@@ -49,6 +49,7 @@ uniform bool module_enabled = true;
 uniform bool perf_spectral_enabled = true;
 uniform bool perf_crest_foam_solver_enabled = true;
 uniform bool perf_surface_foam_solver_enabled = true;
+uniform bool perf_mid_fold_history_enabled = true;
 uniform bool perf_surface_foam_render_enabled = true;
 uniform bool perf_prebreak_enabled = true;
 uniform bool clipmap_lod_debug = false;
@@ -2058,11 +2059,13 @@ void fragment() {
 			surface_foam_mask = clamp(surface_foam_final_no_edge * (1.0 - surface_foam_edge_fade), 0.0, 1.0);
 			// The MID Jacobian updates this persistent eligibility field in compute.
 			// Its release is physical-time based, never tied to MID render LOD/fade.
-			surface_foam_mid_fold_history_value = textureLod(
-				surface_foam_mid_fold_history,
-				spectrum_uv(ocean_base_xz, domain_mid_m),
-				0.0
-			).r;
+			if (perf_mid_fold_history_enabled) {
+				surface_foam_mid_fold_history_value = textureLod(
+					surface_foam_mid_fold_history,
+					spectrum_uv(ocean_base_xz, domain_mid_m),
+					0.0
+				).r;
+			}
 			surface_foam_mask *= surface_foam_mid_fold_history_value;
 		}
 		foam_mask = 1.0 - (1.0 - crest_foam_mask) * (1.0 - surface_foam_mask);

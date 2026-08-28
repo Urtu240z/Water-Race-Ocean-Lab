@@ -17,6 +17,8 @@ const PERF_PRESET_NO_SSPR := &"NO_SSPR"
 const PERF_PRESET_NO_FOAM := &"NO_FOAM"
 const PERF_PRESET_NO_COASTAL := &"NO_COASTAL"
 const PERF_PRESET_NO_BREAKERS := &"NO_BREAKERS"
+const PERF_PRESET_NO_CREST_FOAM := &"NO_CREST_FOAM"
+const PERF_PRESET_NO_MID_FOLD_HISTORY := &"NO_MID_FOLD_HISTORY"
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
 var _applying_wave_preset := false
@@ -72,6 +74,10 @@ var _performance_overlay_label: Label
 @export var perf_enable_surface_foam_solver := true:
 	set(value):
 		perf_enable_surface_foam_solver = value
+		_request_performance_sync()
+@export var perf_enable_mid_fold_history := true:
+	set(value):
+		perf_enable_mid_fold_history = value
 		_request_performance_sync()
 @export var perf_enable_surface_foam_render := true:
 	set(value):
@@ -1010,7 +1016,7 @@ func set_performance_profile(profile: Dictionary) -> void:
 	## Applies only the runtime profiling gates. Authored controls remain intact.
 	for key in [
 		"spectral", "coastal", "crest_foam_solver", "surface_foam_solver",
-		"surface_foam_render", "prebreak", "breakers", "sspr", "refraction"
+		"mid_fold_history", "surface_foam_render", "prebreak", "breakers", "sspr", "refraction"
 	]:
 		if profile.has(key):
 			set("perf_enable_%s" % key, bool(profile[key]))
@@ -1031,7 +1037,12 @@ func apply_performance_preset(preset: StringName) -> bool:
 		"NO_FOAM":
 			profile["crest_foam_solver"] = false
 			profile["surface_foam_solver"] = false
+			profile["mid_fold_history"] = false
 			profile["surface_foam_render"] = false
+		"NO_CREST_FOAM":
+			profile["crest_foam_solver"] = false
+		"NO_MID_FOLD_HISTORY":
+			profile["mid_fold_history"] = false
 		"NO_COASTAL":
 			profile["coastal"] = false
 			profile["breakers"] = false
@@ -1048,7 +1059,7 @@ func apply_performance_preset(preset: StringName) -> bool:
 
 func performance_preset_name() -> String:
 	var current := performance_profile()
-	for preset in [PERF_PRESET_FULL, PERF_PRESET_BASE, PERF_PRESET_NO_SSPR, PERF_PRESET_NO_FOAM, PERF_PRESET_NO_COASTAL, PERF_PRESET_NO_BREAKERS]:
+	for preset in [PERF_PRESET_FULL, PERF_PRESET_BASE, PERF_PRESET_NO_SSPR, PERF_PRESET_NO_FOAM, PERF_PRESET_NO_COASTAL, PERF_PRESET_NO_BREAKERS, PERF_PRESET_NO_CREST_FOAM, PERF_PRESET_NO_MID_FOLD_HISTORY]:
 		var expected := _full_performance_profile()
 		match preset:
 			&"BASE": expected = _base_performance_profile()
@@ -1056,7 +1067,10 @@ func performance_preset_name() -> String:
 			&"NO_FOAM":
 				expected["crest_foam_solver"] = false
 				expected["surface_foam_solver"] = false
+				expected["mid_fold_history"] = false
 				expected["surface_foam_render"] = false
+			&"NO_CREST_FOAM": expected["crest_foam_solver"] = false
+			&"NO_MID_FOLD_HISTORY": expected["mid_fold_history"] = false
 			&"NO_COASTAL":
 				expected["coastal"] = false
 				expected["breakers"] = false
@@ -1075,6 +1089,7 @@ func performance_profile() -> Dictionary:
 		"coastal": perf_enable_coastal,
 		"crest_foam_solver": perf_enable_crest_foam_solver,
 		"surface_foam_solver": perf_enable_surface_foam_solver,
+		"mid_fold_history": perf_enable_mid_fold_history,
 		"surface_foam_render": perf_enable_surface_foam_render,
 		"prebreak": perf_enable_prebreak,
 		"breakers": perf_enable_breakers,
@@ -1090,7 +1105,7 @@ func toggle_performance_overlay() -> void:
 func _full_performance_profile() -> Dictionary:
 	return {
 		"spectral": true, "coastal": true, "crest_foam_solver": true,
-		"surface_foam_solver": true, "surface_foam_render": true,
+		"surface_foam_solver": true, "mid_fold_history": true, "surface_foam_render": true,
 		"prebreak": true, "breakers": true, "sspr": true, "refraction": true,
 	}
 
@@ -1099,7 +1114,7 @@ func _base_performance_profile() -> Dictionary:
 	## Minimum valid surface: spectral surface only, with optional runtime passes off.
 	return {
 		"spectral": true, "coastal": false, "crest_foam_solver": false,
-		"surface_foam_solver": false, "surface_foam_render": false,
+		"surface_foam_solver": false, "mid_fold_history": false, "surface_foam_render": false,
 		"prebreak": false, "breakers": false, "sspr": false, "refraction": false,
 	}
 
@@ -1164,6 +1179,7 @@ func _update_performance_overlay() -> void:
 		"COASTAL        %s" % _on_off(profile["coastal"]),
 		"CREST FOAM     %s" % _on_off(profile["crest_foam_solver"]),
 		"FOAM SOLVER    %s" % _on_off(profile["surface_foam_solver"]),
+		"MID HISTORY    %s" % _on_off(profile["mid_fold_history"]),
 		"FOAM RENDER    %s" % _on_off(profile["surface_foam_render"]),
 		"PREBREAK       %s" % _on_off(profile["prebreak"]),
 		"BREAKERS       %s" % _on_off(profile["breakers"]),
@@ -1884,6 +1900,9 @@ func _sync_water_visual_parameters() -> void:
 	if foam_micro_texture_ready:
 		material.set_shader_parameter(&"surface_foam_micro_texture", surface_foam_micro_detail)
 	material.set_shader_parameter(&"surface_foam_enabled", surface_foam_enabled)
+	# PERF-2A: MID fold history is a separate compute/render gate. When disabled,
+	# the shader must use a neutral eligibility value instead of stale history.
+	material.set_shader_parameter(&"perf_mid_fold_history_enabled", perf_enable_mid_fold_history)
 	material.set_shader_parameter(&"surface_foam_stochastic_deperiodization_enabled", surface_foam_stochastic_deperiodization_enabled)
 	material.set_shader_parameter(&"surface_foam_stochastic_cell_size_m", surface_foam_stochastic_cell_size_m)
 	material.set_shader_parameter(&"surface_foam_whitecap", surface_foam_whitecap)
