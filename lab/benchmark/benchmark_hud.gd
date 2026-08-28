@@ -11,9 +11,6 @@ func _process(_delta: float) -> void:
 	var frame_time_ms := 1000.0 / maxf(float(fps), 1.0)
 	if lab_main != null and lab_main.has_method(&"smoothed_frame_time_ms"):
 		frame_time_ms = float(lab_main.call("smoothed_frame_time_ms"))
-	var planar_lines: Array = []
-	if lab_main != null and lab_main.has_method(&"planar_hud_lines"):
-		planar_lines = lab_main.call("planar_hud_lines")
 	var viewport_size := get_viewport().get_visible_rect().size
 	var fft_module := get_tree().get_first_node_in_group(&"ocean_fft")
 	var fft_line := "FFT: unavailable"
@@ -77,8 +74,6 @@ func _process(_delta: float) -> void:
 		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
-	for planar_line in planar_lines:
-		lines.append(str(planar_line))
 	metrics_label.text = "\n".join(lines)
 
 

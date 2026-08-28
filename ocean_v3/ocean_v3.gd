@@ -10,9 +10,6 @@ const BASE_WAVE_PRESET_PATHS := [
 	"res://ocean_v3/presets/waves/race.tres",
 	"res://ocean_v3/presets/waves/rough.tres",
 ]
-const PLANAR_REFLECTION_SCRIPT := preload("res://ocean_v3/rendering/reflection/ocean_planar_reflection_3d.gd")
-const PLANAR_REFLECTION_DEFAULT_CULL_MASK := ((1 << 20) - 1) & ~(1 << 1)
-
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
 var _applying_wave_preset := false
@@ -43,11 +40,11 @@ var _wave_transition_start_short_geometry := 0.25
 @export_tool_button("Apply Wave Changes", "Play") var apply_wave_changes_button = apply_wave_changes
 @export_tool_button("Save Current Wave Preset", "Save") var save_current_wave_preset_button = save_current_wave_preset
 
-@export_category("Coastal")
+@export_group("Coastal")
 @export var coastal_bake_asset: CoastalBakeAsset
 @export var coastal_enabled_on_start := true
 
-@export_category("Wave Spectrum / LONG")
+@export_group("Wave Spectrum / LONG")
 @export_range(0.0, 10.0, 0.01) var long_target_hs_m := 0.59:
 	set(value): long_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
 @export_range(0.0, 4.0, 0.01) var long_choppiness := 1.0:
@@ -65,7 +62,7 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 1.0, 0.01) var long_detail := 1.0:
 	set(value): long_detail = value; _mark_wave_spectrum_dirty()
 
-@export_category("Wave Spectrum / MID")
+@export_group("Wave Spectrum / MID")
 @export_range(0.0, 10.0, 0.01) var mid_target_hs_m := 0.25:
 	set(value): mid_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
 @export_range(0.0, 4.0, 0.01) var mid_choppiness := 0.7:
@@ -83,7 +80,7 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 1.0, 0.01) var mid_detail := 1.0:
 	set(value): mid_detail = value; _mark_wave_spectrum_dirty()
 
-@export_category("Wave Spectrum / SHORT")
+@export_group("Wave Spectrum / SHORT")
 @export_range(0.0, 10.0, 0.01) var short_target_hs_m := 0.05:
 	set(value): short_target_hs_m = maxf(value, 0.0); _mark_wave_spectrum_dirty()
 @export_range(0.0, 4.0, 0.01) var short_choppiness := 0.35:
@@ -101,7 +98,7 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 1.0, 0.01) var short_detail := 1.0:
 	set(value): short_detail = value; _mark_wave_spectrum_dirty()
 
-@export_category("Wave Spectrum / LONG Advanced")
+@export_group("Wave Spectrum / LONG Advanced")
 @export_range(0.01, 1000.0, 0.01) var long_min_wavelength_m := 16.0:
 	set(value): long_min_wavelength_m = value; _mark_wave_spectrum_dirty()
 @export_range(0.01, 2000.0, 0.01) var long_max_wavelength_m := 128.0:
@@ -111,7 +108,7 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 10.0, 0.01) var long_short_wave_damping_m := 0.35:
 	set(value): long_short_wave_damping_m = value; _mark_wave_spectrum_dirty()
 
-@export_category("Wave Spectrum / MID Advanced")
+@export_group("Wave Spectrum / MID Advanced")
 @export_range(0.01, 1000.0, 0.01) var mid_min_wavelength_m := 4.0:
 	set(value): mid_min_wavelength_m = value; _mark_wave_spectrum_dirty()
 @export_range(0.01, 2000.0, 0.01) var mid_max_wavelength_m := 20.0:
@@ -121,7 +118,7 @@ var _wave_transition_start_short_geometry := 0.25
 @export_range(0.0, 10.0, 0.01) var mid_short_wave_damping_m := 0.35:
 	set(value): mid_short_wave_damping_m = value; _mark_wave_spectrum_dirty()
 
-@export_category("Wave Spectrum / SHORT Advanced")
+@export_group("Wave Spectrum / SHORT Advanced")
 @export_range(0.01, 1000.0, 0.01) var short_min_wavelength_m := 0.5:
 	set(value): short_min_wavelength_m = value; _mark_wave_spectrum_dirty()
 @export_range(0.01, 2000.0, 0.01) var short_max_wavelength_m := 5.0:
@@ -248,11 +245,6 @@ var _wave_transition_start_short_geometry := 0.25
 		horizon_water_color = value
 		_request_visual_sync()
 
-@export var reflection_tint: Color = Color(0.36, 0.70, 0.86, 1.0):
-	set(value):
-		reflection_tint = value
-		_request_visual_sync()
-
 @export var trough_tint: Color = Color(0.002, 0.025, 0.075, 1.0):
 	set(value):
 		trough_tint = value
@@ -303,128 +295,50 @@ var _wave_transition_start_short_geometry := 0.25
 		opacity_distance_end = value
 		_request_visual_sync()
 
-@export_range(0.5, 12.0, 0.1) var fresnel_power: float = 4.8:
-	set(value):
-		fresnel_power = value
-		_request_visual_sync()
-
-@export_range(0.0, 1.0, 0.01) var reflection_strength: float = 0.82:
-	set(value):
-		reflection_strength = value
-		_request_visual_sync()
-
 @export_range(0.0, 0.05, 0.0005) var refraction_strength: float = 0.009:
 	set(value):
 		refraction_strength = value
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var near_roughness: float = 0.055:
+@export_group("Reflection")
+@export_range(0.0, 1.0, 0.005) var reflection_min_roughness: float = 0.035:
 	set(value):
-		near_roughness = value
+		reflection_min_roughness = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var horizon_roughness: float = 0.23:
+@export_range(0.0, 1.0, 0.005) var reflection_base_roughness: float = 0.055:
 	set(value):
-		horizon_roughness = value
+		reflection_base_roughness = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var water_specular: float = 0.88:
+@export_range(0.0, 1.0, 0.005) var reflection_distance_roughness: float = 0.23:
 	set(value):
-		water_specular = value
+		reflection_distance_roughness = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-
-@export_group("Reflections")
-@export var wave_reflection_response_enabled: bool = true:
+@export_range(0.0, 1.0, 0.005) var reflection_detail_roughness_gain: float = 0.10:
 	set(value):
-		wave_reflection_response_enabled = value
+		reflection_detail_roughness_gain = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.005) var reflection_calm_roughness: float = 0.035:
+@export_range(0.0, 1.0, 0.005) var reflection_distance_roughness_gain: float = 1.0:
 	set(value):
-		reflection_calm_roughness = clampf(value, 0.0, 1.0)
+		reflection_distance_roughness_gain = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 1.0, 0.01) var reflection_wave_roughness_gain: float = 0.35:
+@export_range(0.0, 1.0, 0.005) var reflection_pixel_footprint_gain: float = 1.0:
 	set(value):
-		reflection_wave_roughness_gain = maxf(value, 0.0)
+		reflection_pixel_footprint_gain = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 4.0, 0.01) var reflection_slope_start: float = 0.12:
+@export_range(0.0, 1.0, 0.005) var reflection_slope_variance_gain: float = 0.35:
 	set(value):
-		reflection_slope_start = maxf(value, 0.0)
+		reflection_slope_variance_gain = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 4.0, 0.01) var reflection_slope_end: float = 0.55:
+@export var reflection_roughness_distance_m: Vector2 = Vector2(80.0, 220.0):
 	set(value):
-		reflection_slope_end = maxf(value, 0.0)
-		_request_visual_sync()
-
-@export_range(0.0, 1.0, 0.01) var reflection_zone_calm_influence: float = 0.85:
-	set(value):
-		reflection_zone_calm_influence = clampf(value, 0.0, 1.0)
-		_request_visual_sync()
-
-
-@export_group("Planar Reflection")
-@export var planar_reflection_enabled: bool = true:
-	set(value):
-		planar_reflection_enabled = value
-		_request_visual_sync()
-
-@export_range(0.10, 1.0, 0.05) var planar_reflection_resolution_scale: float = 0.25:
-	set(value):
-		planar_reflection_resolution_scale = clampf(value, 0.10, 1.0)
-		_request_visual_sync()
-
-@export_range(1.0, 2.0, 0.01) var planar_reflection_overscan: float = 1.15:
-	set(value):
-		planar_reflection_overscan = clampf(value, 1.0, 2.0)
-		_request_visual_sync()
-
-@export_enum("Mirrored Perspective:0", "Off-Axis Frustum:1", "True Oblique:2") var planar_reflection_projection_mode: int = 0:
-	set(value):
-		planar_reflection_projection_mode = clampi(value, 0, 2)
-		_request_visual_sync()
-
-@export_range(0.0, 1.0, 0.01) var planar_reflection_clip_bias_m: float = 0.10:
-	set(value):
-		planar_reflection_clip_bias_m = clampf(value, 0.0, 1.0)
-		_request_visual_sync()
-
-@export_enum("15 Hz:15", "30 Hz:30", "60 Hz:60", "Every Frame:0") var planar_reflection_update_hz: int = 30:
-	set(value):
-		planar_reflection_update_hz = 0 if value <= 0 else 15 if value <= 15 else 30 if value <= 30 else 60
-		_request_visual_sync()
-
-@export_range(50.0, 5000.0, 10.0) var planar_reflection_max_distance_m: float = 500.0:
-	set(value):
-		planar_reflection_max_distance_m = clampf(value, 50.0, 5000.0)
-		_request_visual_sync()
-
-@export_range(1.0, 500.0, 1.0) var planar_reflection_max_camera_height_m: float = 75.0:
-	set(value):
-		planar_reflection_max_camera_height_m = clampf(value, 1.0, 500.0)
-		_request_visual_sync()
-
-@export_range(0.0, 1.0, 0.01) var planar_reflection_strength: float = 0.55:
-	set(value):
-		planar_reflection_strength = clampf(value, 0.0, 1.0)
-		_request_visual_sync()
-
-@export_range(0.0, 0.2, 0.001) var planar_reflection_distortion_strength: float = 0.035:
-	set(value):
-		planar_reflection_distortion_strength = maxf(value, 0.0)
-		_request_visual_sync()
-
-@export_range(0, 1048575, 1) var planar_reflection_cull_mask: int = PLANAR_REFLECTION_DEFAULT_CULL_MASK:
-	set(value):
-		planar_reflection_cull_mask = value
-		_request_visual_sync()
-
-@export_range(0.001, 0.5, 0.005) var planar_reflection_edge_fade: float = 0.08:
-	set(value):
-		planar_reflection_edge_fade = clampf(value, 0.001, 0.5)
+		reflection_roughness_distance_m = Vector2(maxf(value.x, 0.0), maxf(value.y, value.x + 0.001))
 		_request_visual_sync()
 
 
@@ -565,7 +479,7 @@ var _wave_transition_start_short_geometry := 0.25
 		_request_visual_sync()
 
 
-@export_category("Whitecaps Foam / Crest Filigree")
+@export_group("Whitecaps Foam / Crest Filigree")
 @export var crest_filigree_enabled := true:
 	set(value):
 		crest_filigree_enabled = value
@@ -602,7 +516,7 @@ var _wave_transition_start_short_geometry := 0.25
 		_request_visual_sync()
 
 
-@export_category("Whitecaps Foam / Surface Foam")
+@export_group("Whitecaps Foam / Surface Foam")
 @export var surface_foam_enabled: bool = true:
 	set(value):
 		surface_foam_enabled = value
@@ -735,7 +649,7 @@ var _wave_transition_start_short_geometry := 0.25
 		surface_foam_specular = value
 		_request_visual_sync()
 
-@export_category("Whitecaps Foam / Surface Foam Spectrum")
+@export_group("Whitecaps Foam / Surface Foam Spectrum")
 @export_enum("256:256", "512:512", "1024:1024") var surface_foam_fft_resolution: int = 512:
 	set(value):
 		surface_foam_fft_resolution = _normalize_resolution_enum(value)
@@ -794,7 +708,7 @@ var _wave_transition_start_short_geometry := 0.25
 		surface_foam_detail = value
 		_request_visual_sync()
 
-@export_category("Whitecaps Foam / Surface Foam Micro Detail")
+@export_group("Whitecaps Foam / Surface Foam Micro Detail")
 @export var surface_foam_micro_detail: Texture2D:
 	set(value):
 		surface_foam_micro_detail = value
@@ -836,7 +750,7 @@ var _wave_transition_start_short_geometry := 0.25
 		foam_detail_contribution = value
 		_request_visual_sync()
 
-@export_category("Whitecaps Foam Debug")
+@export_group("Whitecaps Foam Debug")
 @export_enum("OFF", "CREST_FINAL", "SURFACE_HISTORY", "SURFACE_MACRO", "SURFACE_FINAL", "SURFACE_DIRECT_RAW", "SURFACE_DEPERIODIZED_RAW", "SURFACE_PLUS_CREST", "FOAM_NORMAL", "SURFACE_MID_FOLD", "CREST_FILIGREE_SOURCE", "CREST_FILIGREE_MASK", "CREST_FRESH_WEBBED", "CREST_RESIDUAL_WEBBED", "CREST_FRESH_RAW", "CREST_RESIDUAL_RAW") var foam_debug_mode: int = 0:
 	set(value):
 		foam_debug_mode = clampi(value, 0, 15)
@@ -853,7 +767,7 @@ var _sea_state_zone_uniform_data3 := PackedVector4Array()
 var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
-var _planar_reflection: Node
+var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
 
 
 func _ready() -> void:
@@ -866,36 +780,7 @@ func _ready() -> void:
 	if wave_preset != null:
 		apply_selected_wave_preset()
 	_configure_coastal_bake_asset()
-	_ensure_planar_reflection()
 	call_deferred(&"_flush_visual_sync")
-
-
-func _ensure_planar_reflection() -> void:
-	if Engine.is_editor_hint() or (_planar_reflection != null and is_instance_valid(_planar_reflection)):
-		return
-	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
-	if surface == null:
-		return
-	var planar_reflection := PLANAR_REFLECTION_SCRIPT.new() as Node
-	planar_reflection.name = "OceanPlanarReflection3D"
-	add_child(planar_reflection)
-	_planar_reflection = planar_reflection
-	planar_reflection.call("initialize", self, surface.get_surface_material())
-	planar_reflection.call(
-		"set_settings",
-		planar_reflection_enabled,
-		planar_reflection_resolution_scale,
-		planar_reflection_overscan,
-		planar_reflection_projection_mode,
-		planar_reflection_clip_bias_m,
-		planar_reflection_update_hz,
-		planar_reflection_max_distance_m,
-		planar_reflection_max_camera_height_m,
-		planar_reflection_strength,
-		planar_reflection_distortion_strength,
-		planar_reflection_cull_mask,
-		planar_reflection_edge_fade
-	)
 
 
 func _configure_coastal_bake_asset() -> void:
@@ -1073,25 +958,21 @@ func cycle_reflection_debug() -> void:
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "ROUGHNESS", "WAVE_ACTIVITY", "ZONE_CALMNESS", "PLANAR_UV", "PLANAR_WEIGHT", "PLANAR_ONLY"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE"][_reflection_debug_mode]
 
 
-func planar_reflection_capture_rate_hz() -> float:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return float(_planar_reflection.call("capture_rate_hz"))
-	return 0.0
-
-
-func planar_reflection_projection_label() -> String:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return str(_planar_reflection.call("projection_mode_label"))
-	return "PERSPECTIVE"
-
-
-func planar_reflection_oblique_engine_available() -> bool:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return bool(_planar_reflection.call("oblique_engine_available"))
-	return false
+func _sync_sun_direction() -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return
+	var lights := scene_root.find_children("*", "DirectionalLight3D", true, false)
+	if lights.is_empty():
+		return
+	var sun := lights[0] as DirectionalLight3D
+	if sun != null:
+		# DirectionalLight3D emits along local -Z; the BRDF helper needs the
+		# direction from the surface toward the light.
+		_sun_direction_world = sun.global_transform.basis.z.normalized()
 
 
 func _refresh_sea_state_zones() -> void:
@@ -1480,6 +1361,7 @@ func _sync_water_visual_parameters() -> void:
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material) or material.shader == null:
 		return
+	_sync_sun_direction()
 	var effective_foam_debug_mode := foam_debug_mode
 
 	material.set_shader_parameter(&"sea_state_zone_count", _sea_state_zone_descriptors.size())
@@ -1523,7 +1405,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_water_color", shallow_water_color)
 	material.set_shader_parameter(&"deep_water_color", deep_water_color)
 	material.set_shader_parameter(&"horizon_water_color", horizon_water_color)
-	material.set_shader_parameter(&"reflection_tint", reflection_tint)
 	material.set_shader_parameter(&"trough_tint", trough_tint)
 	material.set_shader_parameter(&"crest_tint", crest_tint)
 	material.set_shader_parameter(&"absorption_density", absorption_density)
@@ -1534,37 +1415,17 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"horizon_water_alpha", horizon_water_alpha)
 	material.set_shader_parameter(&"opacity_distance_start", opacity_distance_start)
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
-	material.set_shader_parameter(&"fresnel_power", fresnel_power)
-	material.set_shader_parameter(&"reflection_strength", reflection_strength)
 	material.set_shader_parameter(&"refraction_strength", refraction_strength)
-	# The public names are intentionally editor-friendly aliases for the shader's
-	# near/far adaptive roughness uniforms.
-	material.set_shader_parameter(&"ocean_roughness_near", near_roughness)
-	material.set_shader_parameter(&"ocean_roughness_far", horizon_roughness)
-	material.set_shader_parameter(&"water_specular", water_specular)
-	material.set_shader_parameter(&"wave_reflection_response_enabled", wave_reflection_response_enabled)
-	material.set_shader_parameter(&"reflection_calm_roughness", reflection_calm_roughness)
-	material.set_shader_parameter(&"reflection_wave_roughness_gain", reflection_wave_roughness_gain)
-	material.set_shader_parameter(&"reflection_slope_start", reflection_slope_start)
-	material.set_shader_parameter(&"reflection_slope_end", reflection_slope_end)
-	material.set_shader_parameter(&"reflection_zone_calm_influence", reflection_zone_calm_influence)
+	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
+	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
+	material.set_shader_parameter(&"reflection_distance_roughness", reflection_distance_roughness)
+	material.set_shader_parameter(&"reflection_detail_roughness_gain", reflection_detail_roughness_gain)
+	material.set_shader_parameter(&"reflection_distance_roughness_gain", reflection_distance_roughness_gain)
+	material.set_shader_parameter(&"reflection_pixel_footprint_gain", reflection_pixel_footprint_gain)
+	material.set_shader_parameter(&"reflection_slope_variance_gain", reflection_slope_variance_gain)
+	material.set_shader_parameter(&"reflection_roughness_distance_m", reflection_roughness_distance_m)
+	material.set_shader_parameter(&"reflection_sun_direction_world", _sun_direction_world)
 	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		_planar_reflection.call(
-			"set_settings",
-			planar_reflection_enabled,
-			planar_reflection_resolution_scale,
-			planar_reflection_overscan,
-			planar_reflection_projection_mode,
-			planar_reflection_clip_bias_m,
-			planar_reflection_update_hz,
-			planar_reflection_max_distance_m,
-			planar_reflection_max_camera_height_m,
-			planar_reflection_strength,
-			planar_reflection_distortion_strength,
-			planar_reflection_cull_mask,
-			planar_reflection_edge_fade
-		)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)

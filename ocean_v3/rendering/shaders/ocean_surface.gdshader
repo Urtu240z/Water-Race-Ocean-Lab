@@ -103,12 +103,6 @@ uniform float ocean_crest_sharpen_mid_weight = 0.5;
 uniform bool ocean_crest_sharpen_debug = false;
 // 5R.2: normal shading per-fragment + material físico de agua.
 uniform bool ocean_normal_fragment = false;   // A/B: FRAGMENT (true) vs VERTEX (false).
-// 5R.3A: roughness adaptativa por distancia/footprint. Cerca ~near, lejos o
-// subpixel ~far. Sin texturas nuevas; sólo operaciones escalares en fragment.
-uniform float ocean_roughness_near = 0.055;
-uniform float ocean_roughness_far = 0.23;
-uniform vec2 ocean_roughness_distance_m = vec2(80.0, 220.0);
-
 // 5R.3B: SHORT deja de dominar la malla. LONG+MID forman el cuerpo de ola;
 // SHORT conserva una aportación física pequeña y su normal VERTEX queda fuera
 // por defecto para no dibujar los anillos/cuadrados del clipmap.
@@ -148,7 +142,6 @@ uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nea
 uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
 uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
 uniform vec4 horizon_water_color : source_color = vec4(0.025, 0.22, 0.34, 1.0);
-uniform vec4 reflection_tint : source_color = vec4(0.36, 0.70, 0.86, 1.0);
 uniform vec4 trough_tint : source_color = vec4(0.002, 0.025, 0.075, 1.0);
 uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
@@ -159,40 +152,23 @@ uniform float deep_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.92;
 uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
-uniform float fresnel_power : hint_range(0.5, 12.0, 0.1) = 4.8;
-uniform float reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.82;
 uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
-uniform float water_specular : hint_range(0.0, 1.0, 0.01) = 0.88;
 
-// Reflection response is deliberately material/PBR driven. The environment or
-// a standard ReflectionProbe supplies the reflected radiance; these controls
-// only shape the water lobe from the physical FFT normal and local sea state.
-uniform bool wave_reflection_response_enabled = true;
-uniform float reflection_calm_roughness : hint_range(0.0, 1.0, 0.005) = 0.035;
-uniform float reflection_wave_roughness_gain : hint_range(0.0, 1.0, 0.01) = 0.35;
-uniform float reflection_slope_start : hint_range(0.0, 4.0, 0.01) = 0.12;
-uniform float reflection_slope_end : hint_range(0.0, 4.0, 0.01) = 0.55;
-uniform float reflection_zone_calm_influence : hint_range(0.0, 1.0, 0.01) = 0.85;
-// 0 OFF, 1 ROUGHNESS, 2 WAVE_ACTIVITY, 3 ZONE_CALMNESS,
-// 4 PLANAR_UV, 5 PLANAR_WEIGHT, 6 PLANAR_ONLY.
+// Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
+// final NORMAL, ROUGHNESS and SPECULAR to provide environment radiance and
+// direct-light specular; no reflection texture is sampled here.
+uniform float reflection_min_roughness : hint_range(0.0, 1.0, 0.005) = 0.035;
+uniform float reflection_base_roughness : hint_range(0.0, 1.0, 0.005) = 0.055;
+uniform float reflection_distance_roughness : hint_range(0.0, 1.0, 0.005) = 0.23;
+uniform float reflection_detail_roughness_gain : hint_range(0.0, 1.0, 0.005) = 0.10;
+uniform float reflection_distance_roughness_gain : hint_range(0.0, 1.0, 0.005) = 1.0;
+uniform float reflection_pixel_footprint_gain : hint_range(0.0, 1.0, 0.005) = 1.0;
+uniform float reflection_slope_variance_gain : hint_range(0.0, 1.0, 0.005) = 0.35;
+uniform vec2 reflection_roughness_distance_m = vec2(80.0, 220.0);
+uniform vec3 reflection_sun_direction_world = vec3(0.0, 0.0, 1.0);
+// 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
+// 6 SLOPE_VARIANCE.
 uniform int reflection_debug_mode = 0;
-
-// Reflection 2: one world-anchored planar pass, with Environment/Sky remaining
-// the PBR fallback. The matrix is supplied by OceanPlanarReflection3D.
-uniform bool planar_reflection_enabled = false;
-uniform sampler2D planar_reflection_texture : repeat_disable, filter_linear;
-uniform mat4 planar_reflection_view_projection = mat4(1.0);
-// LAB diagnostic: all values are world-space and only affect planar lookup.
-uniform float planar_reflection_plane_y = 0.0;
-uniform int planar_reflection_anchor_mode = 0;
-uniform int planar_reflection_uv_orientation = 0;
-// External Mirror Geometry is captured by the normal main camera and already
-// occupies screen space; the regular planar path continues using the matrix.
-uniform bool planar_reflection_screen_space = false;
-uniform bool planar_reflection_screen_space_distortion = false;
-uniform float planar_reflection_strength : hint_range(0.0, 1.0, 0.01) = 0.55;
-uniform float planar_reflection_distortion_strength : hint_range(0.0, 0.2, 0.001) = 0.035;
-uniform float planar_reflection_edge_fade : hint_range(0.001, 0.5, 0.005) = 0.08;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
 // spectral Jacobian compression after each FFT assemble; controls below are
@@ -520,24 +496,97 @@ float sea_state_zone_calmness(float long_amplitude, float mid_amplitude,
 }
 
 
-float wave_reflection_activity(vec3 physical_normal) {
-	float physical_slope = length(physical_normal.xz) / max(physical_normal.y, 0.001);
-	float slope_start = min(reflection_slope_start, reflection_slope_end);
-	float slope_end = max(reflection_slope_start, reflection_slope_end);
-	return smoothstep(slope_start, max(slope_end, slope_start + 0.001), physical_slope);
+const float WATER_IOR = 1.333;
+const float WATER_F0 = 0.020373;
+// Godot 4.7 maps dielectric SPECULAR to F0 as 0.16 * SPECULAR^2.
+// sqrt(0.020373 / 0.16) gives the exact input for water IOR 1.333.
+const float WATER_SPECULAR_LEVEL = 0.356835;
+
+
+float physical_water_fresnel(vec3 normal, vec3 view_direction) {
+	float n_dot_v = clamp(dot(normalize(normal), normalize(view_direction)), 0.0, 1.0);
+	return WATER_F0 + (1.0 - WATER_F0) * pow(1.0 - n_dot_v, 5.0);
 }
 
 
-float wave_aware_reflection_roughness(float base_roughness, float wave_activity,
-		float zone_calmness) {
-	if (!wave_reflection_response_enabled) {
-		return clamp(base_roughness, 0.0, 1.0);
+vec2 reflection_unresolved_detail_metrics(vec2 world_xz, float footprint,
+		float mid_amplitude, float short_amplitude) {
+	float distance_to_camera = distance(world_xz, camera_world_xz);
+	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
+	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
+	float mid_texel_m = domain_mid_m / float(textureSize(normal_mid, 0).x);
+	float short_texel_m = domain_short_m / float(textureSize(normal_short, 0).x);
+	float mid_subpixel = smoothstep(mid_texel_m * 0.5, mid_texel_m * 2.0, footprint);
+	float short_subpixel = smoothstep(short_texel_m * 0.5, short_texel_m * 2.0, footprint);
+
+	vec2 mid_slope = slope_from_normal(normalize(textureLod(normal_mid,
+		spectrum_uv(world_xz, domain_mid_m), 0.0).rgb));
+	vec2 mid_average = vec2(0.0);
+	for (int index = 0; index < 4; index++) {
+		vec2 offset = index == 0 ? vec2(1.0, 1.0) : index == 1 ? vec2(1.0, -1.0) : index == 2 ? vec2(-1.0, 1.0) : vec2(-1.0, -1.0);
+		mid_average += slope_from_normal(normalize(textureLod(normal_mid,
+			spectrum_uv(world_xz + offset * mid_texel_m, domain_mid_m), 0.0).rgb));
 	}
-	float calm_target = clamp(reflection_calm_roughness, 0.0, 1.0);
-	float calm_mix = clamp(zone_calmness * reflection_zone_calm_influence, 0.0, 1.0);
-	float calm_base = mix(base_roughness, calm_target, calm_mix);
-	return clamp(calm_base + clamp(wave_activity, 0.0, 1.0)
-		* max(reflection_wave_roughness_gain, 0.0), 0.0, 1.0);
+	mid_average *= 0.25;
+
+	vec2 short_slope = slope_from_normal(normalize(textureLod(normal_short,
+		spectrum_uv(world_xz, domain_short_m), 0.0).rgb));
+	vec2 short_average = vec2(0.0);
+	for (int index = 0; index < 4; index++) {
+		vec2 offset = index == 0 ? vec2(1.0, 1.0) : index == 1 ? vec2(1.0, -1.0) : index == 2 ? vec2(-1.0, 1.0) : vec2(-1.0, -1.0);
+		short_average += slope_from_normal(normalize(textureLod(normal_short,
+			spectrum_uv(world_xz + offset * short_texel_m, domain_short_m), 0.0).rgb));
+	}
+	short_average *= 0.25;
+
+	float mid_variance = dot(mid_slope - mid_average, mid_slope - mid_average);
+	float short_variance = dot(short_slope - short_average, short_slope - short_average);
+	float mid_detail = 0.35 * mid_weight * clamp(mid_amplitude, 0.0, 2.0) * mid_subpixel;
+	float short_detail = 0.65 * short_weight * clamp(short_amplitude, 0.0, 2.0) * short_subpixel;
+	float detail_energy = clamp(mid_detail + short_detail, 0.0, 1.0);
+	float weighted_variance = 0.35 * mid_weight * mid_variance + 0.65 * short_weight * short_variance;
+	float variance_weight = 0.35 * mid_weight + 0.65 * short_weight;
+	float slope_variance = clamp(weighted_variance / max(variance_weight, 0.001), 0.0, 1.0);
+	return vec2(detail_energy, slope_variance);
+}
+
+
+float physical_ocean_roughness(float distance_to_camera, float footprint,
+		vec2 unresolved_detail_metrics) {
+	float distance_factor = smoothstep(
+		reflection_roughness_distance_m.x,
+		max(reflection_roughness_distance_m.y, reflection_roughness_distance_m.x + 0.001),
+		distance_to_camera);
+	float footprint_factor = smoothstep(0.5, 2.0, footprint / max(reflection_roughness_distance_m.x, 0.001));
+	float distance_contribution = clamp(distance_factor * reflection_distance_roughness_gain, 0.0, 1.0);
+	float footprint_contribution = clamp(footprint_factor * reflection_pixel_footprint_gain, 0.0, 1.0);
+	float distance_range = max(reflection_distance_roughness - reflection_base_roughness, 0.0);
+	float detail_roughness = unresolved_detail_metrics.x * reflection_detail_roughness_gain;
+	float slope_roughness = unresolved_detail_metrics.y * reflection_slope_variance_gain;
+	float spatial_roughness = reflection_base_roughness
+		+ distance_range * max(distance_contribution, footprint_contribution)
+		+ detail_roughness + slope_roughness;
+	return clamp(max(reflection_min_roughness, spatial_roughness), 0.0, 1.0);
+}
+
+
+float sun_specular_brdf(vec3 normal, vec3 view_direction, float roughness) {
+	vec3 light_direction = normalize(reflection_sun_direction_world);
+	vec3 half_vector = normalize(light_direction + view_direction);
+	float n_dot_v = max(dot(normal, view_direction), 0.001);
+	float n_dot_l = max(dot(normal, light_direction), 0.0);
+	float n_dot_h = max(dot(normal, half_vector), 0.0);
+	float v_dot_h = max(dot(view_direction, half_vector), 0.0);
+	if (n_dot_l <= 0.0 || n_dot_h <= 0.0) return 0.0;
+	float alpha = max(roughness * roughness, 0.0025);
+	float alpha_squared = alpha * alpha;
+	float distribution_denominator = n_dot_h * n_dot_h * (alpha_squared - 1.0) + 1.0;
+	float distribution = alpha_squared / max(3.14159265 * distribution_denominator * distribution_denominator, 0.0001);
+	float geometry_k = alpha * 0.5;
+	float geometry_view = n_dot_v / (n_dot_v * (1.0 - geometry_k) + geometry_k);
+	float geometry_light = n_dot_l / (n_dot_l * (1.0 - geometry_k) + geometry_k);
+	float fresnel = WATER_F0 + (1.0 - WATER_F0) * pow(1.0 - v_dot_h, 5.0);
+	return clamp(distribution * geometry_view * geometry_light * fresnel / max(4.0 * n_dot_v, 0.001), 0.0, 1.0);
 }
 
 vec3 sea_state_zone_displacement(vec3 value, float amplitude, float choppiness) {
@@ -1413,15 +1462,13 @@ void fragment() {
 	// Surface Detail is intentionally excluded because it is visual distortion,
 	// not physical wave activity.
 	float debug_camera_distance = distance(ocean_world_xz, camera_world_xz);
-	float debug_distance_factor = smoothstep(
-		ocean_roughness_distance_m.x,
-		ocean_roughness_distance_m.y,
-		debug_camera_distance);
-	float debug_wave_activity = wave_reflection_activity(normalize(derived_normal));
-	float debug_base_roughness = mix(
-		ocean_roughness_near, ocean_roughness_far, debug_distance_factor);
-	float debug_reflection_roughness = wave_aware_reflection_roughness(
-		debug_base_roughness, debug_wave_activity, zone_calmness);
+	float debug_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
+	vec2 debug_reflection_metrics = reflection_unresolved_detail_metrics(
+		ocean_base_xz, debug_footprint, zone_mid_amplitude, zone_short_amplitude);
+	float debug_slope_variance = debug_reflection_metrics.y;
+	float debug_reflection_roughness = physical_ocean_roughness(
+		debug_camera_distance, debug_footprint, debug_reflection_metrics);
+	float debug_sun_specular = 0.0;
 	// Keep Surface Foam's independent history/topology intact; only its
 	// presentation contribution is locally attenuated by the zone state.
 	float surface_foam_raw_topology = 0.0;
@@ -1557,8 +1604,8 @@ void fragment() {
 		foam_shape_gradient = foam_gradient_world(vec2(foam_mask, 0.0), ocean_world_xz);
 	}
 
-	// Build the final visual normal once. Reflection 2 uses this normal for
-	// distortion, while physical_wave_activity below still uses the FFT normal.
+	// Build the final visual normal once. The same normal feeds Godot's PBR
+	// environment and direct-light lobes; FFT remains the geometry authority.
 	vec3 shading_normal_world;
 	if (ocean_normal_fragment) {
 		shading_normal_world = pixel_ocean_normal(ocean_base_xz);
@@ -1608,116 +1655,22 @@ void fragment() {
 		float foam_micro_gain = 1.0 + foam_micro_normal_strength * foam_mask;
 		visual_normal = normalize(visual_normal + detail_offset_view * surface_normal_strength * foam_micro_gain);
 	}
-	vec3 final_visual_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
 	NORMAL = visual_normal;
-	float physical_wave_activity = wave_reflection_activity(shading_normal_world);
 
 	vec3 view_direction = normalize(VIEW);
-	float facing = clamp(dot(visual_normal, view_direction), 0.0, 1.0);
-	float fresnel = pow(1.0 - facing, fresnel_power);
+	debug_sun_specular = sun_specular_brdf(
+		normalize(visual_normal), view_direction, debug_reflection_roughness);
+	float fresnel = physical_water_fresnel(visual_normal, view_direction);
+	float reflection_pixel_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
+	vec2 reflection_detail_metrics = reflection_unresolved_detail_metrics(
+		ocean_base_xz, reflection_pixel_footprint, zone_mid_amplitude, zone_short_amplitude);
+	float water_reflection_roughness = physical_ocean_roughness(
+		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
 		max(opacity_distance_end, opacity_distance_start + 0.001),
 		camera_distance
 	);
-	float reflection_base_roughness = mix(
-		ocean_roughness_near,
-		ocean_roughness_far,
-		max(distance_opacity, fresnel)
-	);
-	float water_reflection_roughness = wave_aware_reflection_roughness(
-		reflection_base_roughness, physical_wave_activity, zone_calmness);
-
-	vec2 planar_reflection_uv = vec2(0.0);
-	vec3 planar_reflection_radiance = vec3(0.0);
-	float planar_reflection_validity = 0.0;
-	float planar_reflection_weight = 0.0;
-	if (planar_reflection_enabled) {
-		vec2 projected_uv = vec2(0.0);
-		float perspective_compensation = 1.0;
-		bool projection_valid = true;
-		if (planar_reflection_screen_space) {
-			// The Mirror Geometry camera copies the normal main camera, so this
-			// texture is already aligned with the current screen pixel.
-			projected_uv = SCREEN_UV;
-		} else {
-			vec3 planar_world_position = ocean_world_position;
-			if (planar_reflection_anchor_mode == 1) {
-				planar_world_position = vec3(
-					ocean_world_position.x,
-					planar_reflection_plane_y,
-					ocean_world_position.z
-				);
-			} else if (planar_reflection_anchor_mode == 2) {
-				planar_world_position = vec3(
-					ocean_base_xz.x,
-					planar_reflection_plane_y,
-					ocean_base_xz.y
-				);
-			}
-			vec4 reflection_clip = planar_reflection_view_projection * vec4(planar_world_position, 1.0);
-			if (reflection_clip.w <= 0.0001) {
-				projection_valid = false;
-			} else {
-				projected_uv = reflection_clip.xy / reflection_clip.w;
-				projected_uv = projected_uv * 0.5 + 0.5;
-				// Orientation is a LAB diagnostic and must precede all bounds,
-				// edge-fade, distortion, and texture sampling operations below.
-				if (planar_reflection_uv_orientation == 0) {
-					projected_uv.y = 1.0 - projected_uv.y;
-				} else if (planar_reflection_uv_orientation == 2) {
-					projected_uv.x = 1.0 - projected_uv.x;
-				} else if (planar_reflection_uv_orientation == 3) {
-					projected_uv = vec2(1.0 - projected_uv.x, 1.0 - projected_uv.y);
-				}
-				perspective_compensation = clamp(32.0 / max(abs(reflection_clip.w), 32.0), 0.04, 1.0);
-			}
-		}
-		if (!projection_valid) {
-			projected_uv = vec2(0.0);
-		}
-		if (projection_valid) {
-			planar_reflection_uv = projected_uv;
-			vec2 inside_uv = step(vec2(0.0), projected_uv) * step(projected_uv, vec2(1.0));
-			float inside_mask = inside_uv.x * inside_uv.y;
-			float edge_distance = min(
-				min(projected_uv.x, 1.0 - projected_uv.x),
-				min(projected_uv.y, 1.0 - projected_uv.y)
-			);
-			float edge_fade = smoothstep(0.0, max(planar_reflection_edge_fade, 0.001), edge_distance);
-			// The first Mirror Geometry diagnostic is pure screen-space. Its
-			// existing wave distortion can be enabled independently afterward.
-			vec2 distortion = vec2(0.0);
-			if (!planar_reflection_screen_space || planar_reflection_screen_space_distortion) {
-				distortion = final_visual_normal_world.xz
-					* planar_reflection_distortion_strength
-					* perspective_compensation;
-			}
-			vec2 sample_uv = projected_uv + distortion;
-			vec2 sample_inside_uv = step(vec2(0.0), sample_uv) * step(sample_uv, vec2(1.0));
-			float sample_inside_mask = sample_inside_uv.x * sample_inside_uv.y;
-			float sample_edge_distance = min(
-				min(sample_uv.x, 1.0 - sample_uv.x),
-				min(sample_uv.y, 1.0 - sample_uv.y)
-			);
-			float sample_edge_fade = smoothstep(0.0, max(planar_reflection_edge_fade, 0.001), sample_edge_distance);
-			planar_reflection_validity = inside_mask * sample_inside_mask * edge_fade * sample_edge_fade;
-			if (planar_reflection_validity > 0.0001) {
-				planar_reflection_radiance = textureLod(planar_reflection_texture, sample_uv, 0.0).rgb;
-			}
-			float planar_clarity = 1.0 - smoothstep(0.32, 0.82, water_reflection_roughness);
-			float foam_visibility = 1.0 - clamp(foam_mask, 0.0, 1.0) * 0.88;
-			planar_reflection_weight = clamp(
-				planar_reflection_validity
-				* planar_reflection_strength
-				* fresnel
-				* planar_clarity
-				* foam_visibility,
-				0.0,
-				1.0
-			);
-		}
-	}
 	if (debug_mode == 2) {
 		color = normalize(derived_normal) * 0.5 + 0.5;
 	} else if (debug_mode == 3) {
@@ -1830,20 +1783,21 @@ void fragment() {
 		color = vec3(raw_foam_channels.r);
 	}
 	if (reflection_debug_mode == 1) {
-		color = vec3(debug_reflection_roughness);
+		color = vec3(fresnel);
 	} else if (reflection_debug_mode == 2) {
-		color = vec3(debug_wave_activity);
+		// SKY is rendered by the same PBR environment path below.
+		color = vec3(0.0);
 	} else if (reflection_debug_mode == 3) {
-		color = vec3(zone_calmness);
+		color = vec3(debug_sun_specular);
 	} else if (reflection_debug_mode == 4) {
-		color = vec3(clamp(planar_reflection_uv, vec2(0.0), vec2(1.0)), planar_reflection_validity);
+		color = vec3(debug_reflection_roughness);
 	} else if (reflection_debug_mode == 5) {
-		color = vec3(planar_reflection_weight);
+		color = visual_normal * 0.5 + 0.5;
 	} else if (reflection_debug_mode == 6) {
-		color = planar_reflection_radiance;
+		color = vec3(debug_slope_variance);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || reflection_debug_mode > 0 || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -1856,6 +1810,15 @@ void fragment() {
 		EMISSION = vec3(0.0);
 		ROUGHNESS = 0.7;
 		SPECULAR = 0.2;
+		ALPHA = 1.0;
+	} else if (reflection_debug_mode == 2) {
+		// Environment debug: black albedo isolates the environment reflection
+		// lobe. SPECULAR is opened only for this diagnostic view.
+		ALBEDO = vec3(0.0);
+		EMISSION = vec3(0.0);
+		ROUGHNESS = water_reflection_roughness;
+		SPECULAR = 1.0;
+		METALLIC = 0.0;
 		ALPHA = 1.0;
 	} else {
 		// 5R.3B/3C: VERTEX es la base de producción. FRAGMENT completo queda
@@ -1913,26 +1876,11 @@ void fragment() {
 				0.24
 			);
 
-			float reflection_factor = clamp(
-				fresnel * reflection_strength + distance_opacity * 0.30,
-				0.0,
-				1.0
-			);
-
 			vec3 surface_color = mix(
 				body_color,
 				horizon_water_color.rgb,
-				reflection_factor
+				distance_opacity
 			);
-			surface_color = mix(
-				surface_color,
-				reflection_tint.rgb,
-				reflection_factor * 0.19
-			);
-			// Explicit planar radiance is conservative: its weight includes validity,
-			// Fresnel, foam visibility and wave-aware clarity. The ambient PBR lobe
-			// is reduced below by the same weight to avoid adding two full reflections.
-			surface_color = mix(surface_color, planar_reflection_radiance, planar_reflection_weight);
 
 			// Refracción screen-space ligera. Se puede apagar de forma aislada
 			// con water_refraction_enabled si causa cualquier artefacto.
@@ -1960,7 +1908,7 @@ void fragment() {
 			}
 
 			float body_mix = clamp(
-				water_density + max(fresnel, distance_opacity) * 0.72,
+				water_density + distance_opacity * 0.72,
 				0.0,
 				1.0
 			);
@@ -1975,7 +1923,7 @@ void fragment() {
 				mix(
 					local_alpha,
 					horizon_water_alpha,
-					max(distance_opacity, fresnel)
+					distance_opacity
 				),
 				0.55,
 				1.0
@@ -1994,8 +1942,7 @@ void fragment() {
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
-			float water_specular_after_planar = water_specular * (1.0 - planar_reflection_weight * 0.65);
-			SPECULAR = mix(water_specular_after_planar, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
@@ -2003,29 +1950,16 @@ void fragment() {
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
 			vec3 residual_foam_color = mix(foam_color.rgb, foam_residual_color.rgb, 0.65);
-			ALBEDO = mix(base_color, planar_reflection_radiance, planar_reflection_weight);
+			ALBEDO = base_color;
 			ALBEDO = mix(ALBEDO, surface_foam_color.rgb, surface_foam_mask);
 			ALBEDO = mix(ALBEDO, residual_foam_color, foam_residual_mask);
 			ALBEDO = mix(ALBEDO, foam_fresh_color.rgb, foam_fresh_mask);
 			EMISSION = vec3(0.0);
-			float distance_factor = smoothstep(
-				ocean_roughness_distance_m.x,
-				ocean_roughness_distance_m.y,
-				camera_distance
-			);
-			float base_roughness = mix(
-				ocean_roughness_near,
-				ocean_roughness_far,
-				distance_factor
-			);
-			float fallback_reflection_roughness = wave_aware_reflection_roughness(
-				base_roughness, physical_wave_activity, zone_calmness);
-			ROUGHNESS = fallback_reflection_roughness;
+			ROUGHNESS = water_reflection_roughness;
 			ROUGHNESS = mix(ROUGHNESS, surface_foam_roughness, surface_foam_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_residual_roughness, foam_residual_mask);
 			ROUGHNESS = mix(ROUGHNESS, foam_fresh_roughness, foam_fresh_mask);
-			float fallback_specular_after_planar = water_specular * (1.0 - planar_reflection_weight * 0.65);
-			SPECULAR = mix(fallback_specular_after_planar, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;

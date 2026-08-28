@@ -5,16 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | S: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F6: Planar Reflection ON/OFF | F7: Measure Planar Cost | K: Planar Projection PERSPECTIVE/OFF-AXIS/TRUE OBLIQUE | I: UV Matrix A/B (XYW igual) | F9: Planar Anchor DISPLACED/FLAT WORLD/FLAT BASE | F10: UV Orientation Y/N/X/XY | U: RAW Mirror Geometry Capture | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
-
-const PLANAR_AB_WARMUP_S := 0.5
-const PLANAR_AB_MEASURE_S := 4.0
-const PLANAR_AB_IDLE := 0
-const PLANAR_AB_WARMUP_OFF := 1
-const PLANAR_AB_MEASURE_OFF := 2
-const PLANAR_AB_WARMUP_ON := 3
-const PLANAR_AB_MEASURE_ON := 4
-const PLANAR_AB_RESULT := 5
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | H: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -23,36 +14,16 @@ const PLANAR_AB_RESULT := 5
 @onready var metric_references: Node3D = $MetricReferences
 @onready var ocean_v3: OceanV3 = $OceanV3Mount/OceanV3
 
-var _planar_reflection: Node
-var _mirror_geometry_reflection: Node
-var _raw_planar_layer: CanvasLayer
-var _raw_planar_panel: PanelContainer
-var _raw_planar_texture_rect: TextureRect
-var _raw_planar_projection_label: Label
-var _raw_planar_viewport: SubViewport
-var _raw_planar_visible := false
 var _using_race_camera := false
 var _query_probe_tool: Node3D
 var _demo_sea_state_zone: OceanSeaStateZone3D
 var _foam_debug_index := 0
 var _smoothed_frame_ms := 16.67
-var _planar_ab_phase := PLANAR_AB_IDLE
-var _planar_ab_elapsed_s := 0.0
-var _planar_ab_sum_ms := 0.0
-var _planar_ab_frame_count := 0
-var _planar_ab_saved_enabled := true
-var _planar_ab_off_avg_ms := 0.0
-var _planar_ab_on_avg_ms := 0.0
-
-
 func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
 	_create_demo_sea_state_zone()
-	_mirror_geometry_reflection = get_node_or_null(^"MirrorGeometryReflection") as Node
-	_planar_reflection = ocean_v3.get_node_or_null(^"OceanPlanarReflection3D") as Node
-	_create_raw_planar_capture_view()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
 	_smoothed_frame_ms = 1000.0 / maxf(float(Engine.get_frames_per_second()), 1.0)
 	_update_coastal_hud()
@@ -121,20 +92,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F5:
 			ocean_v3.cycle_reflection_debug()
 			_update_coastal_hud()
-		KEY_F6:
-			_toggle_planar_reflection()
-		KEY_F7:
-			_start_planar_ab_measurement()
-		KEY_K:
-			_toggle_planar_projection_mode()
-		KEY_I:
-			_toggle_planar_sampling_projection_mode()
-		KEY_F9:
-			_toggle_planar_sampling_anchor_mode()
-		KEY_F10:
-			_toggle_planar_uv_orientation()
-		KEY_U:
-			_toggle_raw_planar_capture()
 		KEY_4:
 			if event.shift_pressed:
 				ocean_v3.wave_preset = CALM_WAVE_PRESET
@@ -166,253 +123,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	_smoothed_frame_ms = lerpf(_smoothed_frame_ms, delta * 1000.0, 0.12)
-	_update_planar_ab_measurement(delta)
-	_update_raw_planar_capture()
-
-
-func _toggle_planar_reflection() -> void:
-	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
-		return
-	ocean_v3.planar_reflection_enabled = not ocean_v3.planar_reflection_enabled
-	_update_coastal_hud()
-
-
-func _start_planar_ab_measurement() -> void:
-	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
-		return
-	_planar_ab_saved_enabled = ocean_v3.planar_reflection_enabled
-	_planar_ab_off_avg_ms = 0.0
-	_planar_ab_on_avg_ms = 0.0
-	_planar_ab_elapsed_s = 0.0
-	_planar_ab_sum_ms = 0.0
-	_planar_ab_frame_count = 0
-	ocean_v3.planar_reflection_enabled = false
-	_planar_ab_phase = PLANAR_AB_WARMUP_OFF
-
-
-func _toggle_planar_projection_mode() -> void:
-	if _planar_ab_phase != PLANAR_AB_IDLE and _planar_ab_phase != PLANAR_AB_RESULT:
-		return
-	ocean_v3.planar_reflection_projection_mode = (ocean_v3.planar_reflection_projection_mode + 1) % 3
-	_update_coastal_hud()
-
-
-func _toggle_planar_sampling_projection_mode() -> void:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		_planar_reflection.call("toggle_sampling_projection_debug")
-	_update_coastal_hud()
-
-
-func _toggle_planar_sampling_anchor_mode() -> void:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		_planar_reflection.call("cycle_sampling_anchor_mode")
-	_update_coastal_hud()
-
-
-func _toggle_planar_uv_orientation() -> void:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		_planar_reflection.call("cycle_uv_orientation")
-	_update_coastal_hud()
-
-
-func _toggle_raw_planar_capture() -> void:
-	_raw_planar_visible = not _raw_planar_visible
-	if _raw_planar_panel != null:
-		_raw_planar_panel.visible = _raw_planar_visible
-	_update_raw_planar_capture()
-
-
-func _create_raw_planar_capture_view() -> void:
-	_raw_planar_layer = CanvasLayer.new()
-	_raw_planar_layer.name = "RawPlanarCaptureDebug"
-	_raw_planar_layer.layer = 10
-	add_child(_raw_planar_layer)
-
-	_raw_planar_panel = PanelContainer.new()
-	_raw_planar_panel.name = "RawPlanarCapturePanel"
-	_raw_planar_panel.visible = false
-	_raw_planar_panel.anchor_left = 0.52
-	_raw_planar_panel.anchor_top = 0.50
-	_raw_planar_panel.anchor_right = 0.98
-	_raw_planar_panel.anchor_bottom = 0.97
-	_raw_planar_panel.offset_left = 0.0
-	_raw_planar_panel.offset_top = 0.0
-	_raw_planar_panel.offset_right = 0.0
-	_raw_planar_panel.offset_bottom = 0.0
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.015, 0.03, 0.05, 0.94)
-	panel_style.border_color = Color(0.35, 0.75, 0.9, 0.9)
-	panel_style.set_border_width_all(2)
-	panel_style.set_corner_radius_all(5)
-	_raw_planar_panel.add_theme_stylebox_override("panel", panel_style)
-	_raw_planar_layer.add_child(_raw_planar_panel)
-
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_bottom", 8)
-	_raw_planar_panel.add_child(margin)
-
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
-	margin.add_child(box)
-
-	var title := Label.new()
-	title.text = "RAW MIRROR GEOMETRY CAPTURE"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(title)
-
-	_raw_planar_projection_label = Label.new()
-	_raw_planar_projection_label.text = "Projection: unavailable"
-	_raw_planar_projection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(_raw_planar_projection_label)
-
-	_raw_planar_texture_rect = TextureRect.new()
-	_raw_planar_texture_rect.name = "RawPlanarTexture"
-	_raw_planar_texture_rect.custom_minimum_size = Vector2(320.0, 180.0)
-	_raw_planar_texture_rect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_raw_planar_texture_rect.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_raw_planar_texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_raw_planar_texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_raw_planar_texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	box.add_child(_raw_planar_texture_rect)
-
-
-func _update_raw_planar_capture() -> void:
-	if not _raw_planar_visible or _raw_planar_texture_rect == null:
-		return
-	if _mirror_geometry_reflection != null and is_instance_valid(_mirror_geometry_reflection):
-		_raw_planar_texture_rect.texture = _mirror_geometry_reflection.call("get_reflection_texture")
-		_raw_planar_projection_label.text = "Projection: %s | Static meshes: %d" % [
-			str(_mirror_geometry_reflection.call("reflection_projection_label")),
-			int(_mirror_geometry_reflection.call("source_mesh_count")),
-		]
-		return
-	if _raw_planar_viewport == null or not is_instance_valid(_raw_planar_viewport):
-		_raw_planar_viewport = ocean_v3.get_node_or_null(^"PlanarReflectionViewport") as SubViewport
-	if _raw_planar_viewport == null:
-		_raw_planar_texture_rect.texture = null
-		_raw_planar_projection_label.text = "Projection: unavailable"
-		return
-	# This is the exact ViewportTexture consumed by OceanPlanarReflection3D's
-	# surface material; no second camera, viewport, or render pass is created.
-	_raw_planar_texture_rect.texture = _raw_planar_viewport.get_texture()
-	_raw_planar_projection_label.text = "Projection: %s" % ocean_v3.planar_reflection_projection_label()
-
-
-func _update_planar_ab_measurement(delta: float) -> void:
-	if _planar_ab_phase == PLANAR_AB_IDLE or _planar_ab_phase == PLANAR_AB_RESULT:
-		return
-	_planar_ab_elapsed_s += delta
-	if _planar_ab_phase == PLANAR_AB_WARMUP_OFF or _planar_ab_phase == PLANAR_AB_WARMUP_ON:
-		if _planar_ab_elapsed_s < PLANAR_AB_WARMUP_S:
-			return
-		_planar_ab_elapsed_s = 0.0
-		_planar_ab_sum_ms = 0.0
-		_planar_ab_frame_count = 0
-		_planar_ab_phase = PLANAR_AB_MEASURE_OFF if _planar_ab_phase == PLANAR_AB_WARMUP_OFF else PLANAR_AB_MEASURE_ON
-		return
-
-	_planar_ab_sum_ms += delta * 1000.0
-	_planar_ab_frame_count += 1
-	if _planar_ab_elapsed_s < PLANAR_AB_MEASURE_S:
-		return
-	var average_ms := _planar_ab_sum_ms / maxf(float(_planar_ab_frame_count), 1.0)
-	_planar_ab_elapsed_s = 0.0
-	_planar_ab_sum_ms = 0.0
-	_planar_ab_frame_count = 0
-	if _planar_ab_phase == PLANAR_AB_MEASURE_OFF:
-		_planar_ab_off_avg_ms = average_ms
-		ocean_v3.planar_reflection_enabled = true
-		_planar_ab_phase = PLANAR_AB_WARMUP_ON
-	else:
-		_planar_ab_on_avg_ms = average_ms
-		ocean_v3.planar_reflection_enabled = _planar_ab_saved_enabled
-		_planar_ab_phase = PLANAR_AB_RESULT
 
 
 func smoothed_frame_time_ms() -> float:
 	return _smoothed_frame_ms
-
-
-func planar_hud_lines() -> Array[String]:
-	var planar_state := "ON" if ocean_v3.planar_reflection_enabled else "OFF"
-	var update_rate := "Every Frame" if ocean_v3.planar_reflection_update_hz <= 0 else "%d Hz" % ocean_v3.planar_reflection_update_hz
-	var lines: Array[String] = [
-		"Planar Reflection: %s | Scale: %.2fx | Overscan: %.2fx | Rate: %s | Captures: %.1f/s" % [
-			planar_state,
-			ocean_v3.planar_reflection_resolution_scale,
-			ocean_v3.planar_reflection_overscan,
-			update_rate,
-			ocean_v3.planar_reflection_capture_rate_hz(),
-		]
-	]
-	lines.append("Planar Projection: %s" % ocean_v3.planar_reflection_projection_label())
-	lines.append("Planar UV Matrix: %s" % _planar_sampling_projection_label())
-	lines.append(_planar_sampling_delta_line())
-	lines.append("Planar Anchor: %s" % _planar_sampling_anchor_label())
-	lines.append("Planar UV Orientation: %s" % _planar_uv_orientation_label())
-	lines.append("Oblique Engine: %s | Clip bias: %.2f m" % [
-		"AVAILABLE" if ocean_v3.planar_reflection_oblique_engine_available() else "UNAVAILABLE",
-		ocean_v3.planar_reflection_clip_bias_m,
-	])
-	match _planar_ab_phase:
-		PLANAR_AB_WARMUP_OFF:
-			lines.append("Planar A/B: WARMUP OFF")
-		PLANAR_AB_MEASURE_OFF:
-			lines.append("Planar A/B: MEASURE OFF")
-		PLANAR_AB_WARMUP_ON:
-			lines.append("Planar A/B: WARMUP ON")
-		PLANAR_AB_MEASURE_ON:
-			lines.append("Planar A/B: MEASURE ON")
-		PLANAR_AB_RESULT:
-			var cost_ms := _planar_ab_on_avg_ms - _planar_ab_off_avg_ms
-			var cost_sign := "+" if cost_ms >= 0.0 else ""
-			var planar_rate := "Every Frame" if ocean_v3.planar_reflection_update_hz <= 0 else "%d Hz" % ocean_v3.planar_reflection_update_hz
-			lines.append("Planar A/B RESULT")
-			lines.append("OFF %.2f ms (~%.1f FPS) | ON %.2f ms (~%.1f FPS)" % [
-				_planar_ab_off_avg_ms,
-				1000.0 / maxf(_planar_ab_off_avg_ms, 0.001),
-				_planar_ab_on_avg_ms,
-				1000.0 / maxf(_planar_ab_on_avg_ms, 0.001),
-			])
-			lines.append("COST %s%.2f ms" % [cost_sign, cost_ms])
-			lines.append("Planar %.2fx / %.2fx @ %s | Far %.0f m" % [
-				ocean_v3.planar_reflection_resolution_scale,
-				ocean_v3.planar_reflection_overscan,
-				planar_rate,
-				ocean_v3.planar_reflection_max_distance_m,
-			])
-	return lines
-
-
-func _planar_sampling_projection_label() -> String:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return str(_planar_reflection.call("sampling_projection_label"))
-	return "UNAVAILABLE"
-
-
-func _planar_sampling_delta_line() -> String:
-	if _planar_reflection == null or not is_instance_valid(_planar_reflection):
-		return "Planar Matrix delta: unavailable"
-	var diagnostic: Dictionary = _planar_reflection.call("sampling_projection_diagnostic")
-	return "Planar Matrix Δ XYW: %.6f | Z: %.6f" % [
-		float(diagnostic.get("xyw_max_delta", 0.0)),
-		float(diagnostic.get("z_max_delta", 0.0)),
-	]
-
-
-func _planar_sampling_anchor_label() -> String:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return str(_planar_reflection.call("sampling_anchor_label"))
-	return "UNAVAILABLE"
-
-
-func _planar_uv_orientation_label() -> String:
-	if _planar_reflection != null and is_instance_valid(_planar_reflection):
-		return str(_planar_reflection.call("uv_orientation_label"))
-	return "UNAVAILABLE"
 
 
 func _create_demo_sea_state_zone() -> void:
