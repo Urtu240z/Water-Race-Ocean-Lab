@@ -47,6 +47,7 @@ var _ocean_level := 0.0
 var _temporal_enabled := true
 var _temporal_weight := 0.12
 var _temporal_depth_threshold := 0.035
+var _conservative_coverage_enabled := true
 var _history_valid := false
 var _has_previous_frame := false
 var _previous_view_projection := Projection()
@@ -78,6 +79,12 @@ func set_temporal_settings(effect_enabled: bool, weight: float, depth_threshold:
 	_temporal_enabled = effect_enabled
 	_temporal_weight = clampf(weight, 0.0, 0.5)
 	_temporal_depth_threshold = clampf(depth_threshold, 0.001, 0.25)
+	_mutex.unlock()
+
+
+func set_conservative_coverage_enabled(value: bool) -> void:
+	_mutex.lock()
+	_conservative_coverage_enabled = value
 	_mutex.unlock()
 
 
@@ -153,6 +160,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var temporal_enabled := _temporal_enabled
 	var temporal_weight := _temporal_weight
 	var temporal_depth_threshold := _temporal_depth_threshold
+	var conservative_coverage_enabled := _conservative_coverage_enabled
 	_mutex.unlock()
 	if not active or not _ensure_pipelines():
 		return
@@ -192,7 +200,8 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		view_projection,
 		source_size,
 		destination_size,
-		sea_level
+		sea_level,
+		conservative_coverage_enabled
 	)
 	var temporal_params_data := _pack_temporal_params(
 		view_projection.inverse(),
@@ -568,7 +577,8 @@ func _free_mip_views() -> void:
 
 func _pack_params(inverse_projection: Projection, inverse_view: Projection,
 		view_projection: Projection, source_size: Vector2i,
-		destination_size: Vector2i, sea_level: float) -> PackedFloat32Array:
+		destination_size: Vector2i, sea_level: float,
+		conservative_coverage_enabled: bool) -> PackedFloat32Array:
 	var values := PackedFloat32Array()
 	_append_projection(values, inverse_projection)
 	_append_projection(values, inverse_view)
@@ -582,7 +592,7 @@ func _pack_params(inverse_projection: Projection, inverse_view: Projection,
 	values.append(0.0)
 	values.append(0.0)
 	values.append(sea_level)
-	values.append(0.0)
+	values.append(1.0 if conservative_coverage_enabled else 0.0)
 	values.append(0.0)
 	values.append(0.0)
 	return values

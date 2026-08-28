@@ -347,6 +347,11 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_enabled = value
 		_request_visual_sync()
 
+@export var reflection_sspr_conservative_coverage_enabled: bool = true:
+	set(value):
+		reflection_sspr_conservative_coverage_enabled = value
+		_request_visual_sync()
+
 @export_range(0.0, 1.0, 0.01) var reflection_sspr_distortion_strength: float = 0.35:
 	set(value):
 		reflection_sspr_distortion_strength = clampf(value, 0.0, 1.0)
@@ -1490,6 +1495,8 @@ func _sync_water_visual_parameters() -> void:
 			reflection_sspr_temporal_enabled,
 			reflection_sspr_temporal_weight,
 			reflection_sspr_temporal_depth_threshold)
+		_reflection_sspr_manager.set_conservative_coverage_enabled(
+			reflection_sspr_conservative_coverage_enabled)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
@@ -1610,3 +1617,7 @@ func get_reflection_sspr_temporal_settings() -> Dictionary:
 		"weight": reflection_sspr_temporal_weight,
 		"depth_threshold": reflection_sspr_temporal_depth_threshold,
 	}
+
+
+func get_reflection_sspr_conservative_coverage_enabled() -> bool:
+	return reflection_sspr_conservative_coverage_enabled

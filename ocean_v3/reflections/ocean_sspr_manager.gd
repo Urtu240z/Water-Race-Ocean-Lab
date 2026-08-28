@@ -44,6 +44,11 @@ func set_temporal_settings(enabled: bool, weight: float, depth_threshold: float)
 		_effect.set_temporal_settings(enabled, weight, depth_threshold)
 
 
+func set_conservative_coverage_enabled(value: bool) -> void:
+	if _effect != null:
+		_effect.set_conservative_coverage_enabled(value)
+
+
 func _ready() -> void:
 	if not Engine.is_editor_hint() and _ocean == null:
 		_ocean = get_parent()
@@ -79,6 +84,9 @@ func _initialize() -> void:
 			temporal_settings.get("enabled", true),
 			temporal_settings.get("weight", 0.12),
 			temporal_settings.get("depth_threshold", 0.035))
+	if _ocean != null and _ocean.has_method(&"get_reflection_sspr_conservative_coverage_enabled"):
+		_effect.set_conservative_coverage_enabled(
+			_ocean.get_reflection_sspr_conservative_coverage_enabled())
 	var target := get_tree().current_scene.find_child("WorldEnvironment", true, false) if get_tree().current_scene != null else null
 	if target is WorldEnvironment:
 		_world_environment = target
