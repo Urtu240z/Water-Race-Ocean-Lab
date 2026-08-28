@@ -54,7 +54,6 @@ enum CoastalWarpEffectDebug {
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
-@export_range(0.05, 0.30, 0.01) var lod_morph_ratio: float = 0.12
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
 @export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
@@ -65,7 +64,6 @@ var _levels: Array[MeshInstance3D] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
 var _lod_debug := false
-var _lod_morph_debug := false
 var _periodicity_debug := false
 var _coastal_debug_field: int = CoastalDebugField.OFF
 var _coastal_runtime_enabled := true
@@ -173,12 +171,6 @@ func toggle_lod_debug() -> void:
 	_lod_debug = not _lod_debug
 	_surface_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
 	_wireframe_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
-
-
-func toggle_lod_morph_debug() -> void:
-	_lod_morph_debug = not _lod_morph_debug
-	_surface_material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
-	_wireframe_material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
 
 
 func toggle_periodicity_debug() -> void:
@@ -342,10 +334,6 @@ func lod_debug_name() -> String:
 	return "ON" if _lod_debug else "OFF"
 
 
-func lod_morph_debug_name() -> String:
-	return "ON" if _lod_morph_debug else "OFF"
-
-
 func periodicity_debug_name() -> String:
 	return "ON" if _periodicity_debug else "OFF"
 
@@ -376,8 +364,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
 		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
 		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
-		material.set_shader_parameter(&"lod_morph_ratio", clampf(lod_morph_ratio, 0.05, 0.30))
-		material.set_shader_parameter(&"clipmap_lod_morph_debug", _lod_morph_debug)
 		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 		material.set_shader_parameter(&"coastal_propagation_enabled", false)
 		material.set_shader_parameter(&"coastal_transform_enabled", false)
@@ -439,10 +425,6 @@ func _rebuild_levels() -> void:
 		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		instance.extra_cull_margin = clipmap_config.extra_cull_margin_m
 		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
-		instance.set_instance_shader_parameter(&"clipmap_spacing_m", float(geometry.spacing_m))
-		instance.set_instance_shader_parameter(&"clipmap_next_spacing_m", 0.0 if level_index >= clipmap_config.level_count - 1 else float(clipmap_config.spacing_for_level(level_index + 1)))
-		instance.set_instance_shader_parameter(&"clipmap_outer_extent_m", float(geometry.outer_width_m) * 0.5)
-		instance.set_instance_shader_parameter(&"clipmap_inner_extent_m", float(geometry.inner_width_m) * 0.5)
 		add_child(instance)
 		_levels.append(instance)
 		_triangle_count += int(float(geometry.indices.size()) / 3.0)

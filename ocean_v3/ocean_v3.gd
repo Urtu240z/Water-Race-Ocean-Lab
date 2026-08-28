@@ -1322,12 +1322,6 @@ func toggle_ocean_clipmap_lod_debug() -> void:
 		fft_module.toggle_clipmap_lod_debug()
 
 
-func toggle_ocean_clipmap_lod_morph_debug() -> void:
-	var fft_module := _runtime_fft_module()
-	if fft_module != null:
-		fft_module.toggle_clipmap_lod_morph_debug()
-
-
 func toggle_ocean_periodicity_debug() -> void:
 	var fft_module := _runtime_fft_module()
 	if fft_module != null:

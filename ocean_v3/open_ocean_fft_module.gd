@@ -1237,10 +1237,6 @@ func toggle_clipmap_lod_debug() -> void:
 	surface.toggle_lod_debug()
 
 
-func toggle_clipmap_lod_morph_debug() -> void:
-	surface.toggle_lod_morph_debug()
-
-
 func toggle_periodicity_debug() -> void:
 	surface.toggle_periodicity_debug()
 
