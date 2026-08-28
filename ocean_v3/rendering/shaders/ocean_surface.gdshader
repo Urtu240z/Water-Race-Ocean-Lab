@@ -610,11 +610,11 @@ float reflection_crest_shaped_roughness(float base_roughness,
 }
 
 
-vec2 reflection_sspr_distorted_uv(vec2 planar_uv, vec3 final_normal_view,
+vec2 reflection_sspr_distorted_uv(vec2 planar_uv, vec3 macro_normal_view,
 		vec3 view_direction, float camera_distance, vec3 flat_normal_view,
 		vec2 projection_scale, out float distortion_confidence) {
 	vec3 planar_reflection = normalize(reflect(-view_direction, flat_normal_view));
-	vec3 wave_reflection = normalize(reflect(-view_direction, final_normal_view));
+	vec3 wave_reflection = normalize(reflect(-view_direction, macro_normal_view));
 	float planar_z = max(abs(planar_reflection.z), 0.12);
 	float wave_z = max(abs(wave_reflection.z), 0.12);
 	vec2 planar_ray = planar_reflection.xy / planar_z;
@@ -638,7 +638,9 @@ vec2 reflection_sspr_distorted_uv(vec2 planar_uv, vec3 final_normal_view,
 		* distance_factor
 		* mix(0.80, 1.0, footprint_factor);
 	vec2 distortion = projected_delta * scale;
-	distortion_confidence = 1.0 - smoothstep(0.04, 0.20, length(distortion));
+	// Keep this falloff continuous. A thresholded confidence made tiny changes
+	// in micro-detail cross a validity boundary and amplified temporal flicker.
+	distortion_confidence = exp(-length(distortion) * 2.5);
 	return planar_uv + distortion;
 }
 
@@ -1729,6 +1731,10 @@ void fragment() {
 	} else {
 		shading_normal_world = normalize(derived_normal);
 	}
+	// SSPR distortion follows the filtered FFT wave normal before foam and
+	// centimeter-scale surface detail are applied. PBR keeps visual_normal
+	// below, including every existing foam/microdetail contribution.
+	vec3 sspr_macro_normal_world = normalize(shading_normal_world);
 	vec3 visual_normal = normalize((VIEW_MATRIX * vec4(shading_normal_world, 0.0)).xyz);
 	float camera_distance = distance(ocean_world_xz, camera_world_xz);
 	float foam_normal_mask = foam_fresh_mask * foam_fresh_normal_weight
@@ -1788,6 +1794,7 @@ void fragment() {
 	float sspr_filter_roughness = reflection_final_roughness(
 		water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
 	vec3 final_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
+	vec3 sspr_macro_normal_view = normalize((VIEW_MATRIX * vec4(sspr_macro_normal_world, 0.0)).xyz);
 	vec3 flat_normal_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	vec2 projection_scale = vec2(PROJECTION_MATRIX[0][0], PROJECTION_MATRIX[1][1]);
 	float sspr_distortion_confidence = 0.0;
@@ -1800,7 +1807,7 @@ void fragment() {
 		float sspr_lod = clamp(sspr_filter_roughness * sspr_mip_max, 0.0, sspr_mip_max);
 		sspr_distorted_uv = reflection_sspr_distorted_uv(
 			SCREEN_UV,
-			visual_normal,
+			sspr_macro_normal_view,
 			view_direction,
 			camera_distance,
 			flat_normal_view,
@@ -1821,7 +1828,7 @@ void fragment() {
 			sspr_validity
 			* reflection_sspr_edge_confidence(sspr_distorted_uv)
 			* sspr_distortion_confidence
-			* reflection_sspr_slope_confidence(final_normal_world)
+			* reflection_sspr_slope_confidence(sspr_macro_normal_world)
 			* roughness_confidence
 			* uv_inside,
 			0.0,

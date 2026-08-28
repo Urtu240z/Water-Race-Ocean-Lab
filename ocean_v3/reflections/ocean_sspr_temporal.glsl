@@ -19,6 +19,9 @@ layout(set = 0, binding = 7, std140) uniform TemporalParams {
 	vec4 ocean_level;
 } params;
 
+const float RECOVERY_DECAY = 0.58;
+const float RECOVERY_MIN_ALPHA = 0.02;
+
 vec3 world_on_ocean_plane(vec2 uv, out bool valid) {
 	vec2 ndc = uv * 2.0 - 1.0;
 	vec4 near_point = params.current_inverse_view_projection * vec4(ndc, 0.0, 1.0);
@@ -75,12 +78,14 @@ void main() {
 	vec4 result = current;
 	bool current_valid = current.a > 0.001 && current_depth_value > 0.000001;
 	bool history_sample_valid = false;
-	if (params.temporal_settings.x > 0.5 && params.temporal_settings.w > 0.5 && current_valid) {
-		vec2 current_uv = (vec2(pixel) + 0.5) / params.destination_size.xy;
-		vec2 previous_uv = previous_frame_uv(current_uv, history_sample_valid);
-		if (history_sample_valid) {
-			vec4 history = texture(history_color, previous_uv);
-			float history_depth_value = texture(history_depth, previous_uv).r;
+	bool recovered_history = false;
+	vec2 current_uv = (vec2(pixel) + 0.5) / params.destination_size.xy;
+	vec2 previous_uv = previous_frame_uv(current_uv, history_sample_valid);
+	float history_depth_value = 0.0;
+	if (params.temporal_settings.x > 0.5 && params.temporal_settings.w > 0.5 && history_sample_valid) {
+		vec4 history = texture(history_color, previous_uv);
+		history_depth_value = texture(history_depth, previous_uv).r;
+		if (current_valid) {
 			float depth_threshold = max(params.temporal_settings.z, 0.0001);
 			float depth_delta = abs(current_depth_value - history_depth_value);
 			float depth_confidence = 1.0 - smoothstep(
@@ -105,16 +110,60 @@ void main() {
 					result.rgb = mix(current.rgb, clamped_history, blend_weight);
 				}
 			}
+		} else if (history.a > 0.001 && history_depth_value > 0.000001) {
+			// A missing candidate may be a one-frame quarter-resolution coverage
+			// hole. Require two compatible immediate neighbors, a valid reprojection,
+			// and a safe interior pixel before carrying history across it.
+			float depth_threshold = max(params.temporal_settings.z, 0.0001);
+			float edge_guard = 2.0 / max(min(params.destination_size.x, params.destination_size.y), 1.0);
+			float edge_distance = min(min(current_uv.x, 1.0 - current_uv.x),
+				min(current_uv.y, 1.0 - current_uv.y));
+			int compatible_neighbors = 0;
+			float support_depth_delta = 0.0;
+			vec3 support_color_min = vec3(1e20);
+			vec3 support_color_max = vec3(-1e20);
+			for (int offset_y = -1; offset_y <= 1; offset_y++) {
+				for (int offset_x = -1; offset_x <= 1; offset_x++) {
+					if (offset_x == 0 && offset_y == 0) {
+						continue;
+					}
+					ivec2 neighbor = clamp(pixel + ivec2(offset_x, offset_y), ivec2(0), extent - 1);
+					vec4 neighbor_color = texelFetch(current_color, neighbor, 0);
+					float neighbor_depth = texelFetch(current_depth, neighbor, 0).r;
+					float neighbor_depth_delta = abs(neighbor_depth - history_depth_value);
+					if (neighbor_color.a > 0.001 && neighbor_depth > 0.000001
+							&& neighbor_depth_delta <= depth_threshold * 1.5) {
+						compatible_neighbors++;
+						support_depth_delta += neighbor_depth_delta;
+						support_color_min = min(support_color_min, neighbor_color.rgb);
+						support_color_max = max(support_color_max, neighbor_color.rgb);
+					}
+				}
+			}
+			float support_confidence = smoothstep(1.5, 3.5, float(compatible_neighbors));
+		float mean_support_depth_delta = support_depth_delta / max(float(compatible_neighbors), 1.0);
+			float depth_confidence = 1.0 - smoothstep(
+				depth_threshold, depth_threshold * 1.5, mean_support_depth_delta);
+			if (compatible_neighbors >= 2 && edge_distance >= edge_guard && support_confidence > 0.0
+					&& depth_confidence > 0.0) {
+				float recovered_alpha = history.a * RECOVERY_DECAY
+					* support_confidence * depth_confidence;
+				if (recovered_alpha > RECOVERY_MIN_ALPHA) {
+					vec3 recovered_color = clamp(history.rgb, support_color_min, support_color_max);
+					result = vec4(recovered_color, recovered_alpha);
+					recovered_history = true;
+				}
+			}
 		}
 	}
 
-	// Invalid current pixels remain invalid: temporal history is never used to
-	// fabricate a reflection through a newly disoccluded or empty region.
-	if (!current_valid) {
+	// Invalid current pixels remain invalid unless the bounded micro-hole
+	// recovery above proved local support and carried a decaying history sample.
+	if (!current_valid && !recovered_history) {
 		result = vec4(0.0);
 	}
 	imageStore(reflection_output, pixel, result);
 	imageStore(history_color_output, pixel, result);
 	imageStore(history_depth_output, pixel,
-		vec4(current_valid ? current_depth_value : 0.0, 0.0, 0.0, 0.0));
+		vec4(current_valid ? current_depth_value : (recovered_history ? history_depth_value : 0.0), 0.0, 0.0, 0.0));
 }
