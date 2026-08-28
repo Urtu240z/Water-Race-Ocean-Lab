@@ -16,7 +16,7 @@ func _process(_delta: float) -> bool:
 	_check(shader.contains("unresolved_detail_metrics.x") and shader.contains("unresolved_detail_metrics.y"), "MID/SHORT fragmentan el soporte del highlight")
 	_check(shader.contains("reflection_crest_shaped_roughness"), "roughness se modula en una función aislada")
 	_check(shader.contains("max(reflection_min_roughness, base_roughness * roughness_scale)"), "roughness conserva el suelo físico existente")
-	_check(shader.contains("SPECULAR = mix(WATER_SPECULAR_LEVEL"), "SPECULAR físico del agua no se sustituye")
+	_check(shader.contains("const float WATER_SPECULAR_LEVEL = 0.356835") and shader.contains("WATER_SPECULAR_LEVEL * reflection_environment_specular_boost"), "SPECULAR conserva la base física y usa el boost artístico")
 	_check(shader.find("EMISSION = vec3(0.0);") >= 0, "el pase no usa emission para falsear el highlight")
 	_check(shader.find("uniform sampler2D reflection_crest") < 0, "no añade texturas ni captures de reflexión")
 

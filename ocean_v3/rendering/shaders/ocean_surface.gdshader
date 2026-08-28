@@ -210,6 +210,7 @@ uniform float reflection_radiance_contrast : hint_range(0.5, 2.0, 0.01) = 1.0;
 uniform float reflection_radiance_saturation : hint_range(0.0, 2.0, 0.01) = 1.0;
 uniform vec4 reflection_radiance_tint : source_color = vec4(1.0);
 uniform float reflection_screen_space_weight : hint_range(0.0, 1.5, 0.01) = 1.0;
+uniform float reflection_environment_specular_boost : hint_range(0.5, 2.0, 0.01) = 1.0;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
@@ -2481,6 +2482,11 @@ void fragment() {
 		// únicamente como A/B con G. El detalle fino SIEMPRE se añade después
 		// mediante normal maps por fragment, de modo que haya riqueza cerca y
 		// también a distancia sin marcar la cuadrícula del clipmap.
+		float effective_water_specular = clamp(
+			WATER_SPECULAR_LEVEL * reflection_environment_specular_boost,
+			0.0,
+			1.0
+		);
 		if (water_optics_enabled) {
 			// 5R.3C: profundidad óptica real desde el depth buffer.
 			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
@@ -2596,7 +2602,7 @@ void fragment() {
 			// Water response is established first; foam remains the final authority.
 			ROUGHNESS = reflection_final_roughness(
 				water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
-			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(effective_water_specular, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
@@ -2612,7 +2618,7 @@ void fragment() {
 			EMISSION = vec3(0.0);
 			ROUGHNESS = reflection_final_roughness(
 				water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
-			SPECULAR = mix(WATER_SPECULAR_LEVEL, surface_foam_specular, surface_foam_mask);
+			SPECULAR = mix(effective_water_specular, surface_foam_specular, surface_foam_mask);
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;

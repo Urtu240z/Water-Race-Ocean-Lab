@@ -538,6 +538,11 @@ enum NearSSRQuality { LOW, MEDIUM, HIGH }
 		reflection_screen_space_weight = clampf(value, 0.0, 1.5)
 		_request_visual_sync()
 
+@export_range(0.5, 2.0, 0.01) var reflection_environment_specular_boost: float = 1.0:
+	set(value):
+		reflection_environment_specular_boost = clampf(value, 0.5, 2.0)
+		_request_visual_sync()
+
 
 @export_group("Whitecaps Foam")
 @export var foam_enabled: bool = true:
@@ -1857,6 +1862,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_radiance_saturation", reflection_radiance_saturation)
 	material.set_shader_parameter(&"reflection_radiance_tint", reflection_radiance_tint)
 	material.set_shader_parameter(&"reflection_screen_space_weight", reflection_screen_space_weight)
+	material.set_shader_parameter(&"reflection_environment_specular_boost", reflection_environment_specular_boost)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
