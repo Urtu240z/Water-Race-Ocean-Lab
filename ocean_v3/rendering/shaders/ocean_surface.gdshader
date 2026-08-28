@@ -190,6 +190,14 @@ uniform float reflection_sspr_distortion_strength : hint_range(0.0, 1.0, 0.01) =
 uniform float reflection_sspr_edge_fade : hint_range(0.0, 0.25, 0.005) = 0.08;
 uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform bool reflection_sspr_hole_fill_enabled = true;
+uniform bool reflection_sspr_depth_available = false;
+uniform sampler2D reflection_sspr_depth_texture : repeat_disable, filter_nearest;
+uniform float reflection_sspr_sea_level = 0.0;
+uniform bool reflection_sspr_facet_gate_enabled = true;
+uniform float reflection_sspr_facet_gate_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
+uniform bool reflection_distance_blur_enabled = true;
+uniform float reflection_distance_blur_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform float reflection_distance_blur_reference_m : hint_range(1.0, 500.0, 1.0) = 50.0;
 uniform bool reflection_near_ssr_enabled = true;
 uniform float reflection_near_ssr_distance_m : hint_range(1.0, 100.0, 1.0) = 35.0;
 uniform float reflection_near_ssr_ray_length_m : hint_range(25.0, 500.0, 1.0) = 200.0;
@@ -202,7 +210,7 @@ uniform int reflection_near_ssr_quality = 1;
 // 13 NEAR_SSR_ACTIVE, 14 NEAR_SSR_HIT, 15 NEAR_SSR_CONFIDENCE,
 // 16 NEAR_SSR_COLOR, 17 NEAR_SSR_DEPTH_CONFIDENCE,
 // 18 NEAR_SSR_DEVIATION_CONFIDENCE, 19 NEAR_SSR_BASE_CONFIDENCE,
-// 20 NEAR_SSR_STEP_USAGE.
+// 20 NEAR_SSR_STEP_USAGE, 21 SSPR_FACET_CONFIDENCE.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -677,6 +685,68 @@ float reflection_sspr_slope_confidence(vec3 final_normal_world) {
 	float up_alignment = clamp(dot(normalize(final_normal_world), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
 	float slope = 1.0 - up_alignment;
 	return 1.0 - smoothstep(reflection_sspr_slope_fade, 1.0, slope);
+}
+
+
+bool reflection_sspr_source_from_depth(vec2 uv, float raw_depth,
+		mat4 inverse_projection, mat4 inverse_view, float sea_level,
+		out vec3 source_world) {
+	source_world = vec3(0.0);
+	if (!(raw_depth > 0.000001) || raw_depth > 1.000001 ||
+			isnan(raw_depth) || isinf(raw_depth)) {
+		return false;
+	}
+	vec4 virtual_view = inverse_projection * vec4(uv * 2.0 - 1.0, raw_depth, 1.0);
+	if (abs(virtual_view.w) <= 0.000001 || any(isnan(virtual_view)) || any(isinf(virtual_view))) {
+		return false;
+	}
+	virtual_view /= virtual_view.w;
+	vec4 virtual_world = inverse_view * vec4(virtual_view.xyz, 1.0);
+	if (abs(virtual_world.w) <= 0.000001 || any(isnan(virtual_world)) || any(isinf(virtual_world))) {
+		return false;
+	}
+	virtual_world /= virtual_world.w;
+	source_world = virtual_world.xyz;
+	source_world.y = 2.0 * sea_level - source_world.y;
+	if (any(isnan(source_world)) || any(isinf(source_world))) {
+		source_world = vec3(0.0);
+		return false;
+	}
+	return true;
+}
+
+
+float reflection_sspr_facet_confidence(vec3 macro_reflection_ray_world,
+		vec3 direction_to_source_world, float roughness) {
+	float alignment = clamp(dot(
+		normalize(macro_reflection_ray_world),
+		normalize(direction_to_source_world)
+	), -1.0, 1.0);
+	float roughness_lobe = smoothstep(0.0, 0.85, clamp(roughness, 0.0, 1.0));
+	float threshold_low = mix(0.93, 0.45, roughness_lobe);
+	float threshold_high = mix(0.99, 0.82, roughness_lobe);
+	float alignment_aa = max(fwidth(alignment), 0.015);
+	return smoothstep(
+		threshold_low - alignment_aa,
+		threshold_high + alignment_aa,
+		alignment
+	);
+}
+
+
+float reflection_distance_blur_lod(float roughness, float source_distance_m,
+		float mip_max) {
+	float safe_roughness = clamp(roughness, 0.0, 1.0);
+	float base_lod = safe_roughness * mip_max;
+	if (!reflection_distance_blur_enabled) {
+		return clamp(base_lod, 0.0, mip_max);
+	}
+	float roughness_weight = pow(safe_roughness, 1.25);
+	float distance_ratio = max(source_distance_m, 0.0)
+		/ max(reflection_distance_blur_reference_m, 0.001);
+	float distance_lod = reflection_distance_blur_strength
+		* roughness_weight * log2(1.0 + distance_ratio);
+	return clamp(base_lod + distance_lod, 0.0, mip_max);
 }
 
 
@@ -1599,7 +1669,8 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		float final_roughness, mat4 projection, mat4 inverse_projection,
 		out float active_mask, out float confidence, out float hit_mask,
 		out float depth_confidence, out float deviation_confidence,
-		out float base_confidence, out float step_usage) {
+		out float base_confidence, out float step_usage,
+		out float hit_distance_output) {
 	active_mask = 0.0;
 	confidence = 0.0;
 	hit_mask = 0.0;
@@ -1607,6 +1678,7 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 	deviation_confidence = 0.0;
 	base_confidence = 0.0;
 	step_usage = 0.0;
+	hit_distance_output = 0.0;
 	float distance_limit = max(reflection_near_ssr_distance_m, 0.001);
 	float distance_fade = 1.0 - smoothstep(
 		max(distance_limit - reflection_near_ssr_fade_m, 0.0),
@@ -1765,7 +1837,12 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		1.0
 	);
 	hit_mask = 1.0;
-	return textureLod(screen_texture, hit_uv, 0.0).rgb;
+	hit_distance_output = hit_distance;
+	ivec2 screen_size = textureSize(screen_texture, 0);
+	float screen_mip_max = max(log2(float(max(screen_size.x, screen_size.y))), 0.0);
+	float screen_lod = reflection_distance_blur_lod(
+		final_roughness, hit_distance, screen_mip_max);
+	return textureLod(screen_texture, hit_uv, screen_lod).rgb;
 }
 
 
@@ -2053,10 +2130,10 @@ void fragment() {
 	vec2 sspr_distorted_uv = SCREEN_UV;
 	vec4 sspr_distorted_sample = vec4(0.0);
 	float sspr_confidence = 0.0;
+	float sspr_facet_confidence = 1.0;
 	if (reflection_sspr_enabled && reflection_sspr_available) {
 		ivec2 sspr_size = textureSize(reflection_sspr_texture, 0);
 		float sspr_mip_max = max(log2(float(max(sspr_size.x, sspr_size.y))), 0.0);
-		float sspr_lod = clamp(sspr_filter_roughness * sspr_mip_max, 0.0, sspr_mip_max);
 		sspr_distorted_uv = reflection_sspr_distorted_uv(
 			SCREEN_UV,
 			sspr_macro_normal_view,
@@ -2066,11 +2143,33 @@ void fragment() {
 			projection_scale,
 			sspr_distortion_confidence
 		);
-		sspr_distorted_sample = textureLod(reflection_sspr_texture, sspr_distorted_uv, sspr_lod);
 		float uv_inside = float(
 			sspr_distorted_uv.x >= 0.0 && sspr_distorted_uv.x <= 1.0
 			&& sspr_distorted_uv.y >= 0.0 && sspr_distorted_uv.y <= 1.0
 		);
+		vec3 sspr_source_world = vec3(0.0);
+		bool sspr_source_valid = false;
+		if (uv_inside > 0.5 && reflection_sspr_depth_available) {
+			float reflected_virtual_depth = textureLod(
+				reflection_sspr_depth_texture, sspr_distorted_uv, 0.0).r;
+			sspr_source_valid = reflection_sspr_source_from_depth(
+				sspr_distorted_uv,
+				reflected_virtual_depth,
+				INV_PROJECTION_MATRIX,
+				INV_VIEW_MATRIX,
+				reflection_sspr_sea_level,
+				sspr_source_world
+			);
+		}
+		float sspr_source_distance_m = 0.0;
+		if (sspr_source_valid) {
+			sspr_source_distance_m = distance(ocean_world_position, sspr_source_world);
+			sspr_source_valid = sspr_source_distance_m > 0.001;
+		}
+		float sspr_lod = reflection_distance_blur_lod(
+			sspr_filter_roughness, sspr_source_distance_m, sspr_mip_max);
+		sspr_distorted_sample = textureLod(
+			reflection_sspr_texture, sspr_distorted_uv, sspr_lod);
 		float roughness_confidence = 1.0 - smoothstep(0.55, 0.90, water_reflection_roughness);
 		float sspr_validity = sspr_distorted_sample.a;
 		if (!reflection_sspr_hole_fill_enabled && sspr_validity < 0.99) {
@@ -2086,6 +2185,26 @@ void fragment() {
 			0.0,
 			1.0
 		);
+		if (sspr_source_valid && sspr_distorted_sample.a > 0.001
+				&& reflection_sspr_facet_gate_enabled) {
+			vec3 view_direction_world = normalize((INV_VIEW_MATRIX
+				* vec4(view_direction, 0.0)).xyz);
+			vec3 macro_reflection_ray_world = normalize(reflect(
+				-view_direction_world, sspr_macro_normal_world));
+			vec3 direction_to_source_world = normalize(
+				sspr_source_world - ocean_world_position);
+			sspr_facet_confidence = reflection_sspr_facet_confidence(
+				macro_reflection_ray_world,
+				direction_to_source_world,
+				sspr_filter_roughness
+			);
+			float facet_gate = mix(
+				1.0,
+				sspr_facet_confidence,
+				clamp(reflection_sspr_facet_gate_strength, 0.0, 1.0)
+			);
+			sspr_confidence *= facet_gate;
+		}
 	}
 	vec3 water_position_view = (VIEW_MATRIX * vec4(ocean_world_position, 1.0)).xyz;
 	float near_ssr_active = 0.0;
@@ -2095,6 +2214,7 @@ void fragment() {
 	float near_ssr_deviation_confidence = 0.0;
 	float near_ssr_base_confidence = 0.0;
 	float near_ssr_step_usage = 0.0;
+	float near_ssr_hit_distance = 0.0;
 	vec3 near_ssr_color = reflection_near_ssr(
 		water_position_view,
 		sspr_macro_normal_view,
@@ -2110,7 +2230,8 @@ void fragment() {
 		near_ssr_depth_confidence,
 		near_ssr_deviation_confidence,
 		near_ssr_base_confidence,
-		near_ssr_step_usage
+		near_ssr_step_usage,
+		near_ssr_hit_distance
 	);
 	// Near SSR selects radiance; it never adds a second lighting or Fresnel lobe.
 	// An SSPR miss remains a partial radiance override, so the environment keeps
@@ -2292,6 +2413,8 @@ void fragment() {
 		color = vec3(near_ssr_base_confidence);
 	} else if (reflection_debug_mode == 20) {
 		color = vec3(near_ssr_step_usage);
+	} else if (reflection_debug_mode == 21) {
+		color = vec3(sspr_facet_confidence);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

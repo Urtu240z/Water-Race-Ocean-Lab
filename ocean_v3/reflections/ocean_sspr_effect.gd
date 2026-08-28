@@ -134,6 +134,13 @@ func get_temporal_texture_rid() -> RID:
 	return result
 
 
+func get_depth_texture_rid() -> RID:
+	_mutex.lock()
+	var result := _current_depth_texture
+	_mutex.unlock()
+	return result
+
+
 func get_source_size() -> Vector2i:
 	_mutex.lock()
 	var result := _source_size
@@ -153,7 +160,8 @@ func release_texture(texture_rid: RID) -> void:
 		return
 	_mutex.lock()
 	var is_current := texture_rid == _output_texture_rid \
-			or texture_rid == _temporal_texture or texture_rid == _current_texture
+			or texture_rid == _temporal_texture or texture_rid == _current_texture \
+			or texture_rid == _current_depth_texture
 	_mutex.unlock()
 	if not is_current:
 		_retired_texture_rids.erase(texture_rid)
@@ -553,7 +561,9 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 		_retired_texture_rids.append(_current_texture)
 	if _temporal_texture.is_valid():
 		_retired_texture_rids.append(_temporal_texture)
-	for rid in [_current_depth_texture, _kawase_down_texture,
+	if _current_depth_texture.is_valid():
+		_retired_texture_rids.append(_current_depth_texture)
+	for rid in [_kawase_down_texture,
 			_history_color_read, _history_color_write, _history_depth_read, _history_depth_write]:
 		if rid.is_valid():
 			_rd.free_rid(rid)

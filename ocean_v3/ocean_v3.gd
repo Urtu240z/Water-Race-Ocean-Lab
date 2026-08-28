@@ -425,6 +425,31 @@ var _performance_overlay_label: Label
 		reflection_sspr_hole_fill_enabled = value
 		_request_visual_sync()
 
+@export var reflection_sspr_facet_gate_enabled: bool = true:
+	set(value):
+		reflection_sspr_facet_gate_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var reflection_sspr_facet_gate_strength: float = 1.0:
+	set(value):
+		reflection_sspr_facet_gate_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export var reflection_distance_blur_enabled: bool = true:
+	set(value):
+		reflection_distance_blur_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var reflection_distance_blur_strength: float = 1.0:
+	set(value):
+		reflection_distance_blur_strength = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(1.0, 500.0, 1.0) var reflection_distance_blur_reference_m: float = 50.0:
+	set(value):
+		reflection_distance_blur_reference_m = clampf(value, 1.0, 500.0)
+		_request_visual_sync()
+
 @export var reflection_near_ssr_enabled: bool = true:
 	set(value):
 		reflection_near_ssr_enabled = value
@@ -1283,12 +1308,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 21
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 22
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR", "NEAR_SSR_DEPTH_CONFIDENCE", "NEAR_SSR_DEVIATION_CONFIDENCE", "NEAR_SSR_BASE_CONFIDENCE", "NEAR_SSR_STEP_USAGE"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR", "NEAR_SSR_DEPTH_CONFIDENCE", "NEAR_SSR_DEVIATION_CONFIDENCE", "NEAR_SSR_BASE_CONFIDENCE", "NEAR_SSR_STEP_USAGE", "SSPR_FACET_CONFIDENCE"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1763,6 +1788,12 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_sspr_edge_fade", reflection_sspr_edge_fade)
 	material.set_shader_parameter(&"reflection_sspr_slope_fade", reflection_sspr_slope_fade)
 	material.set_shader_parameter(&"reflection_sspr_hole_fill_enabled", reflection_sspr_hole_fill_enabled)
+	material.set_shader_parameter(&"reflection_sspr_facet_gate_enabled", reflection_sspr_facet_gate_enabled)
+	material.set_shader_parameter(&"reflection_sspr_facet_gate_strength", reflection_sspr_facet_gate_strength)
+	material.set_shader_parameter(&"reflection_distance_blur_enabled", reflection_distance_blur_enabled)
+	material.set_shader_parameter(&"reflection_distance_blur_strength", reflection_distance_blur_strength)
+	material.set_shader_parameter(&"reflection_distance_blur_reference_m", reflection_distance_blur_reference_m)
+	material.set_shader_parameter(&"reflection_sspr_sea_level", _surface_sea_level())
 	material.set_shader_parameter(&"reflection_near_ssr_enabled", reflection_near_ssr_enabled)
 	material.set_shader_parameter(&"reflection_near_ssr_distance_m", reflection_near_ssr_distance_m)
 	material.set_shader_parameter(&"reflection_near_ssr_ray_length_m", reflection_near_ssr_ray_length_m)
@@ -1913,6 +1944,17 @@ func set_reflection_sspr_temporal_texture(texture: Texture2D, available: bool) -
 		return
 	material.set_shader_parameter(&"reflection_sspr_temporal_texture", texture)
 	material.set_shader_parameter(&"reflection_sspr_temporal_available", available)
+
+
+func set_reflection_sspr_depth_texture(texture: Texture2D, available: bool) -> void:
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	if surface == null or not is_instance_valid(surface):
+		return
+	var material := surface.get_surface_material()
+	if material == null or not is_instance_valid(material):
+		return
+	material.set_shader_parameter(&"reflection_sspr_depth_texture", texture)
+	material.set_shader_parameter(&"reflection_sspr_depth_available", available)
 
 
 func get_reflection_sspr_temporal_settings() -> Dictionary:
