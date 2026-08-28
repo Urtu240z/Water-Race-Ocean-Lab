@@ -194,7 +194,8 @@ uniform float reflection_near_ssr_thickness : hint_range(0.01, 2.0, 0.01) = 0.35
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
 // 13 NEAR_SSR_ACTIVE, 14 NEAR_SSR_HIT, 15 NEAR_SSR_CONFIDENCE,
-// 16 NEAR_SSR_COLOR.
+// 16 NEAR_SSR_COLOR, 17 NEAR_SSR_DEPTH_CONFIDENCE,
+// 18 NEAR_SSR_DEVIATION_CONFIDENCE, 19 NEAR_SSR_BASE_CONFIDENCE.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -1577,10 +1578,15 @@ float near_ssr_depth_delta(vec3 ray_view_position, vec2 uv,
 vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		vec3 view_direction, vec3 flat_normal_view, float camera_distance,
 		float final_roughness, mat4 projection, mat4 inverse_projection,
-		out float active_mask, out float confidence, out float hit_mask) {
+		out float active_mask, out float confidence, out float hit_mask,
+		out float depth_confidence, out float deviation_confidence,
+		out float base_confidence) {
 	active_mask = 0.0;
 	confidence = 0.0;
 	hit_mask = 0.0;
+	depth_confidence = 0.0;
+	deviation_confidence = 0.0;
+	base_confidence = 0.0;
 	float distance_limit = max(reflection_near_ssr_distance_m, 0.001);
 	float distance_fade = 1.0 - smoothstep(
 		max(distance_limit - reflection_near_ssr_fade_m, 0.0),
@@ -1597,6 +1603,7 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 	vec3 macro_ray = normalize(reflect(-view_direction, macro_normal_view));
 	float ray_deviation = 1.0 - clamp(dot(planar_ray, macro_ray), 0.0, 1.0);
 	float deviation_fade = smoothstep(0.002, 0.08, ray_deviation);
+	deviation_confidence = deviation_fade;
 	// Flat water takes the existing SSPR path without paying for a raymarch.
 	if (deviation_fade <= 0.001 || macro_ray.z >= -0.001) {
 		return vec3(0.0);
@@ -1686,14 +1693,24 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		min(min(hit_uv.x, 1.0 - hit_uv.x), min(hit_uv.y, 1.0 - hit_uv.y))
 	);
 	float travel_fade = 1.0 - smoothstep(0.0, ray_length, hit_distance);
-	float depth_fade = 1.0 - smoothstep(
-		0.0,
-		max(reflection_near_ssr_thickness, 0.001),
+	// A refined crossing is already a valid intersection. Depth only rejects
+	// clearly incompatible thickness, instead of demanding a nearly zero delta.
+	depth_confidence = 1.0 - smoothstep(
+		max(reflection_near_ssr_thickness * 0.75, 0.001),
+		max(reflection_near_ssr_thickness * 1.5, 0.002),
 		abs(hit_delta)
 	);
+	base_confidence = clamp(distance_fade * edge_fade * roughness_fade, 0.0, 1.0);
+	float travel_confidence = mix(0.82, 1.0, travel_fade);
+	float bracket_width = max(bracket_high - bracket_low, 0.0);
+	float bracket_confidence = 1.0 - smoothstep(
+		ray_length * 0.05,
+		ray_length * 0.20,
+		bracket_width
+	);
 	confidence = clamp(
-		distance_fade * deviation_fade * roughness_fade
-			* edge_fade * travel_fade * depth_fade,
+		base_confidence * depth_confidence * travel_confidence
+			* mix(0.90, 1.0, bracket_confidence),
 		0.0,
 		1.0
 	);
@@ -2012,6 +2029,9 @@ void fragment() {
 	float near_ssr_active = 0.0;
 	float near_ssr_confidence = 0.0;
 	float near_ssr_hit = 0.0;
+	float near_ssr_depth_confidence = 0.0;
+	float near_ssr_deviation_confidence = 0.0;
+	float near_ssr_base_confidence = 0.0;
 	vec3 near_ssr_color = reflection_near_ssr(
 		water_position_view,
 		sspr_macro_normal_view,
@@ -2023,7 +2043,10 @@ void fragment() {
 		inverse_projection_matrix,
 		near_ssr_active,
 		near_ssr_confidence,
-		near_ssr_hit
+		near_ssr_hit,
+		near_ssr_depth_confidence,
+		near_ssr_deviation_confidence,
+		near_ssr_base_confidence
 	);
 	// Near SSR selects radiance; it never adds a second lighting or Fresnel lobe.
 	// An SSPR miss remains a partial radiance override, so the environment keeps
@@ -2197,6 +2220,12 @@ void fragment() {
 		color = vec3(near_ssr_confidence);
 	} else if (reflection_debug_mode == 16) {
 		color = near_ssr_color;
+	} else if (reflection_debug_mode == 17) {
+		color = vec3(near_ssr_depth_confidence);
+	} else if (reflection_debug_mode == 18) {
+		color = vec3(near_ssr_deviation_confidence);
+	} else if (reflection_debug_mode == 19) {
+		color = vec3(near_ssr_base_confidence);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;

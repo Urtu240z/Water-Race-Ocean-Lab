@@ -1045,12 +1045,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 17
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 20
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR", "NEAR_SSR_DEPTH_CONFIDENCE", "NEAR_SSR_DEVIATION_CONFIDENCE", "NEAR_SSR_BASE_CONFIDENCE"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
