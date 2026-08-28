@@ -1237,6 +1237,14 @@ func toggle_clipmap_lod_debug() -> void:
 	surface.toggle_lod_debug()
 
 
+func toggle_clipmap_tracking_debug_mode() -> void:
+	surface.toggle_clipmap_tracking_debug_mode()
+
+
+func clipmap_tracking_debug_mode_name() -> String:
+	return surface.clipmap_tracking_debug_mode_name()
+
+
 func toggle_periodicity_debug() -> void:
 	surface.toggle_periodicity_debug()
 
