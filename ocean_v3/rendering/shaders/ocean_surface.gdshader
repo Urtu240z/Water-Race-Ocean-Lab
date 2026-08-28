@@ -156,8 +156,8 @@ uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
 // final NORMAL, ROUGHNESS and SPECULAR to provide environment radiance and
-// direct-light specular. Phase 2 optionally replaces part of environment
-// radiance with the quarter-resolution SSPR result through RADIANCE.
+// direct-light specular. SSPR and the optional near-field SSR replace part of
+// environment radiance through RADIANCE; neither adds a second lighting lobe.
 uniform float reflection_min_roughness : hint_range(0.0, 1.0, 0.005) = 0.035;
 uniform float reflection_base_roughness : hint_range(0.0, 1.0, 0.005) = 0.055;
 uniform float reflection_distance_roughness : hint_range(0.0, 1.0, 0.005) = 0.23;
@@ -185,9 +185,14 @@ uniform float reflection_sspr_distortion_strength : hint_range(0.0, 1.0, 0.01) =
 uniform float reflection_sspr_edge_fade : hint_range(0.0, 0.25, 0.005) = 0.08;
 uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform bool reflection_sspr_hole_fill_enabled = true;
+uniform bool reflection_near_ssr_enabled = true;
+uniform float reflection_near_ssr_distance_m : hint_range(1.0, 100.0, 1.0) = 35.0;
+uniform float reflection_near_ssr_fade_m : hint_range(0.0, 50.0, 0.5) = 10.0;
+uniform float reflection_near_ssr_thickness : hint_range(0.01, 2.0, 0.01) = 0.35;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
-// 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED.
+// 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
+// 13 NEAR_SSR_HIT, 14 NEAR_SSR_CONFIDENCE, 15 NEAR_SSR_COLOR.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -1535,6 +1540,163 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 }
 
 
+const int NEAR_SSR_COARSE_STEPS = 10;
+const int NEAR_SSR_REFINEMENT_STEPS = 2;
+const float NEAR_SSR_START_EPSILON_M = 0.05;
+
+
+vec2 near_ssr_project_view_position(vec3 view_position, mat4 projection,
+		out bool valid) {
+	vec4 clip_position = projection * vec4(view_position, 1.0);
+	if (clip_position.w <= 0.0001) {
+		valid = false;
+		return vec2(0.0);
+	}
+	vec2 uv = clip_position.xy / clip_position.w * 0.5 + 0.5;
+	valid = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+	return uv;
+}
+
+
+float near_ssr_depth_delta(vec3 ray_view_position, vec2 uv,
+		mat4 inverse_projection, out bool valid) {
+	float raw_depth = textureLod(depth_texture, uv, 0.0).r;
+	// Forward+ reversed-Z clear depth is zero: sky is not a ray hit.
+	if (raw_depth <= 0.000001) {
+		valid = false;
+		return 0.0;
+	}
+	float scene_depth = linear_depth_from_buffer(uv, raw_depth, inverse_projection);
+	valid = scene_depth > 0.0;
+	return -ray_view_position.z - scene_depth;
+}
+
+
+vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
+		vec3 view_direction, vec3 flat_normal_view, float camera_distance,
+		float final_roughness, mat4 projection, mat4 inverse_projection,
+		out float confidence, out float hit_mask) {
+	confidence = 0.0;
+	hit_mask = 0.0;
+	float distance_limit = max(reflection_near_ssr_distance_m, 0.001);
+	float distance_fade = 1.0 - smoothstep(
+		max(distance_limit - reflection_near_ssr_fade_m, 0.0),
+		distance_limit,
+		camera_distance
+	);
+	float roughness_fade = 1.0 - smoothstep(0.55, 0.90, final_roughness);
+	if (!reflection_near_ssr_enabled || camera_distance >= distance_limit
+			|| distance_fade <= 0.001 || roughness_fade <= 0.001) {
+		return vec3(0.0);
+	}
+
+	vec3 planar_ray = normalize(reflect(-view_direction, flat_normal_view));
+	vec3 macro_ray = normalize(reflect(-view_direction, macro_normal_view));
+	float ray_deviation = 1.0 - clamp(dot(planar_ray, macro_ray), 0.0, 1.0);
+	float deviation_fade = smoothstep(0.002, 0.08, ray_deviation);
+	// Flat water takes the existing SSPR path without paying for a raymarch.
+	if (deviation_fade <= 0.001 || macro_ray.z >= -0.001) {
+		return vec3(0.0);
+	}
+
+	float start_distance = NEAR_SSR_START_EPSILON_M;
+	float coarse_step = distance_limit / float(NEAR_SSR_COARSE_STEPS);
+	float previous_distance = start_distance;
+	float previous_delta = -reflection_near_ssr_thickness;
+	float bracket_low = 0.0;
+	float bracket_high = 0.0;
+	bool bracket_found = false;
+	for (int step = 0; step < NEAR_SSR_COARSE_STEPS; step++) {
+		float ray_distance = start_distance + coarse_step * float(step + 1);
+		vec3 ray_position = water_position_view + macro_ray * ray_distance;
+		bool uv_valid = false;
+		vec2 ray_uv = near_ssr_project_view_position(ray_position, projection, uv_valid);
+		if (!uv_valid) {
+			break;
+		}
+		bool depth_valid = false;
+		float depth_delta = near_ssr_depth_delta(
+				ray_position, ray_uv, inverse_projection, depth_valid);
+		if (!depth_valid) {
+			previous_distance = ray_distance;
+			previous_delta = -reflection_near_ssr_thickness;
+			continue;
+		}
+		if ((depth_delta >= 0.0 && depth_delta <= reflection_near_ssr_thickness)
+				|| (previous_delta < 0.0 && depth_delta > reflection_near_ssr_thickness)) {
+			bracket_low = previous_distance;
+			bracket_high = ray_distance;
+			bracket_found = true;
+			break;
+		}
+		previous_distance = ray_distance;
+		previous_delta = depth_delta;
+	}
+	if (!bracket_found) {
+		return vec3(0.0);
+	}
+
+	float hit_distance = bracket_high;
+	vec2 hit_uv = vec2(0.0);
+	float hit_delta = reflection_near_ssr_thickness;
+	for (int refinement = 0; refinement < NEAR_SSR_REFINEMENT_STEPS; refinement++) {
+		float test_distance = (bracket_low + bracket_high) * 0.5;
+		vec3 test_position = water_position_view + macro_ray * test_distance;
+		bool uv_valid = false;
+		vec2 test_uv = near_ssr_project_view_position(test_position, projection, uv_valid);
+		if (!uv_valid) {
+			bracket_high = test_distance;
+			continue;
+		}
+		bool depth_valid = false;
+		float test_delta = near_ssr_depth_delta(
+				test_position, test_uv, inverse_projection, depth_valid);
+		if (depth_valid && test_delta >= 0.0) {
+			bracket_high = test_distance;
+			hit_distance = test_distance;
+			hit_uv = test_uv;
+			hit_delta = test_delta;
+		} else {
+			bracket_low = test_distance;
+		}
+	}
+	if (hit_uv.x == 0.0 && hit_uv.y == 0.0) {
+		vec3 hit_position = water_position_view + macro_ray * hit_distance;
+		bool uv_valid = false;
+		hit_uv = near_ssr_project_view_position(hit_position, projection, uv_valid);
+		if (!uv_valid) {
+			return vec3(0.0);
+		}
+		bool depth_valid = false;
+		hit_delta = near_ssr_depth_delta(
+			hit_position, hit_uv, inverse_projection, depth_valid);
+		if (!depth_valid) {
+			return vec3(0.0);
+		}
+	}
+
+	float edge_fade = smoothstep(
+		0.0,
+		0.08,
+		min(min(hit_uv.x, 1.0 - hit_uv.x), min(hit_uv.y, 1.0 - hit_uv.y))
+	);
+	float travel_fade = 1.0 - smoothstep(0.0, distance_limit, hit_distance);
+	float depth_fade = 1.0 - smoothstep(
+		0.0,
+		max(reflection_near_ssr_thickness, 0.001),
+		abs(hit_delta)
+	);
+	confidence = clamp(
+		distance_fade * deviation_fade * roughness_fade
+			* edge_fade * travel_fade * depth_fade,
+		0.0,
+		1.0
+	);
+	hit_mask = 1.0;
+	return textureLod(screen_texture, hit_uv, 0.0).rgb;
+}
+
+
 // Recover dFoam/dWorldXZ from derivatives already available in fragment. This
 // adds no foam texture reads and falls back safely at grazing/degenerate pixels.
 vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
@@ -1800,6 +1962,8 @@ void fragment() {
 	vec3 final_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
 	vec3 sspr_macro_normal_view = normalize((VIEW_MATRIX * vec4(sspr_macro_normal_world, 0.0)).xyz);
 	vec3 flat_normal_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	mat4 projection_matrix = PROJECTION_MATRIX;
+	mat4 inverse_projection_matrix = INV_PROJECTION_MATRIX;
 	vec2 projection_scale = vec2(PROJECTION_MATRIX[0][0], PROJECTION_MATRIX[1][1]);
 	float sspr_distortion_confidence = 0.0;
 	vec2 sspr_distorted_uv = SCREEN_UV;
@@ -1838,6 +2002,32 @@ void fragment() {
 			0.0,
 			1.0
 		);
+	}
+	vec3 water_position_view = (VIEW_MATRIX * vec4(ocean_world_position, 1.0)).xyz;
+	float near_ssr_confidence = 0.0;
+	float near_ssr_hit = 0.0;
+	vec3 near_ssr_color = reflection_near_ssr(
+		water_position_view,
+		sspr_macro_normal_view,
+		view_direction,
+		flat_normal_view,
+		camera_distance,
+		sspr_filter_roughness,
+		projection_matrix,
+		inverse_projection_matrix,
+		near_ssr_confidence,
+		near_ssr_hit
+	);
+	// Near SSR selects radiance; it never adds a second lighting or Fresnel lobe.
+	// An SSPR miss remains a partial radiance override, so the environment keeps
+	// contributing continuously when both screen-space paths are uncertain.
+	vec3 reflection_radiance = sspr_distorted_sample.rgb;
+	float reflection_radiance_confidence = sspr_confidence;
+	if (near_ssr_confidence > 0.0) {
+		reflection_radiance = sspr_confidence > 0.0001
+			? mix(sspr_distorted_sample.rgb, near_ssr_color, near_ssr_confidence)
+			: near_ssr_color;
+		reflection_radiance_confidence = max(sspr_confidence, near_ssr_confidence);
 	}
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
@@ -1992,6 +2182,12 @@ void fragment() {
 		}
 	} else if (reflection_debug_mode == 12) {
 		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
+	} else if (reflection_debug_mode == 13) {
+		color = vec3(near_ssr_hit);
+	} else if (reflection_debug_mode == 14) {
+		color = vec3(near_ssr_confidence);
+	} else if (reflection_debug_mode == 15) {
+		color = near_ssr_color;
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
@@ -2142,7 +2338,7 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			RADIANCE = vec4(sspr_distorted_sample.rgb, sspr_confidence);
+			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
 			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		} else {
 			// Fallback de debug: material simple sin screen/depth.
@@ -2158,7 +2354,7 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_residual_specular, foam_residual_mask);
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
-			RADIANCE = vec4(sspr_distorted_sample.rgb, sspr_confidence);
+			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
