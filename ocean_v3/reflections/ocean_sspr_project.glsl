@@ -73,39 +73,18 @@ void main() {
 	}
 
 	vec2 destination_uv = destination_ndc.xy * 0.5 + 0.5;
-	vec2 destination_pixel_f = destination_uv * params.destination_size.xy;
+	ivec2 destination_pixel = ivec2(destination_uv * params.destination_size.xy);
 	ivec2 destination_extent = ivec2(params.destination_size.xy);
+	if (destination_pixel.x < 0 || destination_pixel.y < 0 ||
+		destination_pixel.x >= destination_extent.x || destination_pixel.y >= destination_extent.y) {
+		return;
+	}
+
 	if (source_pixel.x >= 65536 || source_pixel.y >= 65536) {
 		return;
 	}
 	uint packed_coordinates = (uint(source_pixel.y) << 16u) | uint(source_pixel.x);
 	uint payload = packed_coordinates + 1u;
-
-	if (params.ocean_level.y <= 0.5) {
-		// A/B baseline: one source pixel writes its single projected destination.
-		ivec2 destination_pixel = ivec2(destination_pixel_f);
-		if (destination_pixel.x < 0 || destination_pixel.y < 0 ||
-			destination_pixel.x >= destination_extent.x || destination_pixel.y >= destination_extent.y) {
-			return;
-		}
-		uint destination_id = uint(destination_pixel.y * destination_extent.x + destination_pixel.x);
-		atomicMax(candidates[destination_id], payload);
-		return;
-	}
-
-	// Conservative coverage: splat around the continuous projected position.
-	// The -0.5 accounts for texel-center coordinates, so each source candidate
-	// covers exactly the 2x2 destination footprint surrounding that position.
-	ivec2 base_pixel = ivec2(floor(destination_pixel_f - vec2(0.5)));
-	for (int offset_y = 0; offset_y < 2; offset_y++) {
-		for (int offset_x = 0; offset_x < 2; offset_x++) {
-			ivec2 destination_pixel = base_pixel + ivec2(offset_x, offset_y);
-			if (destination_pixel.x < 0 || destination_pixel.y < 0 ||
-				destination_pixel.x >= destination_extent.x || destination_pixel.y >= destination_extent.y) {
-				continue;
-			}
-			uint destination_id = uint(destination_pixel.y * destination_extent.x + destination_pixel.x);
-			atomicMax(candidates[destination_id], payload);
-		}
-	}
+	uint destination_id = uint(destination_pixel.y * destination_extent.x + destination_pixel.x);
+	atomicMax(candidates[destination_id], payload);
 }

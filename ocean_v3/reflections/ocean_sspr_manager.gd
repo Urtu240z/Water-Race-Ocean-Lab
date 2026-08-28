@@ -11,7 +11,9 @@ var _compositor: Compositor
 var _world_environment: WorldEnvironment
 var _camera: Camera3D
 var _texture := Texture2DRD.new()
+var _raw_texture := Texture2DRD.new()
 var _published_rid := RID()
+var _published_raw_rid := RID()
 var _attached := false
 var _enabled := true
 var _ocean_level := 0.0
@@ -44,9 +46,9 @@ func set_temporal_settings(enabled: bool, weight: float, depth_threshold: float)
 		_effect.set_temporal_settings(enabled, weight, depth_threshold)
 
 
-func set_conservative_coverage_enabled(value: bool) -> void:
+func set_kawase_enabled(value: bool) -> void:
 	if _effect != null:
-		_effect.set_conservative_coverage_enabled(value)
+		_effect.set_kawase_enabled(value)
 
 
 func _ready() -> void:
@@ -59,16 +61,28 @@ func _process(_delta: float) -> void:
 	if _effect == null:
 		return
 	var current_rid := _effect.get_output_texture_rid()
-	if current_rid == _published_rid:
+	var current_raw_rid := _effect.get_raw_texture_rid()
+	if current_rid == _published_rid and current_raw_rid == _published_raw_rid:
 		return
-	if _published_rid.is_valid():
+	if current_rid != _published_rid and _published_rid.is_valid():
 		_texture.texture_rd_rid = RID()
 		RenderingServer.call_on_render_thread(_effect.release_texture.bind(_published_rid))
-	_published_rid = current_rid
+	if current_raw_rid != _published_raw_rid and _published_raw_rid.is_valid() \
+			and _published_raw_rid != _published_rid:
+		_raw_texture.texture_rd_rid = RID()
+		RenderingServer.call_on_render_thread(_effect.release_texture.bind(_published_raw_rid))
+	if current_rid != _published_rid:
+		_published_rid = current_rid
+	if current_raw_rid != _published_raw_rid:
+		_published_raw_rid = current_raw_rid
 	if _published_rid.is_valid():
 		_texture.texture_rd_rid = _published_rid
+	if _published_raw_rid.is_valid():
+		_raw_texture.texture_rd_rid = _published_raw_rid
 	if _ocean != null and is_instance_valid(_ocean) and _ocean.has_method(&"set_reflection_sspr_texture"):
 		_ocean.set_reflection_sspr_texture(_texture, _published_rid.is_valid())
+	if _ocean != null and is_instance_valid(_ocean) and _ocean.has_method(&"set_reflection_sspr_raw_texture"):
+		_ocean.set_reflection_sspr_raw_texture(_raw_texture, _published_raw_rid.is_valid())
 
 
 func _initialize() -> void:
@@ -84,9 +98,8 @@ func _initialize() -> void:
 			temporal_settings.get("enabled", true),
 			temporal_settings.get("weight", 0.12),
 			temporal_settings.get("depth_threshold", 0.035))
-	if _ocean != null and _ocean.has_method(&"get_reflection_sspr_conservative_coverage_enabled"):
-		_effect.set_conservative_coverage_enabled(
-			_ocean.get_reflection_sspr_conservative_coverage_enabled())
+	if _ocean != null and _ocean.has_method(&"get_reflection_sspr_kawase_enabled"):
+		_effect.set_kawase_enabled(_ocean.get_reflection_sspr_kawase_enabled())
 	var target := get_tree().current_scene.find_child("WorldEnvironment", true, false) if get_tree().current_scene != null else null
 	if target is WorldEnvironment:
 		_world_environment = target
@@ -113,6 +126,9 @@ func _exit_tree() -> void:
 	if _published_rid.is_valid():
 		_texture.texture_rd_rid = RID()
 		_published_rid = RID()
+	if _published_raw_rid.is_valid():
+		_raw_texture.texture_rd_rid = RID()
+		_published_raw_rid = RID()
 	if _effect != null:
 		if _compositor != null:
 			var effects := _compositor.compositor_effects.duplicate()

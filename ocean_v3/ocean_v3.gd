@@ -347,11 +347,6 @@ var _wave_transition_start_short_geometry := 0.25
 		reflection_sspr_enabled = value
 		_request_visual_sync()
 
-@export var reflection_sspr_conservative_coverage_enabled: bool = true:
-	set(value):
-		reflection_sspr_conservative_coverage_enabled = value
-		_request_visual_sync()
-
 @export_range(0.0, 1.0, 0.01) var reflection_sspr_distortion_strength: float = 0.35:
 	set(value):
 		reflection_sspr_distortion_strength = clampf(value, 0.0, 1.0)
@@ -370,6 +365,11 @@ var _wave_transition_start_short_geometry := 0.25
 @export var reflection_sspr_hole_fill_enabled: bool = true:
 	set(value):
 		reflection_sspr_hole_fill_enabled = value
+		_request_visual_sync()
+
+@export var reflection_sspr_kawase_enabled: bool = true:
+	set(value):
+		reflection_sspr_kawase_enabled = value
 		_request_visual_sync()
 
 @export var reflection_sspr_temporal_enabled: bool = true:
@@ -1010,12 +1010,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 11
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 12
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_PREFILTERED"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1495,8 +1495,7 @@ func _sync_water_visual_parameters() -> void:
 			reflection_sspr_temporal_enabled,
 			reflection_sspr_temporal_weight,
 			reflection_sspr_temporal_depth_threshold)
-		_reflection_sspr_manager.set_conservative_coverage_enabled(
-			reflection_sspr_conservative_coverage_enabled)
+		_reflection_sspr_manager.set_kawase_enabled(reflection_sspr_kawase_enabled)
 
 	material.set_shader_parameter(&"foam_enabled", foam_enabled)
 	material.set_shader_parameter(&"foam_color", foam_color)
@@ -1611,6 +1610,17 @@ func set_reflection_sspr_texture(texture: Texture2D, available: bool) -> void:
 	material.set_shader_parameter(&"reflection_sspr_available", available)
 
 
+func set_reflection_sspr_raw_texture(texture: Texture2D, available: bool) -> void:
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	if surface == null or not is_instance_valid(surface):
+		return
+	var material := surface.get_surface_material()
+	if material == null or not is_instance_valid(material):
+		return
+	material.set_shader_parameter(&"reflection_sspr_raw_texture", texture)
+	material.set_shader_parameter(&"reflection_sspr_raw_available", available)
+
+
 func get_reflection_sspr_temporal_settings() -> Dictionary:
 	return {
 		"enabled": reflection_sspr_temporal_enabled,
@@ -1619,5 +1629,5 @@ func get_reflection_sspr_temporal_settings() -> Dictionary:
 	}
 
 
-func get_reflection_sspr_conservative_coverage_enabled() -> bool:
-	return reflection_sspr_conservative_coverage_enabled
+func get_reflection_sspr_kawase_enabled() -> bool:
+	return reflection_sspr_kawase_enabled

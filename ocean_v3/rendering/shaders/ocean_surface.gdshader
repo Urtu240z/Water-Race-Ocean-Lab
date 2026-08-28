@@ -177,13 +177,15 @@ uniform float reflection_crest_min_roughness_scale : hint_range(0.45, 1.0, 0.01)
 uniform bool reflection_sspr_enabled = true;
 uniform bool reflection_sspr_available = false;
 uniform sampler2D reflection_sspr_texture : repeat_disable, filter_linear;
+uniform bool reflection_sspr_raw_available = false;
+uniform sampler2D reflection_sspr_raw_texture : repeat_disable, filter_linear;
 uniform float reflection_sspr_distortion_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
 uniform float reflection_sspr_edge_fade : hint_range(0.0, 0.25, 0.005) = 0.08;
 uniform float reflection_sspr_slope_fade : hint_range(0.0, 1.0, 0.01) = 0.65;
 uniform bool reflection_sspr_hole_fill_enabled = true;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
-// 10 SSPR_CONFIDENCE.
+// 10 SSPR_CONFIDENCE, 11 SSPR_PREFILTERED.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -1965,13 +1967,23 @@ void fragment() {
 	} else if (reflection_debug_mode == 6) {
 		color = vec3(debug_slope_variance);
 	} else if (reflection_debug_mode == 7) {
-		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
+		if (reflection_sspr_raw_available) {
+			color = textureLod(reflection_sspr_raw_texture, SCREEN_UV, 0.0).rgb;
+		} else {
+			color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
+		}
 	} else if (reflection_debug_mode == 8) {
-		color = vec3(textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).a);
+		if (reflection_sspr_raw_available) {
+			color = vec3(textureLod(reflection_sspr_raw_texture, SCREEN_UV, 0.0).a);
+		} else {
+			color = vec3(textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).a);
+		}
 	} else if (reflection_debug_mode == 9) {
 		color = sspr_distorted_sample.rgb;
 	} else if (reflection_debug_mode == 10) {
 		color = vec3(sspr_confidence);
+	} else if (reflection_debug_mode == 11) {
+		color = textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).rgb;
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
