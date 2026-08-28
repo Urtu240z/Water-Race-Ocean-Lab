@@ -67,6 +67,7 @@ var _lod_debug := false
 var _periodicity_debug := false
 var _coastal_debug_field: int = CoastalDebugField.OFF
 var _coastal_runtime_enabled := true
+var _coastal_performance_enabled := true
 var _coastal_propagation_available := false
 var _coastal_transform_requested := false
 var _coastal_monochromatic_debug := false
@@ -189,10 +190,10 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 	for material in [_surface_material, _wireframe_material]:
 		# data_enabled permite MONO/Eikonal y sus probes; transform_enabled sólo
 		# autoriza el warp visual de LONG (nunca para Eikonal 3B.1).
-		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and _coastal_runtime_enabled)
-		material.set_shader_parameter(&"coastal_transform_enabled", enabled and transform_enabled and _coastal_runtime_enabled)
-		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled and _coastal_runtime_enabled)
-		material.set_shader_parameter(&"coastal_eikonal_phase_debug", eikonal_phase_debug and monochromatic_debug and enabled and _coastal_runtime_enabled)
+		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
+		material.set_shader_parameter(&"coastal_transform_enabled", enabled and transform_enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", monochromatic_debug and enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", eikonal_phase_debug and monochromatic_debug and enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
 		material.set_shader_parameter(&"coastal_monochromatic_amplitude_m", monochromatic_amplitude_m)
 		if not enabled:
 			continue
@@ -217,7 +218,7 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 	var textures: Dictionary = warp_data.build_gpu_textures() if warp_enabled else {}
 	_coastal_warp_available = warp_enabled
 	for material in [_surface_material, _wireframe_material]:
-		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled and _coastal_runtime_enabled)
+		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
 		if not warp_enabled:
 			continue
 		material.set_shader_parameter(&"coastal_warp_texture", textures["warp"])
@@ -232,11 +233,28 @@ func set_coastal_runtime_enabled(enabled: bool) -> void:
 	## Bathymetry, Eikonal, warp, H0 ni texturas GPU; sólo cambia uniforms.
 	_coastal_runtime_enabled = enabled
 	for material in [_surface_material, _wireframe_material]:
-		material.set_shader_parameter(&"coastal_propagation_enabled", _coastal_propagation_available and enabled)
-		material.set_shader_parameter(&"coastal_transform_enabled", _coastal_propagation_available and _coastal_transform_requested and enabled)
-		material.set_shader_parameter(&"coastal_monochromatic_debug", _coastal_propagation_available and _coastal_monochromatic_debug and enabled)
-		material.set_shader_parameter(&"coastal_eikonal_phase_debug", _coastal_propagation_available and _coastal_eikonal_phase_debug and enabled)
-		material.set_shader_parameter(&"coastal_warp_enabled", _coastal_warp_available and enabled)
+		var effective_enabled := enabled and _coastal_performance_enabled
+		material.set_shader_parameter(&"coastal_propagation_enabled", _coastal_propagation_available and effective_enabled)
+		material.set_shader_parameter(&"coastal_transform_enabled", _coastal_propagation_available and _coastal_transform_requested and effective_enabled)
+		material.set_shader_parameter(&"coastal_monochromatic_debug", _coastal_propagation_available and _coastal_monochromatic_debug and effective_enabled)
+		material.set_shader_parameter(&"coastal_eikonal_phase_debug", _coastal_propagation_available and _coastal_eikonal_phase_debug and effective_enabled)
+		material.set_shader_parameter(&"coastal_warp_enabled", _coastal_warp_available and effective_enabled)
+
+
+func set_performance_profile(spectral_enabled: bool, coastal_enabled: bool,
+		crest_foam_solver_enabled: bool, surface_foam_solver_enabled: bool,
+		surface_foam_render_enabled: bool, prebreak_enabled: bool,
+		breakers_enabled: bool) -> void:
+	## Performance-only shader gates. The public material controls remain unchanged.
+	var surface_available := spectral_enabled and surface_foam_solver_enabled
+	for material in [_surface_material, _wireframe_material]:
+		material.set_shader_parameter(&"perf_spectral_enabled", spectral_enabled)
+		material.set_shader_parameter(&"perf_crest_foam_solver_enabled", crest_foam_solver_enabled)
+		material.set_shader_parameter(&"perf_surface_foam_solver_enabled", surface_available)
+		material.set_shader_parameter(&"perf_surface_foam_render_enabled", surface_foam_render_enabled)
+		material.set_shader_parameter(&"perf_prebreak_enabled", prebreak_enabled)
+	_coastal_performance_enabled = coastal_enabled
+	set_coastal_runtime_enabled(_coastal_runtime_enabled)
 
 
 func coastal_runtime_enabled() -> bool:
@@ -337,6 +355,11 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 	var ids := ["long_coastal", "long_remainder", "mid", "short"]
 	for material in [_surface_material, _wireframe_material]:
 		material.set_shader_parameter(&"module_enabled", _module_enabled)
+		material.set_shader_parameter(&"perf_spectral_enabled", true)
+		material.set_shader_parameter(&"perf_crest_foam_solver_enabled", true)
+		material.set_shader_parameter(&"perf_surface_foam_solver_enabled", true)
+		material.set_shader_parameter(&"perf_surface_foam_render_enabled", true)
+		material.set_shader_parameter(&"perf_prebreak_enabled", true)
 		material.set_shader_parameter(&"short_fade_range_m", clipmap_config.short_fade_range_m)
 		material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
 		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)

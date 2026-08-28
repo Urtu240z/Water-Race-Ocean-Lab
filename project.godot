@@ -41,5 +41,3 @@ common/physics_interpolation=true
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-scaling_3d/mode=1
-scaling_3d/scale=0.7

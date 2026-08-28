@@ -48,9 +48,10 @@ script = ExtResource("1_main")
 environment = SubResource("Environment_lab")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
-transform = Transform3D(-0.9996101, 0, -0.027921708, 0, 1, 0, 0.02792171, 0, -0.99961007, 0, 0, 0)
+transform = Transform3D(0.90630776, 0.31846967, -0.27781874, 0, 0.6573752, 0.75356334, 0.42261827, -0.68296033, 0.5957842, 0, 0, 0)
+visible = false
 light_color = Color(0.75758153, 0.87558615, 0.82974255, 1)
-light_energy = 0.0
+light_energy = 0.3
 shadow_enabled = true
 
 [node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
@@ -108,9 +109,11 @@ crest_tint = Color(0.047163434, 0.23426089, 0.18137845, 1)
 near_water_alpha = 0.91
 deep_water_alpha = 1.0
 horizon_water_alpha = 1.0
-reflection_base_roughness = 0.055
-reflection_min_roughness = 0.035
-reflection_slope_variance_gain = 0.35
+reflection_roughness_distance_m = Vector2(80, 300)
+reflection_sspr_resolution_scale = 1.0
+reflection_sspr_edge_fade = 0.0
+reflection_sspr_kawase_enabled = true
+reflection_sspr_kawase_radius = 1.3
 foam_color = Color(2.3958, 3.4121144, 3.4269989, 1)
 foam_intensity = 4.0
 foam_fresh_color = Color(0.6971579, 0.7115656, 0.70580256, 1)

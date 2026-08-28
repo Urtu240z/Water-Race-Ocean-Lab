@@ -46,6 +46,11 @@ uniform vec4 sea_state_zone_data3[8];
 uniform bool sea_state_zone_debug = false;
 uniform int debug_mode = 0;
 uniform bool module_enabled = true;
+uniform bool perf_spectral_enabled = true;
+uniform bool perf_crest_foam_solver_enabled = true;
+uniform bool perf_surface_foam_solver_enabled = true;
+uniform bool perf_surface_foam_render_enabled = true;
+uniform bool perf_prebreak_enabled = true;
 uniform bool clipmap_lod_debug = false;
 uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
@@ -776,6 +781,17 @@ void vertex() {
 	shore_vertical_weight_varying = 1.0;
 	shore_horizontal_weight_varying = 1.0;
 	shore_pre_envelope_height = 0.0;
+	coastal_field = vec4(0.0);
+	coastal_metrics = vec4(0.0);
+	coastal_phase_data = vec4(0.0);
+	if (!perf_spectral_enabled) {
+		ocean_world_xz = world_xz;
+		ocean_world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+		ocean_wave_height = 0.0;
+		surface_foam_displacement_xz = vec2(0.0);
+		derived_normal = vec3(0.0, 1.0, 0.0);
+		NORMAL = derived_normal;
+	} else {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -910,7 +926,7 @@ void vertex() {
 
 	// Ruta estrictamente opt-in. No hay compute global, readback ni OceanQuery:
 	// sólo fetches adicionales en los vértices renderizados por el debug / futuro 4B.
-	if (breaking_debug_mode > 0 && !coastal_monochromatic_debug) {
+	if (perf_prebreak_enabled && breaking_debug_mode > 0 && !coastal_monochromatic_debug) {
 		breaking_indices = prebreak_indices_at(world_xz, coast_uv, coastal_field, coastal_metrics, coastal_phase_data);
 	}
 
@@ -1003,6 +1019,7 @@ void vertex() {
 	VERTEX = displaced_vertex;
 	NORMAL = ocean_normal;
 	derived_normal = ocean_normal;
+	}
 }
 
 
@@ -1739,13 +1756,19 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 void fragment() {
 	vec3 color = base_color;
-	vec4 hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
+	vec4 hires_foam_composition = vec4(0.0);
+	if (perf_crest_foam_solver_enabled) {
+		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
+	}
 	vec2 surface_foam_world_xz = surface_foam_visual_xz();
 	vec2 raw_foam_channels = hires_foam_composition.xy;
 	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
 	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
 	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
-	vec2 surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	vec2 surface_foam_field_unweighted = vec2(0.0);
+	if (perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled) {
+		surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	}
 	float zone_long_amplitude;
 	float zone_mid_amplitude;
 	float zone_short_amplitude;
@@ -1768,8 +1791,11 @@ void fragment() {
 	// not physical wave activity.
 	float debug_camera_distance = distance(ocean_world_xz, camera_world_xz);
 	float debug_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
-	vec2 debug_reflection_metrics = reflection_unresolved_detail_metrics(
-		ocean_base_xz, debug_footprint, zone_mid_amplitude, zone_short_amplitude);
+	vec2 debug_reflection_metrics = vec2(0.0);
+	if (perf_spectral_enabled) {
+		debug_reflection_metrics = reflection_unresolved_detail_metrics(
+			ocean_base_xz, debug_footprint, zone_mid_amplitude, zone_short_amplitude);
+	}
 	float debug_slope_variance = debug_reflection_metrics.y;
 	float debug_reflection_roughness = physical_ocean_roughness(
 		debug_camera_distance, debug_footprint, debug_reflection_metrics);
@@ -1801,7 +1827,7 @@ void fragment() {
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
 	// One shared Direct-J sampling pass supplies both post-threshold topologies.
 	// The temporal field remains the common envelope, never a second history.
-	if (foam_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
+	if (foam_enabled && perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
 		surface_foam_shared_direct_topologies(
 			ocean_base_xz,
 			surface_foam_raw_topology,
@@ -1818,7 +1844,7 @@ void fragment() {
 		surface_foam_macro *= zone_foam_activity;
 		crest_filigree_macro *= zone_foam_activity;
 	}
-	if (foam_enabled) {
+	if (foam_enabled && (perf_crest_foam_solver_enabled || (perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled))) {
 		float visual_threshold = clamp(foam_threshold, 0.0, 0.999);
 		float thresholded_foam = smoothstep(visual_threshold, 1.0, raw_foam);
 		// Smooth monotonic response: contrast changes curvature, while intensity
@@ -1864,7 +1890,7 @@ void fragment() {
 			crest_foam_mask = clamp(crest_fresh_webbed + crest_residual_webbed, 0.0, 1.0);
 		}
 
-		if (surface_foam_enabled) {
+		if (surface_foam_enabled && perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled) {
 			float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
 			// Direct macro is the silhouette. Strength and distance are post-shape
 			// gains only; threshold/contrast cannot turn it into dots.
@@ -1914,7 +1940,7 @@ void fragment() {
 	// Build the final visual normal once. The same normal feeds Godot's PBR
 	// environment and direct-light lobes; FFT remains the geometry authority.
 	vec3 shading_normal_world;
-	if (ocean_normal_fragment) {
+	if (ocean_normal_fragment && perf_spectral_enabled) {
 		shading_normal_world = pixel_ocean_normal(ocean_base_xz);
 	} else {
 		shading_normal_world = normalize(derived_normal);
@@ -1973,8 +1999,11 @@ void fragment() {
 		normalize(visual_normal), view_direction, debug_reflection_roughness);
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
 	float reflection_pixel_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
-	vec2 reflection_detail_metrics = reflection_unresolved_detail_metrics(
-		ocean_base_xz, reflection_pixel_footprint, zone_mid_amplitude, zone_short_amplitude);
+	vec2 reflection_detail_metrics = vec2(0.0);
+	if (perf_spectral_enabled) {
+		reflection_detail_metrics = reflection_unresolved_detail_metrics(
+			ocean_base_xz, reflection_pixel_footprint, zone_mid_amplitude, zone_short_amplitude);
+	}
 	float water_reflection_roughness = physical_ocean_roughness(
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	water_reflection_roughness = reflection_crest_shaped_roughness(
@@ -2098,7 +2127,7 @@ void fragment() {
 		else if (coastal_debug_field == 11) value = shore_horizontal_weight_varying;
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
 	}
-	if (breaking_debug_mode > 0) {
+	if (perf_prebreak_enabled && breaking_debug_mode > 0) {
 		float value = breaking_indices.x;
 		if (breaking_debug_mode == 2) value = breaking_indices.y;
 		else if (breaking_debug_mode == 3) value = breaking_indices.z;

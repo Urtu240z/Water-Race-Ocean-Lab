@@ -11,6 +11,12 @@ const BASE_WAVE_PRESET_PATHS := [
 	"res://ocean_v3/presets/waves/rough.tres",
 ]
 const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
+const PERF_PRESET_FULL := &"FULL"
+const PERF_PRESET_BASE := &"BASE"
+const PERF_PRESET_NO_SSPR := &"NO_SSPR"
+const PERF_PRESET_NO_FOAM := &"NO_FOAM"
+const PERF_PRESET_NO_COASTAL := &"NO_COASTAL"
+const PERF_PRESET_NO_BREAKERS := &"NO_BREAKERS"
 var _wave_spectrum_dirty := false
 var _wave_spectrum_apply_at_ms := 0
 var _applying_wave_preset := false
@@ -20,6 +26,9 @@ var _wave_transition_start_configs: Array[OpenOceanFFTConfig] = []
 var _wave_transition_target_preset: OceanWavePreset = null
 var _wave_transition_target_configs: Array[OpenOceanFFTConfig] = []
 var _wave_transition_start_short_geometry := 0.25
+var _performance_sync_pending := false
+var _performance_overlay_layer: CanvasLayer
+var _performance_overlay_label: Label
 
 @export_category("Wave Spectrum")
 @export var wave_preset: OceanWavePreset:
@@ -44,6 +53,50 @@ var _wave_transition_start_short_geometry := 0.25
 @export_group("Coastal")
 @export var coastal_bake_asset: CoastalBakeAsset
 @export var coastal_enabled_on_start := true
+
+@export_group("Performance Profiling")
+## Instrumentation switches. They gate runtime work; they do not alter quality,
+## resolutions, algorithms or the authored FULL-mode behaviour.
+@export var perf_enable_spectral := true:
+	set(value):
+		perf_enable_spectral = value
+		_request_performance_sync()
+@export var perf_enable_coastal := true:
+	set(value):
+		perf_enable_coastal = value
+		_request_performance_sync()
+@export var perf_enable_crest_foam_solver := true:
+	set(value):
+		perf_enable_crest_foam_solver = value
+		_request_performance_sync()
+@export var perf_enable_surface_foam_solver := true:
+	set(value):
+		perf_enable_surface_foam_solver = value
+		_request_performance_sync()
+@export var perf_enable_surface_foam_render := true:
+	set(value):
+		perf_enable_surface_foam_render = value
+		_request_performance_sync()
+@export var perf_enable_prebreak := true:
+	set(value):
+		perf_enable_prebreak = value
+		_request_performance_sync()
+@export var perf_enable_breakers := true:
+	set(value):
+		perf_enable_breakers = value
+		_request_performance_sync()
+@export var perf_enable_sspr := true:
+	set(value):
+		perf_enable_sspr = value
+		_request_performance_sync()
+@export var perf_enable_refraction := true:
+	set(value):
+		perf_enable_refraction = value
+		_request_performance_sync()
+@export var perf_overlay_enabled := false:
+	set(value):
+		perf_overlay_enabled = value
+		_update_performance_overlay_visibility()
 
 @export_group("Wave Spectrum / LONG")
 @export_range(0.0, 10.0, 0.01) var long_target_hs_m := 0.59:
@@ -867,6 +920,8 @@ func _ready() -> void:
 		_reflection_sspr_manager.name = &"OceanSSPRManager"
 		add_child(_reflection_sspr_manager)
 		_reflection_sspr_manager.configure(self, _surface_sea_level(), reflection_sspr_enabled)
+	_apply_performance_profile()
+	_ensure_performance_overlay()
 	call_deferred(&"_flush_visual_sync")
 
 
@@ -892,6 +947,182 @@ func set_coastal_enabled(enabled: bool) -> void:
 	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
 	if fft_module != null:
 		fft_module.set_coastal_runtime_enabled(enabled)
+
+
+func set_performance_profile(profile: Dictionary) -> void:
+	## Applies only the runtime profiling gates. Authored controls remain intact.
+	for key in [
+		"spectral", "coastal", "crest_foam_solver", "surface_foam_solver",
+		"surface_foam_render", "prebreak", "breakers", "sspr", "refraction"
+	]:
+		if profile.has(key):
+			set("perf_enable_%s" % key, bool(profile[key]))
+	_apply_performance_profile()
+
+
+func apply_performance_preset(preset: StringName) -> bool:
+	## Presets are intentionally explicit so automated A/B tests can request them.
+	var key := String(preset).to_upper().replace("-", "_").replace(" ", "_")
+	var profile := _full_performance_profile()
+	match key:
+		"FULL":
+			pass
+		"BASE":
+			profile = _base_performance_profile()
+		"NO_SSPR":
+			profile["sspr"] = false
+		"NO_FOAM":
+			profile["crest_foam_solver"] = false
+			profile["surface_foam_solver"] = false
+			profile["surface_foam_render"] = false
+		"NO_COASTAL":
+			profile["coastal"] = false
+			profile["breakers"] = false
+			profile["prebreak"] = false
+		"NO_BREAKERS":
+			profile["breakers"] = false
+			profile["prebreak"] = false
+		_:
+			push_warning("OceanV3: unknown performance preset '%s'." % preset)
+			return false
+	set_performance_profile(profile)
+	return true
+
+
+func performance_preset_name() -> String:
+	var current := performance_profile()
+	for preset in [PERF_PRESET_FULL, PERF_PRESET_BASE, PERF_PRESET_NO_SSPR, PERF_PRESET_NO_FOAM, PERF_PRESET_NO_COASTAL, PERF_PRESET_NO_BREAKERS]:
+		var expected := _full_performance_profile()
+		match preset:
+			&"BASE": expected = _base_performance_profile()
+			&"NO_SSPR": expected["sspr"] = false
+			&"NO_FOAM":
+				expected["crest_foam_solver"] = false
+				expected["surface_foam_solver"] = false
+				expected["surface_foam_render"] = false
+			&"NO_COASTAL":
+				expected["coastal"] = false
+				expected["breakers"] = false
+				expected["prebreak"] = false
+			&"NO_BREAKERS":
+				expected["breakers"] = false
+				expected["prebreak"] = false
+		if current == expected:
+			return String(preset)
+	return "CUSTOM"
+
+
+func performance_profile() -> Dictionary:
+	return {
+		"spectral": perf_enable_spectral,
+		"coastal": perf_enable_coastal,
+		"crest_foam_solver": perf_enable_crest_foam_solver,
+		"surface_foam_solver": perf_enable_surface_foam_solver,
+		"surface_foam_render": perf_enable_surface_foam_render,
+		"prebreak": perf_enable_prebreak,
+		"breakers": perf_enable_breakers,
+		"sspr": perf_enable_sspr,
+		"refraction": perf_enable_refraction,
+	}
+
+
+func toggle_performance_overlay() -> void:
+	perf_overlay_enabled = not perf_overlay_enabled
+
+
+func _full_performance_profile() -> Dictionary:
+	return {
+		"spectral": true, "coastal": true, "crest_foam_solver": true,
+		"surface_foam_solver": true, "surface_foam_render": true,
+		"prebreak": true, "breakers": true, "sspr": true, "refraction": true,
+	}
+
+
+func _base_performance_profile() -> Dictionary:
+	## Minimum valid surface: spectral surface only, with optional runtime passes off.
+	return {
+		"spectral": true, "coastal": false, "crest_foam_solver": false,
+		"surface_foam_solver": false, "surface_foam_render": false,
+		"prebreak": false, "breakers": false, "sspr": false, "refraction": false,
+	}
+
+
+func _request_performance_sync() -> void:
+	if not is_inside_tree():
+		return
+	if _performance_sync_pending:
+		return
+	_performance_sync_pending = true
+	call_deferred(&"_apply_performance_profile")
+
+
+func _apply_performance_profile() -> void:
+	_performance_sync_pending = false
+	if not is_inside_tree():
+		return
+	_visual_sync_pending = true
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	# OpenOceanFFTModule is intentionally runtime-only. In the editor, Godot
+	# exposes the non-tool child as a placeholder instance, so do not call its
+	# runtime profiling API from the @tool root.
+	if not Engine.is_editor_hint() and fft_module != null and is_instance_valid(fft_module):
+		fft_module.set_performance_profile(performance_profile())
+	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
+		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
+	_update_performance_overlay_visibility()
+
+
+func _ensure_performance_overlay() -> void:
+	if Engine.is_editor_hint() or _performance_overlay_layer != null:
+		return
+	_performance_overlay_layer = CanvasLayer.new()
+	_performance_overlay_layer.name = &"OceanV3PerformanceOverlay"
+	_performance_overlay_layer.layer = 100
+	_performance_overlay_label = Label.new()
+	_performance_overlay_label.position = Vector2(16.0, 16.0)
+	_performance_overlay_label.add_theme_color_override(&"font_color", Color(0.78, 0.95, 1.0, 1.0))
+	_performance_overlay_label.add_theme_color_override(&"font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	_performance_overlay_label.add_theme_constant_override(&"shadow_offset_x", 2)
+	_performance_overlay_label.add_theme_constant_override(&"shadow_offset_y", 2)
+	_performance_overlay_layer.add_child(_performance_overlay_label)
+	add_child(_performance_overlay_layer)
+	_update_performance_overlay_visibility()
+
+
+func _update_performance_overlay_visibility() -> void:
+	if _performance_overlay_layer == null:
+		return
+	_performance_overlay_layer.visible = perf_overlay_enabled
+
+
+func _update_performance_overlay() -> void:
+	if _performance_overlay_label == null or not perf_overlay_enabled:
+		return
+	var fps := Engine.get_frames_per_second()
+	var frame_ms := 1000.0 / float(fps) if fps > 0 else 0.0
+	var profile := performance_profile()
+	var lines := PackedStringArray([
+		"OCEAN V3 PERFORMANCE [%s]" % performance_preset_name(),
+		"SPECTRAL       %s" % _on_off(profile["spectral"]),
+		"COASTAL        %s" % _on_off(profile["coastal"]),
+		"CREST FOAM     %s" % _on_off(profile["crest_foam_solver"]),
+		"FOAM SOLVER    %s" % _on_off(profile["surface_foam_solver"]),
+		"FOAM RENDER    %s" % _on_off(profile["surface_foam_render"]),
+		"PREBREAK       %s" % _on_off(profile["prebreak"]),
+		"BREAKERS       %s" % _on_off(profile["breakers"]),
+		"SSPR           %s" % _on_off(profile["sspr"]),
+		"REFRACTION     %s" % _on_off(profile["refraction"]),
+		"FPS %d | Frame %.2f ms" % [fps, frame_ms],
+		"CPU process %.2f ms | physics %.2f ms" % [
+			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+			Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+		],
+	])
+	_performance_overlay_label.text = "\n".join(lines)
+
+
+func _on_off(value: bool) -> String:
+	return "ON" if value else "OFF"
 
 
 func coastal_enabled() -> bool:
@@ -1115,6 +1346,7 @@ func _compare_sea_state_zones(a: OceanSeaStateZone3D, b: OceanSeaStateZone3D) ->
 
 
 func _process(_delta: float) -> void:
+	_update_performance_overlay()
 	# This also covers the editor case where the child material is created after
 	# the root setter ran while the scene was loading.
 	if _visual_sync_pending:
@@ -1507,6 +1739,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"horizon_water_alpha", horizon_water_alpha)
 	material.set_shader_parameter(&"opacity_distance_start", opacity_distance_start)
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
+	material.set_shader_parameter(&"water_refraction_enabled", perf_enable_refraction)
 	material.set_shader_parameter(&"refraction_strength", refraction_strength)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
@@ -1518,7 +1751,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_roughness_distance_m", reflection_roughness_distance_m)
 	material.set_shader_parameter(&"reflection_sun_direction_world", _sun_direction_world)
 	material.set_shader_parameter(&"reflection_debug_mode", _reflection_debug_mode)
-	material.set_shader_parameter(&"reflection_sspr_enabled", reflection_sspr_enabled)
+	material.set_shader_parameter(&"reflection_sspr_enabled", reflection_sspr_enabled and perf_enable_sspr)
 	material.set_shader_parameter(&"reflection_sspr_distortion_strength", reflection_sspr_distortion_strength)
 	material.set_shader_parameter(&"reflection_sspr_edge_fade", reflection_sspr_edge_fade)
 	material.set_shader_parameter(&"reflection_sspr_slope_fade", reflection_sspr_slope_fade)
@@ -1529,7 +1762,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_near_ssr_fade_m", reflection_near_ssr_fade_m)
 	material.set_shader_parameter(&"reflection_near_ssr_thickness", reflection_near_ssr_thickness)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
-		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled)
+		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())
 		_reflection_sspr_manager.set_resolution_scale(reflection_sspr_resolution_scale)
 		_reflection_sspr_manager.set_temporal_settings(

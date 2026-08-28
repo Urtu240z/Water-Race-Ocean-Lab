@@ -221,6 +221,7 @@ var _sea_state_initialized := false
 var _coastal_propagation = null
 var _coastal_warp = null
 var _coastal_runtime_enabled := true
+var _coastal_performance_enabled := true
 var _coastal_energy_metrics: Dictionary = {}
 var _breaker_pool: BreakerRibbonPool = null
 var _breaking_coastal_fraction := 0.0
@@ -241,6 +242,7 @@ var _foam_deposit_strength := 0.72
 var _foam_advection_enabled := true
 var _foam_advection_strength := 1.0
 var _crest_foam_update_hz := 60.0
+var _crest_foam_compute_enabled := true
 var _surface_foam_enabled := true
 var _surface_foam_topology_required := true
 var _surface_foam_mid_history_required := true
@@ -275,6 +277,12 @@ var _surface_foam_jacobian_texture := Texture2DRD.new()
 var _surface_foam_topology_texture := Texture2DRD.new()
 var _surface_foam_mid_fold_history_texture := Texture2DRD.new()
 var _surface_foam_mid_history_solver = null
+var _performance_spectral_enabled := true
+var _performance_crest_foam_solver_enabled := true
+var _performance_surface_foam_solver_enabled := true
+var _performance_surface_foam_render_enabled := true
+var _performance_prebreak_enabled := true
+var _performance_breakers_enabled := true
 
 
 ## Métricas honestas del split LONG: potencia H0, varianzas y covarianza.
@@ -453,27 +461,85 @@ func _process(delta: float) -> void:
 		return
 	if _wave_transition_active and not _wave_transition_progress_frozen and not SimulationClock.is_paused():
 		_advance_wave_transition(delta)
-	for cascade in _cascades:
-		var is_visible_band: bool = _band_debug == BandDebug.ALL or _band_index(cascade.config.id) == _band_debug
-		# BandDebug may hide a cascade visually, but its temporal crest-foam field
-		# must continue evolving while H0 CURRENT/TARGET are being blended.
-		if not is_visible_band and not _wave_transition_active:
-			continue
-		if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
-			# The solver receives the actual frame delta and converts per-second foam
-			# rates into exponential attack/release and decay. No fixed-FPS assumption.
-			RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta, _wave_transition_alpha))
-	if _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+	if _performance_spectral_enabled:
+		for cascade in _cascades:
+			var is_visible_band: bool = _band_debug == BandDebug.ALL or _band_index(cascade.config.id) == _band_debug
+			# BandDebug may hide a cascade visually, but its temporal crest-foam field
+			# must continue evolving while H0 CURRENT/TARGET are being blended.
+			if not is_visible_band and not _wave_transition_active:
+				continue
+			if cascade.solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+				# The solver receives the actual frame delta and converts per-second foam
+				# rates into exponential attack/release and decay. No fixed-FPS assumption.
+				RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta, _wave_transition_alpha))
+	if _performance_spectral_enabled and _performance_surface_foam_solver_enabled and _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 		# Independent fixed-rate scheduler: the material keeps its last completed
 		# field while this J-only FFT advances in small pass batches.
 		RenderingServer.call_on_render_thread(_surface_foam_solver.advance.bind(delta))
-	if _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+	if _performance_spectral_enabled and _performance_surface_foam_solver_enabled and _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.advance.bind(delta))
 	_dispatch_requested = false
 
 
 func toggle_enabled() -> void:
 	OceanModuleRegistry.set_module_enabled(MODULE_ID, not _enabled)
+
+
+func set_performance_profile(profile: Dictionary) -> void:
+	## Runtime gates for PERF-1A. Resources stay resident; toggles only skip work
+	## or switch shader inputs to deterministic neutral paths.
+	_performance_spectral_enabled = bool(profile.get("spectral", true))
+	_performance_crest_foam_solver_enabled = bool(profile.get("crest_foam_solver", true))
+	_performance_surface_foam_solver_enabled = bool(profile.get("surface_foam_solver", true))
+	_performance_surface_foam_render_enabled = bool(profile.get("surface_foam_render", true))
+	_performance_prebreak_enabled = bool(profile.get("prebreak", true))
+	_performance_breakers_enabled = bool(profile.get("breakers", true))
+	_coastal_performance_enabled = bool(profile.get("coastal", true))
+	_dispatch_requested = true
+	set_crest_foam_compute_enabled(_crest_foam_compute_enabled)
+	surface.set_performance_profile(
+		_performance_spectral_enabled,
+		_coastal_performance_enabled,
+		_performance_spectral_enabled and _performance_crest_foam_solver_enabled and _crest_foam_compute_enabled,
+		_performance_surface_foam_solver_enabled,
+		_performance_surface_foam_render_enabled,
+		_performance_prebreak_enabled,
+		_performance_breakers_enabled
+	)
+	if _surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
+			_surface_foam_enabled and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
+			_surface_foam_whitecap,
+			_surface_foam_amount,
+			_surface_foam_update_hz,
+			_surface_foam_birth_attack_s,
+			_surface_foam_lifetime_s,
+			_surface_foam_birth_selectivity,
+			_surface_foam_evolution_speed,
+			_surface_foam_crest_whitecap
+		))
+	if _surface_foam_mid_history_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
+			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
+			_surface_foam_update_hz,
+			_surface_foam_birth_attack_s,
+			_surface_foam_lifetime_s,
+			_surface_foam_mid_fold_start,
+			_surface_foam_mid_fold_end
+		))
+	_configure_breaker_pool()
+
+
+func performance_profile() -> Dictionary:
+	return {
+		"spectral": _performance_spectral_enabled,
+		"coastal": _coastal_performance_enabled,
+		"crest_foam_solver": _performance_crest_foam_solver_enabled,
+		"surface_foam_solver": _performance_surface_foam_solver_enabled,
+		"surface_foam_render": _performance_surface_foam_render_enabled,
+		"prebreak": _performance_prebreak_enabled,
+		"breakers": _performance_breakers_enabled,
+	}
 
 
 func set_sea_state(state: int) -> void:
@@ -1304,8 +1370,10 @@ func _configure_breaker_pool() -> void:
 	## hay ningún breaker. Nunca se ejecuta por frame.
 	if _breaker_pool == null:
 		return
-	var coastal_ok: bool = _coastal_runtime_enabled and coastal_propagation_enabled and _coastal_propagation != null and _coastal_propagation.is_valid()
-	if not breaker_enabled or not coastal_ok:
+	var coastal_ok: bool = _performance_spectral_enabled and _coastal_performance_enabled \
+		and _coastal_runtime_enabled and coastal_propagation_enabled \
+		and _coastal_propagation != null and _coastal_propagation.is_valid()
+	if not _performance_breakers_enabled or not breaker_enabled or not coastal_ok:
 		_breaker_pool.disable()
 		return
 	_breaker_pool.configure(
@@ -1670,7 +1738,7 @@ func _initialize_surface_foam_mid_history() -> void:
 		_cascades[2].config.resolution
 	))
 	RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-		_surface_foam_mid_history_required,
+		_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
 		_surface_foam_update_hz,
 		_surface_foam_birth_attack_s,
 		_surface_foam_lifetime_s,
@@ -1759,8 +1827,11 @@ func set_crest_foam_update_hz(update_hz: float) -> void:
 
 
 func set_crest_foam_compute_enabled(enabled: bool) -> void:
+	_crest_foam_compute_enabled = enabled
 	for cascade in _cascades:
-		RenderingServer.call_on_render_thread(cascade.solver.set_crest_foam_compute_enabled.bind(enabled))
+		RenderingServer.call_on_render_thread(cascade.solver.set_crest_foam_compute_enabled.bind(
+			enabled and _performance_spectral_enabled and _performance_crest_foam_solver_enabled
+		))
 
 
 func foam_render_diagnostics() -> Dictionary:
@@ -1807,7 +1878,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 	_surface_foam_mid_fold_end = maxf(mid_fold_end, _surface_foam_mid_fold_start + 0.01)
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
-			_surface_foam_topology_required,
+			_surface_foam_topology_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
 			_surface_foam_update_hz,
@@ -1819,7 +1890,7 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 		))
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.set_settings.bind(
-			_surface_foam_mid_history_required,
+			_surface_foam_mid_history_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
 			_surface_foam_update_hz,
 			_surface_foam_birth_attack_s,
 			_surface_foam_lifetime_s,
