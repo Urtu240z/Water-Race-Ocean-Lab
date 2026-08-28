@@ -294,12 +294,12 @@ varying vec3 ocean_world_position;
 varying vec4 coastal_field;
 varying vec4 coastal_metrics;
 varying vec4 coastal_phase_data;
-varying float coastal_mono_phase;
-varying float coastal_mono_active;
+// Packed to stay within the Forward+ varying-location limit:
+// x = reflection crest mask, y = coastal mono phase, z = coastal mono active.
+varying vec3 reflection_and_mono_state;
 varying float coastal_warp_delta_m;
 varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
-varying float reflection_crest_mask; // 1C: convexidad LONG/MID para roughness.
 varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cresta/valle.
 varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculado por vertex().
 varying float shore_vertical_weight_varying;
@@ -691,12 +691,10 @@ void vertex() {
 	// The FFT maps are parameterized by this undisplaced, material coordinate.
 	// It must be carried to fragment() separately from the final world position.
 	ocean_base_xz = world_xz;
-	coastal_mono_phase = 0.0;
-	coastal_mono_active = 0.0;
+	reflection_and_mono_state = vec3(0.0);
 	coastal_warp_delta_m = 0.0;
 	breaking_indices = vec4(0.0);
 	crest_sharpen_mask = 0.0;
-	reflection_crest_mask = 0.0;
 	shore_vertical_weight_varying = 1.0;
 	shore_horizontal_weight_varying = 1.0;
 	shore_pre_envelope_height = 0.0;
@@ -828,8 +826,8 @@ void vertex() {
 			+ mono_height * zone_grad_long;
 		slope = mono_gradient;
 		ocean_normal = normalize(vec3(-mono_gradient.x, 1.0, -mono_gradient.y));
-		coastal_mono_phase = phase;
-		coastal_mono_active = 1.0;
+		reflection_and_mono_state.y = phase;
+		reflection_and_mono_state.z = 1.0;
 	}
 
 	// Ruta estrictamente opt-in. No hay compute global, readback ni OceanQuery:
@@ -888,7 +886,7 @@ void vertex() {
 		float crest_support = crest_convexity
 			* mix(0.76, 1.0, crest_slope_presence)
 			* band_mask.x;
-		reflection_crest_mask = clamp(crest_support, 0.0, 1.0);
+		reflection_and_mono_state.x = clamp(crest_support, 0.0, 1.0);
 
 		if (ocean_crest_sharpen_strength > 0.0) {
 			float sharpen = smoothstep(ocean_crest_sharpen_threshold, ocean_crest_sharpen_threshold + 0.25, crestness)
@@ -1522,7 +1520,7 @@ void fragment() {
 	float debug_reflection_roughness = physical_ocean_roughness(
 		debug_camera_distance, debug_footprint, debug_reflection_metrics);
 	debug_reflection_roughness = reflection_crest_shaped_roughness(
-		debug_reflection_roughness, reflection_crest_mask, debug_reflection_metrics);
+		debug_reflection_roughness, reflection_and_mono_state.x, debug_reflection_metrics);
 	float debug_sun_specular = 0.0;
 	// Keep Surface Foam's independent history/topology intact; only its
 	// presentation contribution is locally attenuated by the zone state.
@@ -1722,7 +1720,7 @@ void fragment() {
 	float water_reflection_roughness = physical_ocean_roughness(
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	water_reflection_roughness = reflection_crest_shaped_roughness(
-		water_reflection_roughness, reflection_crest_mask, reflection_detail_metrics);
+		water_reflection_roughness, reflection_and_mono_state.x, reflection_detail_metrics);
 	float distance_opacity = smoothstep(
 		opacity_distance_start,
 		max(opacity_distance_end, opacity_distance_start + 0.001),
@@ -1741,8 +1739,8 @@ void fragment() {
 
 		color = mix(slope_valley_color, slope_crest_color, shade);
 	}
-	if (coastal_mono_active > 0.5) {
-		float crest = 0.5 + 0.5 * cos(coastal_mono_phase);
+	if (reflection_and_mono_state.z > 0.5) {
+		float crest = 0.5 + 0.5 * cos(reflection_and_mono_state.y);
 		float crest_line = smoothstep(0.88, 0.985, crest);
 		color = mix(vec3(0.005, 0.025, 0.12), vec3(0.03, 0.34, 0.68), pow(crest, 1.6));
 		color = mix(color, vec3(0.78, 1.0, 1.0), crest_line);
@@ -1858,7 +1856,7 @@ void fragment() {
 		color = vec3(textureLod(reflection_sspr_texture, SCREEN_UV, 0.0).a);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || coastal_mono_active > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
