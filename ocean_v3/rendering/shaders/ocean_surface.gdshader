@@ -1348,8 +1348,7 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 const float SURFACE_FOAM_NEAR_END_M = 80.0;
 const float SURFACE_FOAM_MID_END_M = 160.0;
 
-float surface_foam_distance_weight(vec2 world_xz) {
-	float distance_to_camera = distance(world_xz, camera_world_xz);
+float surface_foam_distance_weight(float distance_to_camera) {
 	return 1.0 - smoothstep(
 		surface_foam_distance_fade_start_m,
 		max(surface_foam_distance_fade_end_m, surface_foam_distance_fade_start_m + 0.001),
@@ -1357,12 +1356,12 @@ float surface_foam_distance_weight(vec2 world_xz) {
 	);
 }
 
-float surface_foam_weight(vec2 world_xz) {
+float surface_foam_weight(float distance_to_camera) {
 	// Dedicated distance policy. It deliberately does not inherit clipmap band
 	// masks or short_fade_range_m, which made the persistent field read as a
 	// texel block when the camera crossed a clipmap boundary.
 	float composition_weight = (coastal_composition_debug == 0 || coastal_composition_debug == 4) ? 1.0 : 0.0;
-	return surface_foam_distance_weight(world_xz) * composition_weight;
+	return surface_foam_distance_weight(distance_to_camera) * composition_weight;
 }
 
 
@@ -1556,18 +1555,17 @@ vec2 surface_foam_visual_xz() {
 }
 
 
-int surface_foam_lod(vec2 world_xz) {
-	float camera_distance = distance(world_xz, camera_world_xz);
+int surface_foam_lod(float camera_distance) {
 	return camera_distance < SURFACE_FOAM_NEAR_END_M ? 0 : camera_distance < SURFACE_FOAM_MID_END_M ? 1 : 2;
 }
 
 
-float surface_foam_micro_thresholded(vec2 world_xz, float physical_mask, float base_threshold, out float breakup_value, out vec2 microheight_gradient) {
+float surface_foam_micro_thresholded(vec2 world_xz, float camera_distance, float physical_mask, float base_threshold, out float breakup_value, out vec2 microheight_gradient) {
 	// Far is history-only: no micro fetch, no bubble work and no derivative
 	// reconstruction. Mid gets one RGB sample; Near gets at most two.
 	breakup_value = 0.5;
 	microheight_gradient = vec2(0.0);
-	int lod = surface_foam_lod(world_xz);
+	int lod = surface_foam_lod(camera_distance);
 	float history_shaped = smoothstep(base_threshold, 1.0, physical_mask);
 	if (lod >= 2 || !surface_foam_micro_detail_enabled || !surface_foam_micro_texture_ready || physical_mask <= 0.00001) {
 		return history_shaped;
@@ -2000,6 +1998,7 @@ void fragment() {
 	float crest_residual_webbed = 0.0;
 	vec2 foam_shape_gradient = vec2(0.0);
 	vec2 surface_foam_microheight_gradient = vec2(0.0);
+	float surface_foam_camera_distance = 0.0;
 	// One shared Direct-J sampling pass supplies both post-threshold topologies.
 	// The temporal field remains the common envelope, never a second history.
 	if (foam_enabled && perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled && (surface_foam_enabled || crest_filigree_enabled)) {
@@ -2066,16 +2065,18 @@ void fragment() {
 		}
 
 		if (surface_foam_enabled && perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled) {
+			surface_foam_camera_distance = distance(surface_foam_world_xz, camera_world_xz);
 			float surface_threshold = clamp(surface_foam_threshold_visual, 0.0, 0.999);
 			// Direct macro is the silhouette. Strength and distance are post-shape
 			// gains only; threshold/contrast cannot turn it into dots.
 			surface_foam_final_no_micro = clamp(
-				surface_foam_macro * surface_foam_strength * surface_foam_weight(surface_foam_world_xz),
+				surface_foam_macro * surface_foam_strength * surface_foam_weight(surface_foam_camera_distance),
 				0.0,
 				1.0
 			);
 			float surface_thresholded = surface_foam_micro_thresholded(
 				surface_foam_world_xz,
+				surface_foam_camera_distance,
 				surface_foam_macro,
 				surface_threshold,
 				surface_foam_micro_noise,
