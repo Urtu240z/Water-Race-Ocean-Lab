@@ -450,6 +450,13 @@ var _performance_overlay_label: Label
 		reflection_near_ssr_thickness = clampf(value, 0.01, 2.0)
 		_request_visual_sync()
 
+enum NearSSRQuality { LOW, MEDIUM, HIGH }
+
+@export_enum("LOW:0", "MEDIUM:1", "HIGH:2") var reflection_near_ssr_quality: int = NearSSRQuality.MEDIUM:
+	set(value):
+		reflection_near_ssr_quality = clampi(value, NearSSRQuality.LOW, NearSSRQuality.HIGH)
+		_request_visual_sync()
+
 @export var reflection_sspr_kawase_enabled: bool = false:
 	set(value):
 		reflection_sspr_kawase_enabled = value
@@ -1276,12 +1283,12 @@ func sea_state_zone_debug_enabled() -> bool:
 
 
 func cycle_reflection_debug() -> void:
-	_reflection_debug_mode = (_reflection_debug_mode + 1) % 20
+	_reflection_debug_mode = (_reflection_debug_mode + 1) % 21
 	_request_visual_sync()
 
 
 func reflection_debug_name() -> String:
-	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR", "NEAR_SSR_DEPTH_CONFIDENCE", "NEAR_SSR_DEVIATION_CONFIDENCE", "NEAR_SSR_BASE_CONFIDENCE"][_reflection_debug_mode]
+	return ["OFF", "FRESNEL", "SKY", "SUN_SPECULAR", "ROUGHNESS", "NORMAL", "SLOPE_VARIANCE", "SSPR_RAW", "SSPR_VALIDITY", "SSPR_DISTORTED", "SSPR_CONFIDENCE", "SSPR_TEMPORAL", "SSPR_PREFILTERED", "NEAR_SSR_ACTIVE", "NEAR_SSR_HIT", "NEAR_SSR_CONFIDENCE", "NEAR_SSR_COLOR", "NEAR_SSR_DEPTH_CONFIDENCE", "NEAR_SSR_DEVIATION_CONFIDENCE", "NEAR_SSR_BASE_CONFIDENCE", "NEAR_SSR_STEP_USAGE"][_reflection_debug_mode]
 
 
 func _sync_sun_direction() -> void:
@@ -1761,6 +1768,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"reflection_near_ssr_ray_length_m", reflection_near_ssr_ray_length_m)
 	material.set_shader_parameter(&"reflection_near_ssr_fade_m", reflection_near_ssr_fade_m)
 	material.set_shader_parameter(&"reflection_near_ssr_thickness", reflection_near_ssr_thickness)
+	material.set_shader_parameter(&"reflection_near_ssr_quality", reflection_near_ssr_quality)
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
 		_reflection_sspr_manager.set_ocean_level(_surface_sea_level())

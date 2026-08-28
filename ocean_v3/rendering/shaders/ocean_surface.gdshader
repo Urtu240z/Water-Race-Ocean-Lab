@@ -195,12 +195,14 @@ uniform float reflection_near_ssr_distance_m : hint_range(1.0, 100.0, 1.0) = 35.
 uniform float reflection_near_ssr_ray_length_m : hint_range(25.0, 500.0, 1.0) = 200.0;
 uniform float reflection_near_ssr_fade_m : hint_range(0.0, 50.0, 0.5) = 10.0;
 uniform float reflection_near_ssr_thickness : hint_range(0.01, 2.0, 0.01) = 0.35;
+uniform int reflection_near_ssr_quality = 1;
 // 0 OFF, 1 FRESNEL, 2 SKY, 3 SUN_SPECULAR, 4 ROUGHNESS, 5 NORMAL,
 // 6 SLOPE_VARIANCE, 7 SSPR_RAW, 8 SSPR_VALIDITY, 9 SSPR_DISTORTED,
 // 10 SSPR_CONFIDENCE, 11 SSPR_TEMPORAL, 12 SSPR_PREFILTERED,
 // 13 NEAR_SSR_ACTIVE, 14 NEAR_SSR_HIT, 15 NEAR_SSR_CONFIDENCE,
 // 16 NEAR_SSR_COLOR, 17 NEAR_SSR_DEPTH_CONFIDENCE,
-// 18 NEAR_SSR_DEVIATION_CONFIDENCE, 19 NEAR_SSR_BASE_CONFIDENCE.
+// 18 NEAR_SSR_DEVIATION_CONFIDENCE, 19 NEAR_SSR_BASE_CONFIDENCE,
+// 20 NEAR_SSR_STEP_USAGE.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -1597,13 +1599,14 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		float final_roughness, mat4 projection, mat4 inverse_projection,
 		out float active_mask, out float confidence, out float hit_mask,
 		out float depth_confidence, out float deviation_confidence,
-		out float base_confidence) {
+		out float base_confidence, out float step_usage) {
 	active_mask = 0.0;
 	confidence = 0.0;
 	hit_mask = 0.0;
 	depth_confidence = 0.0;
 	deviation_confidence = 0.0;
 	base_confidence = 0.0;
+	step_usage = 0.0;
 	float distance_limit = max(reflection_near_ssr_distance_m, 0.001);
 	float distance_fade = 1.0 - smoothstep(
 		max(distance_limit - reflection_near_ssr_fade_m, 0.0),
@@ -1625,17 +1628,52 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 	if (deviation_fade <= 0.001 || macro_ray.z >= -0.001) {
 		return vec3(0.0);
 	}
+	float potential_confidence = clamp(
+		distance_fade * roughness_fade * deviation_fade,
+		0.0,
+		1.0
+	);
+	base_confidence = potential_confidence;
+	if (potential_confidence < 0.01) {
+		return vec3(0.0);
+	}
 
 	active_mask = 1.0;
 	float start_distance = NEAR_SSR_START_EPSILON_M;
 	float ray_length = max(reflection_near_ssr_ray_length_m, 25.0);
+	int max_coarse_steps = NEAR_SSR_COARSE_STEPS;
+	int max_refinement_steps = NEAR_SSR_REFINEMENT_STEPS;
+	if (reflection_near_ssr_quality <= 0) {
+		max_coarse_steps = 8;
+		max_refinement_steps = 2;
+	} else if (reflection_near_ssr_quality == 1) {
+		max_coarse_steps = 12;
+		max_refinement_steps = 2;
+	}
+	float adaptive_signal = max(distance_fade, deviation_fade);
+	float adaptive_budget = mix(0.75, 1.0, adaptive_signal);
+	int effective_coarse_steps = int(ceil(float(max_coarse_steps) * adaptive_budget));
+	if (effective_coarse_steps < 4) {
+		effective_coarse_steps = 4;
+	}
+	int effective_refinement_steps = max_refinement_steps;
+	if (adaptive_budget < 0.90 && effective_refinement_steps > 2) {
+		effective_refinement_steps -= 1;
+	}
 	float previous_distance = start_distance;
 	float previous_delta = -reflection_near_ssr_thickness;
 	float bracket_low = 0.0;
 	float bracket_high = 0.0;
+	vec2 bracket_high_uv = vec2(0.0);
+	float bracket_high_delta = 0.0;
 	bool bracket_found = false;
+	int coarse_steps_used = 0;
 	for (int step = 0; step < NEAR_SSR_COARSE_STEPS; step++) {
-		float normalized_step = float(step + 1) / float(NEAR_SSR_COARSE_STEPS);
+		if (step >= effective_coarse_steps) {
+			break;
+		}
+		coarse_steps_used = step + 1;
+		float normalized_step = float(step + 1) / float(effective_coarse_steps);
 		float ray_distance = start_distance + ray_length * normalized_step * normalized_step;
 		vec3 ray_position = water_position_view + macro_ray * ray_distance;
 		bool uv_valid = false;
@@ -1655,20 +1693,30 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 				|| (previous_delta < 0.0 && depth_delta > reflection_near_ssr_thickness)) {
 			bracket_low = previous_distance;
 			bracket_high = ray_distance;
+			bracket_high_uv = ray_uv;
+			bracket_high_delta = depth_delta;
 			bracket_found = true;
 			break;
 		}
 		previous_distance = ray_distance;
 		previous_delta = depth_delta;
 	}
+	step_usage = clamp(
+		float(coarse_steps_used) / float(max_coarse_steps),
+		0.0,
+		1.0
+	);
 	if (!bracket_found) {
 		return vec3(0.0);
 	}
 
 	float hit_distance = bracket_high;
-	vec2 hit_uv = vec2(0.0);
-	float hit_delta = reflection_near_ssr_thickness;
+	vec2 hit_uv = bracket_high_uv;
+	float hit_delta = bracket_high_delta;
 	for (int refinement = 0; refinement < NEAR_SSR_REFINEMENT_STEPS; refinement++) {
+		if (refinement >= effective_refinement_steps) {
+			break;
+		}
 		float test_distance = (bracket_low + bracket_high) * 0.5;
 		vec3 test_position = water_position_view + macro_ray * test_distance;
 		bool uv_valid = false;
@@ -1689,21 +1737,6 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 			bracket_low = test_distance;
 		}
 	}
-	if (hit_uv.x == 0.0 && hit_uv.y == 0.0) {
-		vec3 hit_position = water_position_view + macro_ray * hit_distance;
-		bool uv_valid = false;
-		hit_uv = near_ssr_project_view_position(hit_position, projection, uv_valid);
-		if (!uv_valid) {
-			return vec3(0.0);
-		}
-		bool depth_valid = false;
-		hit_delta = near_ssr_depth_delta(
-			hit_position, hit_uv, inverse_projection, depth_valid);
-		if (!depth_valid) {
-			return vec3(0.0);
-		}
-	}
-
 	float edge_fade = smoothstep(
 		0.0,
 		0.08,
@@ -2061,6 +2094,7 @@ void fragment() {
 	float near_ssr_depth_confidence = 0.0;
 	float near_ssr_deviation_confidence = 0.0;
 	float near_ssr_base_confidence = 0.0;
+	float near_ssr_step_usage = 0.0;
 	vec3 near_ssr_color = reflection_near_ssr(
 		water_position_view,
 		sspr_macro_normal_view,
@@ -2075,7 +2109,8 @@ void fragment() {
 		near_ssr_hit,
 		near_ssr_depth_confidence,
 		near_ssr_deviation_confidence,
-		near_ssr_base_confidence
+		near_ssr_base_confidence,
+		near_ssr_step_usage
 	);
 	// Near SSR selects radiance; it never adds a second lighting or Fresnel lobe.
 	// An SSPR miss remains a partial radiance override, so the environment keeps
@@ -2255,6 +2290,8 @@ void fragment() {
 		color = vec3(near_ssr_deviation_confidence);
 	} else if (reflection_debug_mode == 19) {
 		color = vec3(near_ssr_base_confidence);
+	} else if (reflection_debug_mode == 20) {
+		color = vec3(near_ssr_step_usage);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
