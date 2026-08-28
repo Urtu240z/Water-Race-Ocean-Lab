@@ -411,9 +411,24 @@ var _performance_overlay_label: Label
 		trough_density_boost = clampf(value, 0.0, 0.5)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL") var water_optics_debug_mode: int = 0:
+@export_range(0.0, 100.0, 0.5) var transmission_detail_fade_start_m: float = 10.0:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 7)
+		transmission_detail_fade_start_m = clampf(value, 0.0, 100.0)
+		_request_visual_sync()
+
+@export_range(1.0, 150.0, 0.5) var transmission_detail_fade_end_m: float = 30.0:
+	set(value):
+		transmission_detail_fade_end_m = clampf(value, 1.0, 150.0)
+		_request_visual_sync()
+
+@export_range(0.0, 8.0, 0.1) var transmission_max_lod: float = 5.0:
+	set(value):
+		transmission_max_lod = clampf(value, 0.0, 8.0)
+		_request_visual_sync()
+
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE") var water_optics_debug_mode: int = 0:
+	set(value):
+		water_optics_debug_mode = clampi(value, 0, 8)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1897,6 +1912,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"water_turbidity", water_turbidity)
 	material.set_shader_parameter(&"crest_transmission_boost", crest_transmission_boost)
 	material.set_shader_parameter(&"trough_density_boost", trough_density_boost)
+	material.set_shader_parameter(&"transmission_detail_fade_start_m", transmission_detail_fade_start_m)
+	material.set_shader_parameter(&"transmission_detail_fade_end_m", transmission_detail_fade_end_m)
+	material.set_shader_parameter(&"transmission_max_lod", transmission_max_lod)
 	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)

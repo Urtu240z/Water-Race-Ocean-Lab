@@ -172,9 +172,12 @@ uniform float scattering_strength : hint_range(0.0, 2.0, 0.01) = 0.45;
 uniform float water_turbidity : hint_range(0.0, 2.0, 0.01) = 0.35;
 uniform float crest_transmission_boost : hint_range(0.0, 0.5, 0.01) = 0.12;
 uniform float trough_density_boost : hint_range(0.0, 0.5, 0.01) = 0.10;
+uniform float transmission_detail_fade_start_m : hint_range(0.0, 100.0, 0.5) = 10.0;
+uniform float transmission_detail_fade_end_m : hint_range(1.0, 150.0, 0.5) = 30.0;
+uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
-// 7 WATER_BODY_FINAL.
+// 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2554,22 +2557,30 @@ void fragment() {
 				&& !isnan(scene_linear_depth) && !isinf(scene_linear_depth);
 			bool water_depth_valid = water_linear_depth > WATER_OPTICS_EPSILON
 				&& !isnan(water_linear_depth) && !isinf(water_linear_depth);
-			float water_thickness = scene_is_sky
-				? maximum_optical_depth
+			// Keep physical water distance separate from the bounded value used by
+			// stability-sensitive R2 and artistic saturation controls. For the sky or
+			// an invalid depth sample, maximum_optical_depth remains the conservative
+			// finite fallback because no scene bottom distance is available.
+			float physical_water_thickness = scene_is_sky
+				? max(maximum_optical_depth, 0.0)
 				: scene_depth_valid && water_depth_valid
-				? clamp(
-					scene_linear_depth - water_linear_depth,
-					0.0,
-					maximum_optical_depth
-				)
-				: maximum_optical_depth;
+				? max(scene_linear_depth - water_linear_depth, 0.0)
+				: max(maximum_optical_depth, 0.0);
+			float bounded_water_thickness = min(
+				physical_water_thickness,
+				max(maximum_optical_depth, 0.0)
+			);
 
-			vec3 transmittance_rgb = exp(-max(absorption_coeff_rgb, vec3(0.0)) * water_thickness);
+			// R1 Beer-Lambert uses the physical thickness without the old optical
+			// depth clamp, so 25-50 m continues to attenuate instead of plateauing.
+			vec3 transmittance_rgb = exp(
+				-max(absorption_coeff_rgb, vec3(0.0)) * physical_water_thickness
+			);
 			vec3 absorbed_rgb = vec3(1.0) - transmittance_rgb;
 			float transmittance_luma = dot(transmittance_rgb, vec3(0.2126, 0.7152, 0.0722));
 			float optical_density = 1.0 - transmittance_luma;
 			float depth_factor = clamp(
-				water_thickness / max(shallow_depth_range, 0.001),
+				bounded_water_thickness / max(shallow_depth_range, 0.001),
 				0.0,
 				1.0
 			);
@@ -2596,6 +2607,37 @@ void fragment() {
 				0.24
 			);
 
+			// Reuse the transmitted screen sample at a depth-dependent mip level to
+			// suppress recognizable deep-bottom geometry while retaining broad color.
+			// The turbidity contribution is depth-gated so very shallow water stays at
+			// essentially LOD 0 even when the water is optically cloudy.
+			float transmission_detail_fade = smoothstep(
+				transmission_detail_fade_start_m,
+				max(transmission_detail_fade_end_m, transmission_detail_fade_start_m + 0.001),
+				physical_water_thickness
+			);
+			float turbidity_factor = smoothstep(
+				0.0,
+				1.0,
+				clamp(water_turbidity * 0.75, 0.0, 1.0)
+			);
+			float turbidity_depth_gate = smoothstep(2.0, 10.0, physical_water_thickness);
+			float turbidity_detail_fade = turbidity_factor * turbidity_depth_gate;
+			float transmission_blur_factor = clamp(
+				mix(
+					transmission_detail_fade,
+					max(transmission_detail_fade, turbidity_detail_fade),
+					0.35
+				),
+				0.0,
+				1.0
+			);
+			float transmission_lod = clamp(
+				transmission_blur_factor * max(transmission_max_lod, 0.0),
+				0.0,
+				8.0
+			);
+
 			// R3: keep the R1 Beer-Lambert values pure, then derive bounded
 			// production-only polish from them. Crest transmission uses the existing
 			// height signal; it never changes TRANSMITTANCE_RGB debug output.
@@ -2620,7 +2662,7 @@ void fragment() {
 			// it is deliberately not derived from absorption_coeff_rgb.
 			float scattering_density_m = 0.22 * clamp(water_turbidity, 0.0, 2.0);
 			float scattering_depth_response = 1.0 - exp(
-				-max(scattering_density_m, 0.0) * max(water_thickness, 0.0)
+				-max(scattering_density_m, 0.0) * max(physical_water_thickness, 0.0)
 			);
 			float scattering_response = clamp(
 				scattering_depth_response * mix(0.55, 1.0, depth_factor),
@@ -2682,7 +2724,7 @@ void fragment() {
 					refracted_direction_view = normalize(refracted_direction_view);
 					float target_scene_depth = min(
 						scene_linear_depth,
-						water_linear_depth + min(water_thickness, maximum_optical_depth)
+						water_linear_depth + bounded_water_thickness
 					);
 					float direction_z = refracted_direction_view.z;
 					bool direction_z_valid = abs(direction_z) > WATER_OPTICS_EPSILON
@@ -2745,7 +2787,7 @@ void fragment() {
 								: 0.0;
 							float depth_tolerance = max(
 								refraction_depth_tolerance_m,
-								water_thickness * WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR
+								bounded_water_thickness * WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR
 							);
 							float closer_error = candidate_depth_valid
 								? max(scene_linear_depth - candidate_linear_depth, 0.0)
@@ -2772,7 +2814,7 @@ void fragment() {
 				vec3 refracted_scene = textureLod(
 					screen_texture,
 					final_refracted_uv,
-					0.0
+					transmission_lod
 				).rgb;
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
@@ -2810,7 +2852,7 @@ void fragment() {
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
 			if (water_optics_debug_mode == 1) {
-				final_color = vec3(water_thickness / max(maximum_optical_depth, 0.001));
+				final_color = vec3(bounded_water_thickness / max(maximum_optical_depth, 0.001));
 			} else if (water_optics_debug_mode == 2) {
 				final_color = transmittance_rgb;
 			} else if (water_optics_debug_mode == 3) {
@@ -2829,6 +2871,8 @@ void fragment() {
 				final_color = scattering_component;
 			} else if (water_optics_debug_mode == 7) {
 				final_color = water_body_final_color;
+			} else if (water_optics_debug_mode == 8) {
+				final_color = vec3(transmission_blur_factor);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
