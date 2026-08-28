@@ -73,9 +73,9 @@ func set_ocean_level(value: float) -> void:
 	_mutex.unlock()
 
 
-func set_temporal_settings(enabled: bool, weight: float, depth_threshold: float) -> void:
+func set_temporal_settings(effect_enabled: bool, weight: float, depth_threshold: float) -> void:
 	_mutex.lock()
-	_temporal_enabled = enabled
+	_temporal_enabled = effect_enabled
 	_temporal_weight = clampf(weight, 0.0, 0.5)
 	_temporal_depth_threshold = clampf(depth_threshold, 0.001, 0.25)
 	_mutex.unlock()
@@ -164,9 +164,8 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var source_size := render_scene_buffers.get_internal_size()
 	if source_size.x <= 0 or source_size.y <= 0 or render_scene_buffers.get_view_count() != 1:
 		return
-	# The payload reserves 26 bits for source_id. This covers normal Forward+
-	# resolutions and avoids truncating an address on unusually large targets.
-	if source_size.x * source_size.y > (1 << 26):
+	# The projection hash stores each source coordinate in 16 bits.
+	if source_size.x > 65535 or source_size.y > 65535:
 		return
 	var destination_size := Vector2i(
 		ceili(float(source_size.x + 3) / 4.0),
@@ -251,6 +250,12 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	resolve_params.binding = 3
 	resolve_params.add_id(_params_buffer)
 	resolve_uniforms.append(resolve_params)
+	var resolve_depth_input := RDUniform.new()
+	resolve_depth_input.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	resolve_depth_input.binding = 5
+	resolve_depth_input.add_id(_sampler)
+	resolve_depth_input.add_id(scene_depth)
+	resolve_uniforms.append(resolve_depth_input)
 	var resolve_depth_output := RDUniform.new()
 	resolve_depth_output.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	resolve_depth_output.binding = 4
@@ -441,7 +446,7 @@ func _ensure_resources(source_size: Vector2i, destination_size: Vector2i) -> boo
 	var clear_values := PackedInt32Array()
 	clear_values.resize(candidate_count)
 	for index in candidate_count:
-		clear_values[index] = -1
+		clear_values[index] = 0
 	_candidate_clear_bytes = clear_values.to_byte_array()
 	_candidate_buffer = _rd.storage_buffer_create(_candidate_clear_bytes.size(), _candidate_clear_bytes)
 	_params_buffer = _rd.uniform_buffer_create(PARAMS_BYTES)

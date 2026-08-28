@@ -7,11 +7,12 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D scene_depth;
 
-// Candidate payload:
-//   high 6 bits: quantized reversed-Z destination depth (near wins);
-//   low 26 bits: source pixel id (y * source_width + x).
-// atomicMin therefore gives deterministic nearest-depth selection, with the
-// source id breaking equal-depth ties. No last-writer race is used.
+// Candidate payload is an exact source coordinate hash:
+//   high 16 bits: source Y; low 16 bits: source X.
+// The stored value is packed_coordinates + 1 so zero remains an unambiguous
+// invalid sentinel for atomicMax. In Godot's upper-left screen coordinates Y
+// grows downwards, so the largest source Y is the stable near-water candidate;
+// X breaks ties deterministically. No depth quantization or writer race is used.
 layout(set = 0, binding = 1, std430) buffer CandidateBuffer {
 	uint candidates[];
 };
@@ -25,8 +26,7 @@ layout(set = 0, binding = 2, std140) uniform Params {
 	vec4 ocean_level;
 } params;
 
-const uint SOURCE_ID_MASK = (1u << 26u) - 1u;
-const uint METRIC_SHIFT = 26u;
+const uint INVALID_PAYLOAD = 0u;
 
 void main() {
 	ivec2 source_pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -81,13 +81,10 @@ void main() {
 	}
 
 	uint destination_id = uint(destination_pixel.y * destination_extent.x + destination_pixel.x);
-	// Reversed-Z maps near to larger depth. Invert the metric so atomicMin
-	// selects the nearest projected candidate.
-	uint depth_metric = uint(clamp(round((1.0 - destination_ndc.z) * 63.0), 0.0, 63.0));
-	uint source_id = uint(source_pixel.y * source_extent.x + source_pixel.x);
-	if (source_id > SOURCE_ID_MASK) {
+	if (source_pixel.x >= 65536 || source_pixel.y >= 65536) {
 		return;
 	}
-	uint payload = (depth_metric << METRIC_SHIFT) | (source_id & SOURCE_ID_MASK);
-	atomicMin(candidates[destination_id], payload);
+	uint packed_coordinates = (uint(source_pixel.y) << 16u) | uint(source_pixel.x);
+	uint payload = packed_coordinates + 1u;
+	atomicMax(candidates[destination_id], payload);
 }
