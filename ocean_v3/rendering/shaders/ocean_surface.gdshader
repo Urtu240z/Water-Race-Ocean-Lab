@@ -189,6 +189,13 @@ uniform float trough_density_boost : hint_range(0.0, 0.5, 0.01) = 0.10;
 uniform float transmission_detail_fade_start_m : hint_range(0.0, 100.0, 0.5) = 10.0;
 uniform float transmission_detail_fade_end_m : hint_range(1.0, 150.0, 0.5) = 30.0;
 uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
+// Seabed transmission continuity: global bottom contribution fades by local
+// bathymetric depth only after the original scene sample matches that seabed.
+uniform float bottom_visibility_fade_start_m : hint_range(0.0, 50.0, 0.5) = 8.0;
+uniform float bottom_visibility_fade_end_m : hint_range(0.1, 100.0, 0.5) = 20.0;
+uniform float seabed_match_tolerance_start_m : hint_range(0.0, 20.0, 0.25) = 1.0;
+uniform float seabed_match_tolerance_end_m : hint_range(0.1, 50.0, 0.25) = 4.0;
+uniform float coastal_bathymetry_sea_level_y = 0.0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
@@ -198,7 +205,9 @@ uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 17 RAW_BATHYMETRY_FRAGMENT, 18 BATHYMETRY_DOMAIN,
 // 19 COASTAL_PROPAGATION_VALIDITY, 20 RAW_SCENE_DEPTH, 21 SCENE_DEPTH_CLASS,
 // 22 RAW_WATER_FRAGMENT_DEPTH, 23 BATHYMETRY_COMPARE_VERTEX_FRAGMENT,
-// 24 DEBUG_SENTINEL_MAGENTA, 25 DEBUG_SENTINEL_GREEN.
+// 24 DEBUG_SENTINEL_MAGENTA, 25 DEBUG_SENTINEL_GREEN, 26 SEABED_MATCH,
+// 27 BOTTOM_DEPTH_VISIBILITY, 28 BOTTOM_TRANSMISSION_WEIGHT,
+// 29 SEABED_HEIGHT_ERROR.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1699,6 +1708,31 @@ float linear_depth_from_buffer(vec2 screen_uv, float raw_depth, mat4 inverse_pro
 }
 
 
+bool water_optics_world_position_from_depth(vec2 screen_uv, float raw_depth,
+		mat4 inverse_projection, mat4 inverse_view, out vec3 world_position) {
+	world_position = vec3(0.0);
+	if (!(raw_depth > 0.000001) || raw_depth > 1.000001 ||
+			isnan(raw_depth) || isinf(raw_depth)) {
+		return false;
+	}
+	vec4 view_position = inverse_projection * vec4(screen_uv * 2.0 - 1.0, raw_depth, 1.0);
+	if (abs(view_position.w) <= 0.000001 || any(isnan(view_position)) || any(isinf(view_position))) {
+		return false;
+	}
+	view_position /= view_position.w;
+	vec4 world_position_h = inverse_view * vec4(view_position.xyz, 1.0);
+	if (abs(world_position_h.w) <= 0.000001 || any(isnan(world_position_h)) || any(isinf(world_position_h))) {
+		return false;
+	}
+	world_position = world_position_h.xyz / world_position_h.w;
+	if (any(isnan(world_position)) || any(isinf(world_position))) {
+		world_position = vec3(0.0);
+		return false;
+	}
+	return true;
+}
+
+
 const float WATER_OPTICS_EPSILON = 0.0001;
 const float WATER_OPTICS_EDGE_FADE_UV = 0.02;
 const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
@@ -2602,6 +2636,15 @@ void fragment() {
 				&& !isnan(scene_linear_depth) && !isinf(scene_linear_depth);
 			bool water_depth_valid = water_linear_depth > WATER_OPTICS_EPSILON
 				&& !isnan(water_linear_depth) && !isinf(water_linear_depth);
+			vec3 scene_world_position = vec3(0.0);
+			bool scene_world_position_valid = scene_depth_valid
+				&& water_optics_world_position_from_depth(
+					SCREEN_UV,
+					scene_raw_depth,
+					INV_PROJECTION_MATRIX,
+					INV_VIEW_MATRIX,
+					scene_world_position
+				);
 			// Fragment diagnostics and production bathymetry intentionally bypass the
 			// interpolated Coastal metrics varying. One direct metrics sample is now
 			// the local-depth authority; mode 19 additionally samples field validity
@@ -2663,11 +2706,10 @@ void fragment() {
 				max(coastal_cell_size_m * 2.0, 0.001),
 				local_depth_edge_distance_m
 			);
-			float local_depth_confidence = coastal_propagation_enabled
-				? diagnostic_bathymetry_domain * local_depth_edge_confidence
-				: 0.0;
+			float local_depth_confidence = diagnostic_bathymetry_domain * local_depth_edge_confidence;
 			bool local_depth_sample_valid = !isnan(raw_bathymetry_m)
-				&& !isinf(raw_bathymetry_m);
+				&& !isinf(raw_bathymetry_m)
+				&& raw_bathymetry_m >= 0.0;
 			bool local_water_depth_valid = local_depth_sample_valid
 				&& local_depth_confidence > 0.001;
 			if (!local_water_depth_valid) {
@@ -2685,6 +2727,31 @@ void fragment() {
 				local_deep_fallback_m,
 				coastal_local_depth_m,
 				local_depth_confidence
+			);
+			// BathymetryData is baked as sea_level_y - top_surface_y. Use that
+			// same sea-level convention, not the instantaneous FFT crest height.
+			float expected_seabed_y = coastal_bathymetry_sea_level_y
+				- max(local_water_depth_m, 0.0);
+			float seabed_height_error_m = scene_world_position_valid
+				? abs(scene_world_position.y - expected_seabed_y)
+				: max(seabed_match_tolerance_end_m, 10.0);
+			float seabed_match = 0.0;
+			if (scene_world_position_valid && local_water_depth_valid) {
+				seabed_match = 1.0 - smoothstep(
+					seabed_match_tolerance_start_m,
+					max(seabed_match_tolerance_end_m, seabed_match_tolerance_start_m + 0.001),
+					seabed_height_error_m
+				);
+			}
+			float bottom_depth_visibility = 1.0 - smoothstep(
+				bottom_visibility_fade_start_m,
+				max(bottom_visibility_fade_end_m, bottom_visibility_fade_start_m + 0.001),
+				local_water_depth_m
+			);
+			float seabed_transmission_weight = mix(
+				1.0,
+				bottom_depth_visibility,
+				seabed_match
 			);
 
 			// R1 Beer-Lambert uses the view-ray path without the old optical depth
@@ -2971,7 +3038,9 @@ void fragment() {
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
 				// R1 transmittance_rgb remains available to debug mode 2.
-				vec3 transmitted_component = refracted_scene * effective_transmittance_rgb;
+				vec3 transmitted_component = refracted_scene
+					* effective_transmittance_rgb
+					* seabed_transmission_weight;
 				optical_scene = transmitted_component + body_component + scattering_component;
 			}
 			float shallow_light_response = shallow_scattering_factor
@@ -3087,6 +3156,18 @@ void fragment() {
 			} else if (water_optics_debug_mode == 23) {
 				// Absolute vertex-varying versus fragment-sampled metrics.r, /20 m.
 				final_color = vec3(clamp(abs(coastal_metrics.r - raw_bathymetry_m) / 20.0, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 26) {
+				// White when the original scene sample matches the local seabed.
+				final_color = vec3(seabed_match);
+			} else if (water_optics_debug_mode == 27) {
+				// White in shallow water; black once the local bottom is deep.
+				final_color = vec3(bottom_depth_visibility);
+			} else if (water_optics_debug_mode == 28) {
+				// White when transmitted geometry is unchanged; black when seabed fades.
+				final_color = vec3(seabed_transmission_weight);
+			} else if (water_optics_debug_mode == 29) {
+				// Height error normalized to 10 m; invalid/sky samples are white.
+				final_color = vec3(clamp(seabed_height_error_m / 10.0, 0.0, 1.0));
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
@@ -3125,7 +3206,7 @@ void fragment() {
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
-	if (water_optics_debug_mode != 24 && water_optics_debug_mode != 25 && (clipmap_flat_geometry_debug || clipmap_displaced_unlit_debug)) {
+	if (water_optics_debug_mode == 0 && (clipmap_flat_geometry_debug || clipmap_displaced_unlit_debug)) {
 		// Emission-only opaque gray matches the existing unlit debug convention.
 		// The displaced mode leaves vertex geometry intact; the flat mode has
 		// already zeroed displacement in vertex().

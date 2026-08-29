@@ -473,9 +473,30 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN") var water_optics_debug_mode: int = 0:
+@export_group("Water Optics / Seabed Transmission")
+@export_range(0.0, 50.0, 0.5) var bottom_visibility_fade_start_m: float = 8.0:
 	set(value):
-		var next_mode := clampi(value, 0, 25)
+		bottom_visibility_fade_start_m = clampf(value, 0.0, 50.0)
+		_request_visual_sync()
+
+@export_range(0.1, 100.0, 0.5) var bottom_visibility_fade_end_m: float = 20.0:
+	set(value):
+		bottom_visibility_fade_end_m = clampf(value, 0.1, 100.0)
+		_request_visual_sync()
+
+@export_range(0.0, 20.0, 0.25) var seabed_match_tolerance_start_m: float = 1.0:
+	set(value):
+		seabed_match_tolerance_start_m = clampf(value, 0.0, 20.0)
+		_request_visual_sync()
+
+@export_range(0.1, 50.0, 0.25) var seabed_match_tolerance_end_m: float = 4.0:
+	set(value):
+		seabed_match_tolerance_end_m = clampf(value, 0.1, 50.0)
+		_request_visual_sync()
+
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR") var water_optics_debug_mode: int = 0:
+	set(value):
+		var next_mode := clampi(value, 0, 29)
 		if water_optics_debug_mode != next_mode:
 			print("WATER_OPTICS_DEBUG_PROPERTY mode=%d" % next_mode)
 		water_optics_debug_mode = next_mode
@@ -2005,6 +2026,14 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"transmission_detail_fade_start_m", transmission_detail_fade_start_m)
 	material.set_shader_parameter(&"transmission_detail_fade_end_m", transmission_detail_fade_end_m)
 	material.set_shader_parameter(&"transmission_max_lod", transmission_max_lod)
+	material.set_shader_parameter(&"bottom_visibility_fade_start_m", bottom_visibility_fade_start_m)
+	material.set_shader_parameter(&"bottom_visibility_fade_end_m", bottom_visibility_fade_end_m)
+	material.set_shader_parameter(&"seabed_match_tolerance_start_m", seabed_match_tolerance_start_m)
+	material.set_shader_parameter(&"seabed_match_tolerance_end_m", seabed_match_tolerance_end_m)
+	var bathymetry_sea_level_y := _surface_sea_level()
+	if coastal_bake_asset != null and coastal_bake_asset.is_valid():
+		bathymetry_sea_level_y = coastal_bake_asset.bathymetry_sea_level_y
+	material.set_shader_parameter(&"coastal_bathymetry_sea_level_y", bathymetry_sea_level_y)
 	var requested_debug_mode := int(water_optics_debug_mode)
 	material.set_shader_parameter(&"water_optics_debug_mode", requested_debug_mode)
 	var material_debug_readback = material.get_shader_parameter(&"water_optics_debug_mode")
