@@ -1404,6 +1404,20 @@ func cycle_ocean_band_debug() -> void:
 		fft_module.cycle_band_debug()
 
 
+## Temporary runtime diagnosis: forwards independent band toggles to the
+## clipmap surface without changing the existing band debug cycle.
+func set_ocean_band_enabled(long_enabled: bool, mid_enabled: bool, short_enabled: bool) -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.set_band_enabled(long_enabled, mid_enabled, short_enabled)
+
+
+func toggle_ocean_band(band_index: int) -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.toggle_band_enabled(band_index)
+
+
 func toggle_ocean_clipmap_lod_debug() -> void:
 	var fft_module := _runtime_fft_module()
 	if fft_module != null:

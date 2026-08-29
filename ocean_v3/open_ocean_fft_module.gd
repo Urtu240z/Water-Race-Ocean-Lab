@@ -1233,6 +1233,27 @@ func cycle_band_debug() -> void:
 	_dispatch_requested = true
 
 
+## Temporary runtime diagnosis. This path only updates the existing band_mask;
+## it does not change FFT dispatch, cascade visibility, or clipmap LOD state.
+func set_band_enabled(long_enabled: bool, mid_enabled: bool, short_enabled: bool) -> void:
+	var clipmap_surface := surface as OceanClipmapSurface
+	if clipmap_surface != null:
+		clipmap_surface.set_band_enabled(long_enabled, mid_enabled, short_enabled)
+
+
+func toggle_band_enabled(band_index: int) -> void:
+	var clipmap_surface := surface as OceanClipmapSurface
+	if clipmap_surface == null or band_index < 0 or band_index > 2:
+		return
+	var states := [
+		clipmap_surface.is_band_enabled(0),
+		clipmap_surface.is_band_enabled(1),
+		clipmap_surface.is_band_enabled(2),
+	]
+	states[band_index] = not states[band_index]
+	clipmap_surface.set_band_enabled(states[0], states[1], states[2])
+
+
 func toggle_clipmap_lod_debug() -> void:
 	surface.toggle_lod_debug()
 

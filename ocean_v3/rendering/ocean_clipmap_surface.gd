@@ -74,6 +74,9 @@ var _coastal_monochromatic_debug := false
 var _coastal_eikonal_phase_debug := false
 var _coastal_warp_available := false
 var _breaking_debug: int = BreakingDebug.OFF
+var _band_long_enabled := true
+var _band_mid_enabled := true
+var _band_short_enabled := true
 var _tracking_camera: Camera3D
 var _triangle_count := 0
 
@@ -146,6 +149,49 @@ func apply_fade_ranges(config) -> void:
 func set_band_debug(mode: int) -> void:
 	var masks := [Vector3.ONE, Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)]
 	var mask: Vector3 = masks[clampi(mode, 0, masks.size() - 1)]
+	_band_long_enabled = is_equal_approx(mask.x, 1.0)
+	_band_mid_enabled = is_equal_approx(mask.y, 1.0)
+	_band_short_enabled = is_equal_approx(mask.z, 1.0)
+	_apply_band_mask(mask)
+
+
+## Temporary runtime diagnosis: independently gates the existing LONG/MID/SHORT
+## band_mask for both the shaded and wireframe materials. It does not alter FFT,
+## clipmap topology, LOD fades, or the existing ALL/LONG/MID/SHORT debug cycle.
+func set_band_enabled(long_enabled: bool, mid_enabled: bool, short_enabled: bool) -> void:
+	if _band_long_enabled != long_enabled:
+		print("OCEAN BAND LONG: %s" % ("ON" if long_enabled else "OFF"))
+	if _band_mid_enabled != mid_enabled:
+		print("OCEAN BAND MID: %s" % ("ON" if mid_enabled else "OFF"))
+	if _band_short_enabled != short_enabled:
+		print("OCEAN BAND SHORT: %s" % ("ON" if short_enabled else "OFF"))
+	_band_long_enabled = long_enabled
+	_band_mid_enabled = mid_enabled
+	_band_short_enabled = short_enabled
+	_apply_band_mask(Vector3(
+		1.0 if _band_long_enabled else 0.0,
+		1.0 if _band_mid_enabled else 0.0,
+		1.0 if _band_short_enabled else 0.0
+	))
+	print("OCEAN BANDS: LONG=%s MID=%s SHORT=%s" % [
+		"ON" if _band_long_enabled else "OFF",
+		"ON" if _band_mid_enabled else "OFF",
+		"ON" if _band_short_enabled else "OFF",
+	])
+
+
+func is_band_enabled(band_index: int) -> bool:
+	match band_index:
+		0:
+			return _band_long_enabled
+		1:
+			return _band_mid_enabled
+		2:
+			return _band_short_enabled
+	return false
+
+
+func _apply_band_mask(mask: Vector3) -> void:
 	_surface_material.set_shader_parameter(&"band_mask", mask)
 	_wireframe_material.set_shader_parameter(&"band_mask", mask)
 
