@@ -1245,14 +1245,6 @@ func clipmap_tracking_debug_mode_name() -> String:
 	return surface.clipmap_tracking_debug_mode_name()
 
 
-func cycle_clipmap_seam_diagnostic() -> void:
-	surface.cycle_clipmap_seam_diagnostic()
-
-
-func clipmap_diagnostic_mode_name() -> String:
-	return surface.clipmap_diagnostic_mode_name()
-
-
 func toggle_periodicity_debug() -> void:
 	surface.toggle_periodicity_debug()
 

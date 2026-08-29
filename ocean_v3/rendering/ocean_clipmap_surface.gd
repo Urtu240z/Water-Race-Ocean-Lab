@@ -382,17 +382,6 @@ func set_clipmap_displaced_unlit_debug(enabled: bool) -> void:
 		_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
 
 
-func cycle_clipmap_seam_diagnostic() -> void:
-	match clipmap_diagnostic_mode_name():
-		"OFF":
-			set_clipmap_flat_geometry_debug(true)
-		"FLAT GEOMETRY":
-			set_clipmap_displaced_unlit_debug(true)
-		_:
-			set_clipmap_flat_geometry_debug(false)
-			set_clipmap_displaced_unlit_debug(false)
-
-
 func clipmap_diagnostic_mode_name() -> String:
 	var flat := bool(_surface_material.get_shader_parameter(&"clipmap_flat_geometry_debug"))
 	var displaced := bool(_surface_material.get_shader_parameter(&"clipmap_displaced_unlit_debug"))
