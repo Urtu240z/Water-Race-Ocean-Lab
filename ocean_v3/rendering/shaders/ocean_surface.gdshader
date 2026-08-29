@@ -190,7 +190,10 @@ uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
 // 10 ALPHA_DEPTH_FACTOR, 11 SHALLOW_SCATTERING_FACTOR,
 // 12 SCATTERING_TINT_INFLUENCE, 13 SHALLOW_SCATTERING_FINAL,
-// 14 LOCAL_WATER_DEPTH, 15 VIEW_WATER_PATH, 16 SHALLOW_DEEP_AUTHORITY.
+// 14 LOCAL_WATER_DEPTH, 15 VIEW_WATER_PATH, 16 SHALLOW_DEEP_AUTHORITY,
+// 17 RAW_BATHYMETRY_FRAGMENT, 18 BATHYMETRY_DOMAIN,
+// 19 COASTAL_PROPAGATION_VALIDITY, 20 RAW_SCENE_DEPTH, 21 SCENE_DEPTH_CLASS,
+// 22 RAW_WATER_FRAGMENT_DEPTH, 23 BATHYMETRY_COMPARE_VERTEX_FRAGMENT.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2570,6 +2573,32 @@ void fragment() {
 				&& !isnan(scene_linear_depth) && !isinf(scene_linear_depth);
 			bool water_depth_valid = water_linear_depth > WATER_OPTICS_EPSILON
 				&& !isnan(water_linear_depth) && !isinf(water_linear_depth);
+			// Fragment diagnostics and production bathymetry intentionally bypass the
+			// interpolated Coastal metrics varying. One direct metrics sample is now
+			// the local-depth authority; mode 19 additionally samples field validity
+			// so propagation coverage can be inspected without coupling it to depth.
+			vec2 diagnostic_bathymetry_uv = coastal_uv(ocean_base_xz);
+			float diagnostic_bathymetry_domain = shore_data_inside(diagnostic_bathymetry_uv);
+			vec4 bathymetry_fragment_sample = textureLod(
+				coastal_metrics_texture,
+				clamp(diagnostic_bathymetry_uv, vec2(0.0), vec2(1.0)),
+				0.0
+			);
+			float raw_bathymetry_m = bathymetry_fragment_sample.r;
+			vec4 raw_field_fragment_sample = vec4(0.0);
+			if (water_optics_debug_mode == 19) {
+				raw_field_fragment_sample = textureLod(
+					coastal_field_texture,
+					clamp(diagnostic_bathymetry_uv, vec2(0.0), vec2(1.0)),
+					0.0
+				);
+			}
+			vec3 scene_depth_class_color = vec3(0.0, 0.0, 1.0);
+			if (scene_is_sky || !scene_raw_depth_valid) {
+				scene_depth_class_color = vec3(1.0, 0.0, 0.0);
+			} else if (scene_depth_valid) {
+				scene_depth_class_color = vec3(0.0, 1.0, 0.0);
+			}
 			// Keep physical water distance separate from the bounded value used by
 			// stability-sensitive R2 and artistic saturation controls. For the sky or
 			// an invalid depth sample, maximum_optical_depth remains the conservative
@@ -2585,33 +2614,37 @@ void fragment() {
 				view_water_path_m,
 				max(maximum_optical_depth, 0.0)
 			);
-			// LOCAL/BATHYMETRIC DEPTH: coastal_metrics.r is the baked seabed depth
-			// in metres. coastal_field.a is its validity mask; metrics.a is not a
-			// validity channel. Invalid/outside Coastal deliberately means open ocean
-			// and stays deep, never falling back to the view-ray path.
-			vec2 local_depth_coastal_uv = coastal_uv(ocean_base_xz);
-			float local_depth_edge_distance = min(
-				min(local_depth_coastal_uv.x, 1.0 - local_depth_coastal_uv.x),
-				min(local_depth_coastal_uv.y, 1.0 - local_depth_coastal_uv.y)
-			);
+			// LOCAL/BATHYMETRIC DEPTH: the direct fragment metrics.r sample is the
+			// baked seabed depth in metres. Domain membership is the spatial authority;
+			// field.a remains propagation validity only and is deliberately excluded.
+			// A zero-metre shoreline sample is valid and must not be rejected by value.
+			vec2 local_depth_coastal_uv = diagnostic_bathymetry_uv;
+			float local_depth_edge_distance_m = max(min(
+				min(
+					local_depth_coastal_uv.x * coastal_extent_m.x,
+					(1.0 - local_depth_coastal_uv.x) * coastal_extent_m.x
+				),
+				min(
+					local_depth_coastal_uv.y * coastal_extent_m.y,
+					(1.0 - local_depth_coastal_uv.y) * coastal_extent_m.y
+				)
+			), 0.0);
 			float local_depth_edge_confidence = smoothstep(
 				0.0,
-				0.02,
-				clamp(local_depth_edge_distance, 0.0, 0.02)
+				max(coastal_cell_size_m * 2.0, 0.001),
+				local_depth_edge_distance_m
 			);
 			float local_depth_confidence = coastal_propagation_enabled
-				? shore_data_inside(local_depth_coastal_uv)
-					* local_depth_edge_confidence
-					* clamp(coastal_field.a, 0.0, 1.0)
+				? diagnostic_bathymetry_domain * local_depth_edge_confidence
 				: 0.0;
-			float coastal_local_depth_m = max(coastal_metrics.r, 0.0);
-			bool local_depth_sample_valid = coastal_local_depth_m >= 0.0
-				&& !isnan(coastal_local_depth_m) && !isinf(coastal_local_depth_m);
+			bool local_depth_sample_valid = !isnan(raw_bathymetry_m)
+				&& !isinf(raw_bathymetry_m);
 			bool local_water_depth_valid = local_depth_sample_valid
 				&& local_depth_confidence > 0.001;
 			if (!local_water_depth_valid) {
 				local_depth_confidence = 0.0;
 			}
+			float coastal_local_depth_m = max(raw_bathymetry_m, 0.0);
 			float local_deep_fallback_m = max(
 				maximum_optical_depth,
 				max(
@@ -3000,6 +3033,31 @@ void fragment() {
 			} else if (water_optics_debug_mode == 16) {
 				// Bathymetric shallow/deep authority, represented by body depth.
 				final_color = vec3(body_depth_factor);
+			} else if (water_optics_debug_mode == 17) {
+				// Direct fragment metrics.r: black at 0 m, white at 20 m or deeper.
+				final_color = vec3(clamp(max(raw_bathymetry_m, 0.0) / 20.0, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 18) {
+				// Domain only; deliberately independent of coastal_field.a.
+				final_color = vec3(diagnostic_bathymetry_domain);
+			} else if (water_optics_debug_mode == 19) {
+				// Direct fragment field.a: propagation validity, not bathymetry validity.
+				final_color = vec3(clamp(raw_field_fragment_sample.a, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 20) {
+				// Forward+ reversed-Z raw depth: clear/sky is approximately zero.
+				final_color = vec3(clamp(scene_raw_depth, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 21) {
+				// Red=sky/clear, green=valid scene reconstruction, blue=present but invalid.
+				final_color = scene_depth_class_color;
+			} else if (water_optics_debug_mode == 22) {
+				// R=raw FRAGCOORD.z, G=water linear depth / 100 m, B=validity.
+				final_color = vec3(
+					clamp(FRAGCOORD.z, 0.0, 1.0),
+					clamp(water_linear_depth / 100.0, 0.0, 1.0),
+					water_depth_valid ? 1.0 : 0.0
+				);
+			} else if (water_optics_debug_mode == 23) {
+				// Absolute vertex-varying versus fragment-sampled metrics.r, /20 m.
+				final_color = vec3(clamp(abs(coastal_metrics.r - raw_bathymetry_m) / 20.0, 0.0, 1.0));
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
