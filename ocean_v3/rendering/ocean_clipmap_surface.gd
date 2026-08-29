@@ -79,8 +79,6 @@ class LevelRuntimeState extends RefCounted:
 	var variant_meshes: Array[ArrayMesh] = []
 	var variant_triangle_counts: Array[int] = []
 	var variant_memory_bytes := 0
-	var skirt_triangle_count := 0
-	var skirt_memory_bytes := 0
 	var current_cell := Vector2i.ZERO
 	var current_parity := Vector2i(-1, -1)
 	var current_variant_index := 0
@@ -111,8 +109,6 @@ var _snapped_tracking_snap_m := -1.0
 var _snapped_tracking_initialized := false
 var _per_level_tracking_initialized := false
 var _variant_cache_memory_bytes := 0
-var _skirt_variant_cache_triangle_count := 0
-var _skirt_variant_cache_memory_bytes := 0
 var _triangle_count := 0
 
 
@@ -287,21 +283,6 @@ func _legacy_triangle_count() -> int:
 
 func clipmap_variant_cache_memory_bytes() -> int:
 	return _variant_cache_memory_bytes
-
-
-func clipmap_skirt_triangle_count() -> int:
-	var total := 0
-	for state in _level_states:
-		total += state.skirt_triangle_count
-	return total
-
-
-func clipmap_skirt_variant_cache_triangle_count() -> int:
-	return _skirt_variant_cache_triangle_count
-
-
-func clipmap_skirt_variant_cache_memory_bytes() -> int:
-	return _skirt_variant_cache_memory_bytes
 
 
 func clipmap_tracking_snapshot() -> Array:
@@ -708,8 +689,6 @@ func _rebuild_levels() -> void:
 	_level_states.clear()
 	_triangle_count = 0
 	_variant_cache_memory_bytes = 0
-	_skirt_variant_cache_triangle_count = 0
-	_skirt_variant_cache_memory_bytes = 0
 	for level_index in clipmap_config.level_count:
 		var state := LevelRuntimeState.new()
 		var variant_meshes: Array[ArrayMesh] = []
@@ -717,8 +696,6 @@ func _rebuild_levels() -> void:
 		variant_meshes.resize(4)
 		variant_triangle_counts.resize(4)
 		var variant_memory_bytes := 0
-		var skirt_triangle_count := 0
-		var skirt_memory_bytes := 0
 		for parity_x in 2:
 			for parity_z in 2:
 				var variant_index := _variant_index(parity_x, parity_z)
@@ -735,10 +712,6 @@ func _rebuild_levels() -> void:
 					continue
 				variant_meshes[variant_index] = MeshBuilder.create_mesh(geometry)
 				variant_triangle_counts[variant_index] = int(float(geometry.indices.size()) / 3.0)
-				skirt_triangle_count = int(geometry.skirt_triangle_count)
-				skirt_memory_bytes = int(geometry.skirt_vertex_count) * 24 + int(geometry.skirt_triangle_count) * 3 * 4
-				_skirt_variant_cache_triangle_count += int(geometry.skirt_triangle_count)
-				_skirt_variant_cache_memory_bytes += skirt_memory_bytes
 				if level_index > 0:
 					variant_memory_bytes += geometry.vertices.size() * 24 + geometry.indices.size() * 4
 		if variant_meshes[0] == null:
@@ -757,8 +730,6 @@ func _rebuild_levels() -> void:
 		state.variant_meshes = variant_meshes
 		state.variant_triangle_counts = variant_triangle_counts
 		state.variant_memory_bytes = variant_memory_bytes
-		state.skirt_triangle_count = skirt_triangle_count
-		state.skirt_memory_bytes = skirt_memory_bytes
 		_level_states.append(state)
 		_triangle_count += variant_triangle_counts[0]
 		_variant_cache_memory_bytes += variant_memory_bytes

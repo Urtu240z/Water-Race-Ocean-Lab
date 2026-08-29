@@ -4,10 +4,8 @@ extends RefCounted
 
 const VARIANT_OWNER_COARSE := 0
 const VARIANT_OWNER_TRANSITION := 1
-const VARIANT_OWNER_SKIRT := 2
-const SEAM_SKIRT_DEPTH_M := 0.05
 
-static func build_level_geometry(config: Resource, level: int, include_skirt: bool = true) -> Dictionary:
+static func build_level_geometry(config: Resource, level: int) -> Dictionary:
 	assert(config.is_valid())
 	assert(level >= 0 and level < config.level_count)
 	var vertices := PackedVector3Array()
@@ -15,7 +13,6 @@ static func build_level_geometry(config: Resource, level: int, include_skirt: bo
 	var indices := PackedInt32Array()
 	var vertex_indices := {}
 	var stitch_inner_positions := PackedVector3Array()
-	var owners := PackedInt32Array()
 	var half_cells := int(float(config.cells_per_side) * 0.5)
 	var spacing: float = config.spacing_for_level(level)
 
@@ -39,13 +36,6 @@ static func build_level_geometry(config: Resource, level: int, include_skirt: bo
 					_add_vertical_stitch(vertices, normals, indices, vertex_indices, stitch_inner_positions, inner_cells, z_cell, 1, spacing)
 				else:
 					_add_regular_cell(vertices, normals, indices, vertex_indices, x_cell, z_cell, spacing)
-	var surface_vertex_count := vertices.size()
-	var surface_triangle_count := indices.size() / 3
-	for _triangle in surface_triangle_count:
-		owners.append(VARIANT_OWNER_COARSE)
-	var skirt_top_loop := PackedVector3Array()
-	if include_skirt and level < config.level_count - 1:
-		skirt_top_loop = _append_outer_skirt(vertices, normals, indices, owners, vertex_indices, config, level)
 
 	return {
 		"vertices": vertices,
@@ -55,13 +45,6 @@ static func build_level_geometry(config: Resource, level: int, include_skirt: bo
 		"spacing_m": spacing,
 		"outer_width_m": config.outer_width_for_level(level),
 		"inner_width_m": config.inner_width_for_level(level),
-		"triangle_owners": owners,
-		"surface_vertex_count": surface_vertex_count,
-		"surface_triangle_count": surface_triangle_count,
-		"skirt_triangle_count": _count_owner(owners, VARIANT_OWNER_SKIRT),
-		"skirt_vertex_count": vertices.size() - surface_vertex_count,
-		"skirt_top_loop": skirt_top_loop,
-		"skirt_depth_m": SEAM_SKIRT_DEPTH_M,
 	}
 
 
@@ -79,10 +62,7 @@ static func build_level_geometry_variant(config: Resource, level: int, parity_x:
 		baseline["parity_x"] = 0
 		baseline["parity_z"] = 0
 		baseline["fine_origin_offset_m"] = Vector2.ZERO
-		var baseline_owners := _baseline_triangle_owners(baseline, config, level)
-		for _triangle in baseline.skirt_triangle_count:
-			baseline_owners.append(VARIANT_OWNER_SKIRT)
-		baseline["triangle_owners"] = baseline_owners
+		baseline["triangle_owners"] = _baseline_triangle_owners(baseline, config, level)
 		baseline["transition_triangle_count"] = _count_owner(baseline["triangle_owners"], VARIANT_OWNER_TRANSITION)
 		return baseline
 
@@ -115,11 +95,6 @@ static func build_level_geometry_variant(config: Resource, level: int, parity_x:
 				continue
 			_add_variant_outside_components(vertices, normals, indices, owners, vertex_indices,
 				 x0, x1, z0, z1, fine_min, fine_max, coarse_spacing, fine_spacing)
-	var surface_vertex_count := vertices.size()
-	var surface_triangle_count := indices.size() / 3
-	var skirt_top_loop := PackedVector3Array()
-	if level < config.level_count - 1:
-		skirt_top_loop = _append_outer_skirt(vertices, normals, indices, owners, vertex_indices, config, level)
 
 	return {
 		"vertices": vertices,
@@ -134,12 +109,6 @@ static func build_level_geometry_variant(config: Resource, level: int, parity_x:
 		"parity_x": parity_x,
 		"parity_z": parity_z,
 		"fine_origin_offset_m": fine_offset,
-		"surface_vertex_count": surface_vertex_count,
-		"surface_triangle_count": surface_triangle_count,
-		"skirt_triangle_count": _count_owner(owners, VARIANT_OWNER_SKIRT),
-		"skirt_vertex_count": vertices.size() - surface_vertex_count,
-		"skirt_top_loop": skirt_top_loop,
-		"skirt_depth_m": SEAM_SKIRT_DEPTH_M,
 	}
 
 
@@ -442,8 +411,7 @@ static func _baseline_triangle_owners(geometry: Dictionary, config: Resource, le
 	var spacing: float = config.spacing_for_level(level)
 	var vertices: PackedVector3Array = geometry.vertices
 	var indices: PackedInt32Array = geometry.indices
-	var surface_triangle_count: int = geometry.surface_triangle_count
-	for triangle_base in range(0, surface_triangle_count * 3, 3):
+	for triangle_base in range(0, indices.size(), 3):
 		var centroid := (vertices[indices[triangle_base]] + vertices[indices[triangle_base + 1]] + vertices[indices[triangle_base + 2]]) / 3.0
 		var horizontal: bool = absf(centroid.x) < inner_half and absf(centroid.z) >= inner_half and absf(centroid.z) < inner_half + spacing
 		var vertical: bool = absf(centroid.z) < inner_half and absf(centroid.x) >= inner_half and absf(centroid.x) < inner_half + spacing
@@ -471,70 +439,6 @@ static func _variant_transition_positions(vertices: PackedVector3Array, indices:
 	return result
 
 
-static func outer_boundary_loop_positions(config: Resource, level: int) -> PackedVector3Array:
-	var result := PackedVector3Array()
-	var half_cells := int(float(config.cells_per_side) * 0.5)
-	var spacing: float = config.spacing_for_level(level)
-	for x_cell in range(-half_cells, half_cells + 1):
-		result.append(Vector3(float(x_cell) * spacing, 0.0, -float(half_cells) * spacing))
-	for z_cell in range(-half_cells + 1, half_cells + 1):
-		result.append(Vector3(float(half_cells) * spacing, 0.0, float(z_cell) * spacing))
-	for x_cell in range(half_cells - 1, -half_cells - 1, -1):
-		result.append(Vector3(float(x_cell) * spacing, 0.0, float(half_cells) * spacing))
-	for z_cell in range(half_cells - 1, -half_cells, -1):
-		result.append(Vector3(-float(half_cells) * spacing, 0.0, float(z_cell) * spacing))
-	return result
-
-
-static func _append_outer_skirt(vertices: PackedVector3Array, normals: PackedVector3Array,
-		indices: PackedInt32Array, owners: PackedInt32Array, vertex_indices: Dictionary,
-		config: Resource, level: int) -> PackedVector3Array:
-	var top_loop := outer_boundary_loop_positions(config, level)
-	var top_indices: Array[int] = []
-	var bottom_indices: Array[int] = []
-	for top_position in top_loop:
-		var top_key := _xz_key(top_position)
-		var top_index: int
-		if vertex_indices.has(top_key):
-			top_index = int(vertex_indices[top_key])
-		else:
-			top_index = _vertex(vertices, normals, vertex_indices, top_position)
-		top_indices.append(top_index)
-		bottom_indices.append(_skirt_vertex(vertices, normals, vertex_indices,
-			Vector3(top_position.x, top_position.y - SEAM_SKIRT_DEPTH_M, top_position.z)))
-
-	var segment_count := top_loop.size()
-	for segment in segment_count:
-		var next := (segment + 1) % segment_count
-		var outward := _skirt_segment_outward(segment, config)
-		_add_skirt_triangle(indices, vertices, owners,
-			top_indices[segment], top_indices[next], bottom_indices[segment], outward)
-		_add_skirt_triangle(indices, vertices, owners,
-			top_indices[next], bottom_indices[next], bottom_indices[segment], outward)
-	return top_loop
-
-
-static func _skirt_segment_outward(segment: int, config: Resource) -> Vector3:
-	var side_length: int = int(config.cells_per_side)
-	if segment < side_length:
-		return Vector3(0.0, 0.0, -1.0)
-	if segment < side_length * 2:
-		return Vector3(1.0, 0.0, 0.0)
-	if segment < side_length * 3:
-		return Vector3(0.0, 0.0, 1.0)
-	return Vector3(-1.0, 0.0, 0.0)
-
-
-static func _add_skirt_triangle(indices: PackedInt32Array, vertices: PackedVector3Array,
-		owners: PackedInt32Array, a: int, b: int, c: int, outward: Vector3) -> void:
-	var normal := (vertices[b] - vertices[a]).cross(vertices[c] - vertices[a])
-	if normal.dot(outward) < 0.0:
-		indices.append_array(PackedInt32Array([a, c, b]))
-	else:
-		indices.append_array(PackedInt32Array([a, b, c]))
-	owners.append(VARIANT_OWNER_SKIRT)
-
-
 static func create_mesh(geometry: Dictionary) -> ArrayMesh:
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -549,11 +453,8 @@ static func create_mesh(geometry: Dictionary) -> ArrayMesh:
 static func validate_geometry(geometry: Dictionary) -> String:
 	var vertices: PackedVector3Array = geometry.vertices
 	var indices: PackedInt32Array = geometry.indices
-	var owners: PackedInt32Array = geometry.triangle_owners if geometry.has("triangle_owners") else PackedInt32Array()
 	if indices.size() % 3 != 0:
 		return "El índice no forma triángulos completos."
-	if not owners.is_empty() and owners.size() != indices.size() / 3:
-		return "El owner no coincide con el número de triángulos."
 	for index in indices:
 		if index < 0 or index >= vertices.size():
 			return "Índice fuera de rango."
@@ -561,11 +462,6 @@ static func validate_geometry(geometry: Dictionary) -> String:
 		var a: Vector3 = vertices[indices[triangle_base]]
 		var b: Vector3 = vertices[indices[triangle_base + 1]]
 		var c: Vector3 = vertices[indices[triangle_base + 2]]
-		var triangle_index := triangle_base / 3
-		if not owners.is_empty() and owners[triangle_index] == VARIANT_OWNER_SKIRT:
-			if (b - a).cross(c - a).length() <= 0.00000001:
-				return "Skirt degenerado."
-			continue
 		var signed_area: float = (b - a).cross(c - a).y
 		if signed_area <= 0.00000001:
 			return "Triángulo degenerado o winding invertido."
@@ -633,7 +529,7 @@ static func _add_stitch_triangles(vertices: PackedVector3Array, indices: PackedI
 
 
 static func _vertex(vertices: PackedVector3Array, normals: PackedVector3Array, vertex_indices: Dictionary, position: Vector3) -> int:
-	var key := _xz_key(position)
+	var key := "%d:%d" % [roundi(position.x * 1000.0), roundi(position.z * 1000.0)]
 	if vertex_indices.has(key):
 		return vertex_indices[key]
 	var index := vertices.size()
@@ -641,21 +537,6 @@ static func _vertex(vertices: PackedVector3Array, normals: PackedVector3Array, v
 	vertices.append(position)
 	normals.append(Vector3.UP)
 	return index
-
-
-static func _skirt_vertex(vertices: PackedVector3Array, normals: PackedVector3Array, vertex_indices: Dictionary, position: Vector3) -> int:
-	var key := "skirt:%d:%d:%d" % [roundi(position.x * 1000.0), roundi(position.y * 1000.0), roundi(position.z * 1000.0)]
-	if vertex_indices.has(key):
-		return vertex_indices[key]
-	var index := vertices.size()
-	vertex_indices[key] = index
-	vertices.append(position)
-	normals.append(Vector3.UP)
-	return index
-
-
-static func _xz_key(position: Vector3) -> String:
-	return "%d:%d" % [roundi(position.x * 1000.0), roundi(position.z * 1000.0)]
 
 
 static func _add_triangle(vertices: PackedVector3Array, indices: PackedInt32Array, a: int, b: int, c: int) -> void:

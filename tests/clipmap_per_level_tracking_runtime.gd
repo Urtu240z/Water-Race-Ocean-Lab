@@ -58,10 +58,8 @@ func _validate_per_level_tracking() -> void:
 		for variant_mesh in _surface._level_states[level].variant_meshes:
 			all_coarse_variants_built = all_coarse_variants_built and variant_mesh != null
 	_check(all_coarse_variants_built, "L1-L9 tienen las cuatro meshes preconstruidas")
-	_check(_surface.clipmap_variant_cache_memory_bytes() == 22798992, "cache runtime de variantes coincide con X2.4")
-	_check(_surface.clipmap_skirt_triangle_count() == 9216, "skirt activo: 1024 triángulos por nivel L0-L8")
-	_check(_surface.clipmap_skirt_variant_cache_triangle_count() == 33792, "skirt cache: 1024 triángulos por variante L0-L8")
-	_check(_surface.clipmap_skirt_variant_cache_memory_bytes() == 811008, "memoria adicional de skirts exacta")
+	_check(_surface.clipmap_variant_cache_memory_bytes() == 22012560, "cache runtime de variantes coincide con X1")
+	_check(_surface.triangle_count() == 256256, "triangle_count inicial usa baseline 00")
 
 	_surface.set_debug_mode(4)
 	_surface.toggle_lod_debug()
@@ -70,7 +68,6 @@ func _validate_per_level_tracking() -> void:
 	_surface._process(0.0)
 	var initial_snapshot: Array = _surface.clipmap_tracking_snapshot()
 	_check(_surface.clipmap_tracking_debug_mode_name() == "PER-LEVEL", "HUD expone PER-LEVEL")
-	_check(_surface.triangle_count() == _active_triangle_count(initial_snapshot), "triangle_count inicial refleja skirts y variantes activas")
 	_check(_snapshot_matches_camera(initial_snapshot, Vector2.ZERO), "cells, origins y parity usan floor absoluto")
 	_check(_surface.get_surface_material().get_shader_parameter(&"camera_world_xz") == Vector2.ZERO, "camera_world_xz permanece continua")
 	_check(_active_meshes_match_snapshot(initial_snapshot), "cada LOD selecciona la variante de su parity")
@@ -97,7 +94,7 @@ func _validate_per_level_tracking() -> void:
 		_check(_surface.triangle_count() == _active_triangle_count(snapshot), "trayectoria %s: triangle_count refleja variants activas" % camera_xz)
 		previous_snapshot = snapshot
 	_check(_snapshots_equal(initial_snapshot, _surface.clipmap_tracking_snapshot()), "ida y vuelta devuelve exactamente cells/origins/variants iniciales")
-	_check(_surface.triangle_count() == _active_triangle_count(initial_snapshot), "triangle_count vuelve al estado 00")
+	_check(_surface.triangle_count() == 256256, "triangle_count vuelve al baseline en estado 00")
 
 
 func _validate_mode_switching() -> void:
