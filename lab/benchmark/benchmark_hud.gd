@@ -71,6 +71,7 @@ func _process(_delta: float) -> void:
 			fft_module.clipmap_triangle_count() if fft_module else 0,
 		],
 		"Clipmap LOD: %s | Periodicity grid: %s" % [fft_module.clipmap_lod_debug_name() if fft_module else "unavailable", fft_module.periodicity_debug_name() if fft_module else "unavailable"],
+		"Clipmap Seam Debug: %s" % _clipmap_seam_debug_name(),
 		"Surface debug: %s | GPU allocation: %s" % [fft_module.debug_mode_name() if fft_module else "unavailable", _format_bytes(fft_module.gpu_memory_bytes()) if fft_module else "unavailable"],
 		"GPU frame time: unavailable at runtime — use the external profiler.",
 	])
@@ -139,6 +140,15 @@ func _foam_debug_name(mode: int) -> String:
 		15:
 			return "CREST_RESIDUAL_RAW"
 	return "OFF"
+
+
+func _clipmap_seam_debug_name() -> String:
+	if lab_main == null or not lab_main.has_method(&"get"):
+		return "unavailable"
+	var ocean_v3: Node = lab_main.get("ocean_v3") as Node
+	if ocean_v3 == null or not ocean_v3.has_method(&"clipmap_diagnostic_mode_name"):
+		return "unavailable"
+	return str(ocean_v3.call("clipmap_diagnostic_mode_name"))
 
 
 func _crest_transition_lines(fft_module) -> String:

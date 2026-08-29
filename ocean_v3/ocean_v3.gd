@@ -1397,6 +1397,19 @@ func clipmap_tracking_debug_mode_name() -> String:
 	return fft_module.clipmap_tracking_debug_mode_name() if fft_module != null else "UNAVAILABLE"
 
 
+func cycle_ocean_clipmap_seam_diagnostic() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.cycle_clipmap_seam_diagnostic()
+
+
+func clipmap_diagnostic_mode_name() -> String:
+	if Engine.is_editor_hint():
+		return "OFF"
+	var fft_module := _runtime_fft_module()
+	return fft_module.clipmap_diagnostic_mode_name() if fft_module != null else "UNAVAILABLE"
+
+
 func toggle_ocean_periodicity_debug() -> void:
 	var fft_module := _runtime_fft_module()
 	if fft_module != null:
