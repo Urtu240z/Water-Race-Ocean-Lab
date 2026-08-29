@@ -22,6 +22,7 @@ const SAFE_ID_CHARS := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123
 @export var synthetic_depth_enabled := true
 @export_range(0.0, 10.0, 0.01) var synthetic_slope := 0.20
 @export_range(0.0, 10000.0, 0.1, "suffix:m") var synthetic_max_depth_m := 20.0
+@export_range(0.0, 128.0, 0.5, "suffix:m") var optical_seabed_feather_m := 12.0
 
 @export_category("Eikonal")
 @export var incoming_direction_xz := Vector2.RIGHT
@@ -90,6 +91,7 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 	bathymetry_baker.synthetic_depth_enabled = synthetic_depth_enabled
 	bathymetry_baker.synthetic_slope = synthetic_slope
 	bathymetry_baker.synthetic_max_depth_m = synthetic_max_depth_m
+	bathymetry_baker.optical_seabed_feather_m = optical_seabed_feather_m
 	print("COASTAL ASSET: baking bathymetry...")
 	var bathymetry: BathymetryData = bathymetry_baker.bake()
 	if bathymetry == null or not bathymetry.is_valid():
@@ -142,6 +144,7 @@ func bake_coastal_asset() -> CoastalBakeAsset:
 		return null
 
 	var asset := CoastalBakeAsset.new()
+	asset.format_version = CoastalBakeAsset.CURRENT_FORMAT_VERSION
 	asset.coast_id = safe_id
 	asset.bathymetry = bathymetry
 	asset.propagation = propagation

@@ -15,6 +15,7 @@ extends Node
 @export var synthetic_depth_enabled := true
 @export_range(0.0, 10.0, 0.01) var synthetic_slope := 0.20
 @export_range(0.0, 10000.0, 0.1, "suffix:m") var synthetic_max_depth_m := 20.0
+@export_range(0.0, 128.0, 0.5, "suffix:m") var optical_seabed_feather_m := 12.0
 @export_file("*.tres") var output_path := ""
 
 enum PreviewMode {
@@ -153,6 +154,7 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 	data.world_origin_xz = min_xz
 	data.cell_size_m = cell_size_m
 	data.sea_level_y = sea_level_y
+	data.optical_seabed_feather_m = optical_seabed_feather_m
 	data.width = maxi(2, int(ceil(span.x / cell_size_m)) + 1)
 	data.height = maxi(2, int(ceil(span.y / cell_size_m)) + 1)
 	var count: int = data.cell_count()
@@ -163,6 +165,8 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 	data.land_water_mask.resize(count)
 	data.shore_signed_distance_m.resize(count)
 	data.depth_source_mask.resize(count)
+	data.real_seabed_coverage.resize(count)
+	data.optical_seabed_confidence.resize(count)
 	data.coast_metadata.resize(count)
 	var top_surface_y := PackedFloat32Array()
 	top_surface_y.resize(count)
@@ -189,10 +193,60 @@ func bake_faces(world_faces: PackedVector3Array, min_xz: Vector2, max_xz: Vector
 				data.land_water_mask[index] = 1
 				data.depth_source_mask[index] = 1
 			data.coast_metadata[index] = 0
+	_compute_real_seabed_coverage(data, has_surface)
 	_compute_shore_signed_distance(data)
 	_apply_synthetic_depth(data)
 	_compute_gradients(data)
 	return data
+
+
+func _compute_real_seabed_coverage(data, has_surface: PackedByteArray) -> void:
+	## Captura la cobertura geométrica antes de cualquier relleno sintético.
+	## La erosión sólo reduce autoridad hacia el interior: nunca expande un hit.
+	var count: int = data.cell_count()
+	var no_hit_seeds := PackedByteArray()
+	no_hit_seeds.resize(count)
+	var no_hit_count := 0
+	for index in count:
+		var has_hit := has_surface[index] != 0
+		data.real_seabed_coverage[index] = 255 if has_hit else 0
+		if not has_hit:
+			no_hit_seeds[index] = 1
+			no_hit_count += 1
+	if no_hit_count == 0:
+		for index in count:
+			data.optical_seabed_confidence[index] = 255 if data.real_seabed_coverage[index] != 0 else 0
+		return
+	var distance_squared := PackedFloat32Array()
+	distance_squared.resize(count)
+	var horizontal := PackedFloat32Array()
+	horizontal.resize(count)
+	for z in data.height:
+		var row := []
+		row.resize(data.width)
+		for x in data.width:
+			row[x] = 0.0 if no_hit_seeds[z * data.width + x] != 0 else 1.0e20
+		var transformed: Array = _edt_1d(row, data.width)
+		for x in data.width:
+			horizontal[z * data.width + x] = transformed[x]
+	for x in data.width:
+		var column := []
+		column.resize(data.height)
+		for z in data.height:
+			column[z] = horizontal[z * data.width + x]
+		var transformed: Array = _edt_1d(column, data.height)
+		for z in data.height:
+			distance_squared[z * data.width + x] = maxf(float(transformed[z]), 0.0)
+	var feather_m := maxf(optical_seabed_feather_m, 0.0)
+	for index in count:
+		if data.real_seabed_coverage[index] == 0:
+			data.optical_seabed_confidence[index] = 0
+		elif feather_m <= 0.0:
+			data.optical_seabed_confidence[index] = 255
+		else:
+			var distance_m: float = sqrt(distance_squared[index]) * data.cell_size_m
+			var confidence := clampf(distance_m / feather_m, 0.0, 1.0)
+			data.optical_seabed_confidence[index] = clampi(int(round(confidence * 255.0)), 0, 255)
 
 
 func _rasterize_triangles_to_top_surface(world_faces: PackedVector3Array, data, top_surface_y: PackedFloat32Array, has_surface: PackedByteArray) -> void:

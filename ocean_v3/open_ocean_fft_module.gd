@@ -1269,6 +1269,7 @@ func rebuild_coastal_propagation() -> bool:
 	if _query_reduced != null:
 		_query_reduced.clear_coastal()
 	surface.set_coastal_warp(null)
+	surface.set_real_seabed_coverage(coastal_bathymetry_data)
 	# El mono de diagnóstico necesita k0/omega aun con la transformación OFF:
 	# así C compara la misma onda profunda contra la onda costeña. En uso normal
 	# (ambos flags false) conserva el camino abierto y no hornea nada.
@@ -1331,6 +1332,7 @@ func set_coastal_bake_asset(asset: CoastalBakeAsset, runtime_enabled := true) ->
 		_query_reduced.clear_coastal()
 	surface.set_coastal_warp(null)
 	surface.set_coastal_propagation(null)
+	surface.set_real_seabed_coverage(null)
 	_coastal_runtime_enabled = runtime_enabled
 	if asset == null:
 		_coastal_runtime_enabled = false
@@ -1354,6 +1356,7 @@ func set_coastal_bake_asset(asset: CoastalBakeAsset, runtime_enabled := true) ->
 	coastal_min_valid_depth_m = asset.eikonal_min_valid_depth_m
 	coastal_eikonal_enabled = asset.propagation.propagation_kind == 1
 	coastal_warp_enabled = asset.warp.is_valid()
+	surface.set_real_seabed_coverage(coastal_bathymetry_data)
 	if _coastal_warp != null and _coastal_warp.is_valid() and _query_reduced != null:
 		_query_reduced.configure_coastal(_coastal_warp, _coastal_propagation,
 			coastal_split_inner_deg, coastal_split_outer_deg, coastal_long_reference_direction())

@@ -3,9 +3,11 @@ extends Resource
 ## Manifest canónico de una costa horneada offline.
 ## Los arrays grandes viven en los tres Resources referenciados, no aquí.
 
-const CURRENT_FORMAT_VERSION := 1
+const CURRENT_FORMAT_VERSION := 2
 
-@export var format_version := CURRENT_FORMAT_VERSION
+# Keep the implicit value at the historical version so old manifests that omit
+# this field cannot silently validate after the persisted format changes.
+@export var format_version := 1
 @export var coast_id := ""
 @export var bathymetry: BathymetryData
 @export var propagation: CoastalPropagationData
@@ -61,6 +63,8 @@ func is_valid() -> bool:
 	if eikonal_incoming_direction_xz.length_squared() <= 1.0e-8 or eikonal_reference_wavelength_m <= 0.0 or eikonal_gravity_mps2 <= 0.0 or eikonal_min_valid_depth_m < 0.0:
 		return false
 	if not bathymetry.is_valid() or not propagation.is_valid() or not warp.is_valid():
+		return false
+	if not bathymetry.has_real_seabed_coverage():
 		return false
 	if not _same_grid(bathymetry, propagation) or not _same_grid(bathymetry, warp):
 		return false

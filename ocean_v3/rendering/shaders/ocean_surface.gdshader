@@ -24,6 +24,8 @@ uniform sampler2D surface_foam_micro_texture : repeat_enable, filter_linear_mipm
 uniform sampler2D coastal_field_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_metrics_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_phase_texture : repeat_disable, filter_linear;
+// RG8 baked coverage: R=raw real-geometry hit, G=interior optical confidence.
+uniform sampler2D real_seabed_coverage_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_warp_texture : repeat_disable, filter_linear;
 uniform sampler2D coastal_warp_jacobian_texture : repeat_disable, filter_linear;
 uniform float domain_long_coastal_m = 512.0;
@@ -192,6 +194,9 @@ uniform float bottom_visibility_fade_end_m : hint_range(0.1, 100.0, 0.5) = 20.0;
 uniform float seabed_match_tolerance_start_m : hint_range(0.0, 20.0, 0.25) = 1.0;
 uniform float seabed_match_tolerance_end_m : hint_range(0.1, 50.0, 0.25) = 4.0;
 uniform float coastal_bathymetry_sea_level_y = 0.0;
+uniform bool real_seabed_coverage_enabled = false;
+uniform vec2 real_seabed_coverage_origin_xz = vec2(0.0);
+uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
@@ -204,7 +209,9 @@ uniform float coastal_bathymetry_sea_level_y = 0.0;
 // 24 DEBUG_SENTINEL_MAGENTA, 25 DEBUG_SENTINEL_GREEN, 26 SEABED_MATCH,
 // 27 BOTTOM_DEPTH_VISIBILITY, 28 BOTTOM_TRANSMISSION_WEIGHT,
 // 29 SEABED_HEIGHT_ERROR, 30 ORIGINAL_SEABED_MATCH, 31 CANDIDATE_SEABED_MATCH,
-// 32 EFFECTIVE_SEABED_MATCH, 33 EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT.
+// 32 EFFECTIVE_SEABED_MATCH, 33 EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT,
+// 34 REAL_SEABED_COVERAGE_RAW, 35 OPTICAL_SEABED_CONFIDENCE,
+// 36 OPTICAL_LOCAL_WATER_DEPTH, 37 OPEN_OCEAN_NO_SEABED_MASK.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2636,6 +2643,26 @@ void fragment() {
 				0.0
 			);
 			float raw_bathymetry_m = bathymetry_fragment_sample.r;
+			vec2 real_seabed_coverage_uv = (ocean_base_xz - real_seabed_coverage_origin_xz)
+				/ max(real_seabed_coverage_extent_m, vec2(0.001));
+			float real_seabed_coverage_domain = real_seabed_coverage_enabled
+				? step(0.0, real_seabed_coverage_uv.x)
+				* step(real_seabed_coverage_uv.x, 1.0)
+				* step(0.0, real_seabed_coverage_uv.y)
+				* step(real_seabed_coverage_uv.y, 1.0)
+				: 0.0;
+			vec4 real_seabed_coverage_sample = vec4(0.0);
+			if (real_seabed_coverage_enabled) {
+				real_seabed_coverage_sample = textureLod(
+					real_seabed_coverage_texture,
+					clamp(real_seabed_coverage_uv, vec2(0.0), vec2(1.0)),
+					0.0
+				);
+			}
+			float real_seabed_coverage_raw = real_seabed_coverage_domain
+				* step(0.5, real_seabed_coverage_sample.r);
+			float optical_seabed_confidence = real_seabed_coverage_domain
+				* clamp(real_seabed_coverage_sample.g, 0.0, 1.0);
 			vec4 raw_field_fragment_sample = vec4(0.0);
 			if (water_optics_debug_mode == 19) {
 				raw_field_fragment_sample = textureLod(
@@ -2685,7 +2712,9 @@ void fragment() {
 				max(coastal_cell_size_m * 2.0, 0.001),
 				local_depth_edge_distance_m
 			);
-			float local_depth_confidence = diagnostic_bathymetry_domain * local_depth_edge_confidence;
+			float local_depth_confidence = diagnostic_bathymetry_domain
+				* local_depth_edge_confidence
+				* optical_seabed_confidence;
 			bool local_depth_sample_valid = !isnan(raw_bathymetry_m)
 				&& !isinf(raw_bathymetry_m)
 				&& raw_bathymetry_m >= 0.0;
@@ -2727,6 +2756,7 @@ void fragment() {
 				max(bottom_visibility_fade_end_m, bottom_visibility_fade_start_m + 0.001),
 				local_water_depth_m
 			);
+			bottom_depth_visibility *= optical_seabed_confidence;
 			float effective_seabed_match = original_seabed_match;
 			float seabed_transmission_weight = mix(
 				1.0,
@@ -3054,7 +3084,7 @@ void fragment() {
 					mix(original_seabed_match, candidate_seabed_match, refraction_validity),
 					0.0,
 					1.0
-				);
+				) * optical_seabed_confidence;
 				seabed_transmission_weight = mix(
 					1.0,
 					bottom_depth_visibility,
@@ -3206,6 +3236,18 @@ void fragment() {
 			} else if (water_optics_debug_mode == 33) {
 				// Final seabed transmission weight: black means suppressed seabed.
 				final_color = vec3(seabed_transmission_weight);
+			} else if (water_optics_debug_mode == 34) {
+				// Binary real geometry hit captured before synthetic bathymetry fill.
+				final_color = vec3(real_seabed_coverage_raw);
+			} else if (water_optics_debug_mode == 35) {
+				// Baked confidence eroded toward the real mesh edge; never expanded.
+				final_color = vec3(optical_seabed_confidence);
+			} else if (water_optics_debug_mode == 36) {
+				// Optical local depth: open ocean fallback is deliberately saturated.
+				final_color = vec3(clamp(local_water_depth_m / 20.0, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 37) {
+				// White means no real seabed has optical authority here.
+				final_color = vec3(1.0 - optical_seabed_confidence);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

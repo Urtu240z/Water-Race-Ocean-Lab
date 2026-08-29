@@ -308,6 +308,23 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 	set_coastal_debug_field(_coastal_debug_field)
 
 
+func set_real_seabed_coverage(data) -> void:
+	## Cobertura geométrica baked para Water Optics. Es independiente de Coastal:
+	## la propagación puede apagarse sin perder la autoridad real del seabed.
+	var enabled: bool = data != null and data.has_method("has_real_seabed_coverage") \
+		and data.has_real_seabed_coverage()
+	var texture: Texture2D = data.build_gpu_seabed_coverage_texture() if enabled else null
+	if texture == null:
+		enabled = false
+	for material in _all_materials():
+		material.set_shader_parameter(&"real_seabed_coverage_enabled", enabled)
+		if not enabled:
+			continue
+		material.set_shader_parameter(&"real_seabed_coverage_texture", texture)
+		material.set_shader_parameter(&"real_seabed_coverage_origin_xz", data.world_origin_xz)
+		material.set_shader_parameter(&"real_seabed_coverage_extent_m", data.world_max_xz() - data.world_origin_xz)
+
+
 func set_coastal_warp(warp_data, enabled := true) -> void:
 	## 3B.2B: pasa el CoastalWarpData al shader (deep_xz/detJ/valid + J).
 	## El shader samplea LONG_COASTAL en deep_xz cuando el warp es válido y
