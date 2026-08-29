@@ -172,6 +172,14 @@ uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float refraction_micro_normal_strength : hint_range(0.0, 0.5, 0.01) = 0.15;
 uniform float refraction_max_offset_px : hint_range(0.0, 64.0, 1.0) = 24.0;
 uniform float refraction_depth_tolerance_m : hint_range(0.0, 2.0, 0.01) = 0.35;
+// Refraction V2: weights for the same filtered LONG/MID/SHORT slope signal
+// used by pixel_ocean_normal(). These affect only the refraction normal.
+uniform float refraction_wave_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform float refraction_long_weight : hint_range(0.0, 2.0, 0.01) = 0.30;
+uniform float refraction_mid_weight : hint_range(0.0, 2.0, 0.01) = 0.55;
+uniform float refraction_short_weight : hint_range(0.0, 2.0, 0.01) = 0.15;
+uniform float refraction_depth_start_m : hint_range(0.0, 50.0, 0.1) = 1.0;
+uniform float refraction_depth_end_m : hint_range(0.1, 100.0, 0.1) = 20.0;
 // R3 body polish. These controls add bounded single-pass water-column
 // scattering without changing the R1 Beer-Lambert terms or the R2 ray path.
 uniform vec4 scattering_color : source_color = vec4(0.02, 0.32, 0.42, 1.0);
@@ -211,7 +219,8 @@ uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
 // 29 SEABED_HEIGHT_ERROR, 30 ORIGINAL_SEABED_MATCH, 31 CANDIDATE_SEABED_MATCH,
 // 32 EFFECTIVE_SEABED_MATCH, 33 EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT,
 // 34 REAL_SEABED_COVERAGE_RAW, 35 OPTICAL_SEABED_CONFIDENCE,
-// 36 OPTICAL_LOCAL_WATER_DEPTH, 37 OPEN_OCEAN_NO_SEABED_MASK.
+// 36 OPTICAL_LOCAL_WATER_DEPTH, 37 OPEN_OCEAN_NO_SEABED_MASK,
+// 38 REFRACTION_SLOPE, 39 REFRACTION_DEPTH_FACTOR.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1169,7 +1178,17 @@ void vertex() {
 
 // 5R.2: normal FFT per-pixel (LONG/MID/SHORT compuestos en fragment) con
 // filtering por pixel footprint. Replica la cadena de slope del vertex.
-vec3 pixel_ocean_normal(vec2 world_xz) {
+//
+// The component outputs are also the wave signal used by Refraction V2. Keeping
+// them in this shared evaluation means refraction does not resample the normal
+// fields or create an independent noise source.
+void pixel_ocean_slope_components(
+	vec2 world_xz,
+	out vec2 long_slope,
+	out vec2 mid_slope,
+	out vec2 short_slope,
+	out vec2 filtered_slope
+) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
@@ -1239,9 +1258,9 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec2 slope_deep = slope_from_normal(long_coastal_normal_warped);
 	vec2 slope_warped_world = vec2(warp_jacobian.r * slope_deep.x + warp_jacobian.b * slope_deep.y, warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y);
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
-	vec2 slope = (slope_coastal * zone_long_amplitude * effective_shoaling + pixel_long_coastal_height * zone_grad_long)
+	long_slope = (slope_coastal * zone_long_amplitude * effective_shoaling + pixel_long_coastal_height * zone_grad_long)
 		* coastal_weight * coastal_gain;
-	slope += (slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * zone_long_amplitude + pixel_long_remainder_height * zone_grad_long) * remainder_weight;
+	long_slope += (slope_from_normal(normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb)) * zone_long_amplitude + pixel_long_remainder_height * zone_grad_long) * remainder_weight;
 
 	// 5R.2B: MID con filtro espacial progresivo 4-tap en SLOPE space (no promediar
 	// normales). La muestra central siempre se hace; los 4 taps extra sólo cuando
@@ -1258,7 +1277,7 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 		) * 0.25;
 		mid_center_slope = mix(mid_center_slope, mid_filtered, mid_filter_amount);
 	}
-	slope += (mid_center_slope * zone_mid_amplitude + pixel_mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
+	mid_slope = (mid_center_slope * zone_mid_amplitude + pixel_mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
 
 	// 5R.2B: SHORT idéntico a MID con su propio texel size (microdetalle en
 	// media distancia se funde suavemente en vez de tiritar como líneas).
@@ -1274,7 +1293,9 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 		) * 0.25;
 		short_center_slope = mix(short_center_slope, short_filtered, short_filter_amount);
 	}
-	slope += (short_center_slope * zone_short_amplitude + pixel_short_height * zone_grad_short) * short_weight * mid_short_weight;
+	short_slope = (short_center_slope * zone_short_amplitude + pixel_short_height * zone_grad_short) * short_weight * mid_short_weight;
+
+	vec2 slope = long_slope + mid_slope + short_slope;
 
 	// 5R.2: la cresta afilada 5R.1C es más empinada que la normal FFT base.
 	slope *= 1.0 + crest_sharpen_mask * ocean_crest_sharpen_max_gain * 0.5;
@@ -1286,7 +1307,16 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	// geometry topology, while the normal follows the vertical height envelope.
 	slope = slope * shore_vertical_weight + shore_pre_envelope_height * shore_vertical_gradient;
 
-	return normalize(vec3(-slope.x, 1.0, -slope.y));
+	filtered_slope = slope;
+}
+
+vec3 pixel_ocean_normal(vec2 world_xz) {
+	vec2 long_slope;
+	vec2 mid_slope;
+	vec2 short_slope;
+	vec2 filtered_slope;
+	pixel_ocean_slope_components(world_xz, long_slope, mid_slope, short_slope, filtered_slope);
+	return normalize(vec3(-filtered_slope.x, 1.0, -filtered_slope.y));
 }
 
 
@@ -2191,9 +2221,28 @@ void fragment() {
 
 	// Build the final visual normal once. The same normal feeds Godot's PBR
 	// environment and direct-light lobes; FFT remains the geometry authority.
+	vec2 refraction_long_slope = vec2(0.0);
+	vec2 refraction_mid_slope = vec2(0.0);
+	vec2 refraction_short_slope = vec2(0.0);
+	vec2 refraction_filtered_slope = vec2(0.0);
+	bool refraction_wave_signal_valid = false;
 	vec3 shading_normal_world;
 	if (ocean_normal_fragment && perf_spectral_enabled) {
-		shading_normal_world = pixel_ocean_normal(ocean_base_xz);
+		// This is the implementation behind pixel_ocean_normal(): retain its
+		// already evaluated band components so Refraction V2 can reuse them.
+		pixel_ocean_slope_components(
+			ocean_base_xz,
+			refraction_long_slope,
+			refraction_mid_slope,
+			refraction_short_slope,
+			refraction_filtered_slope
+		);
+		shading_normal_world = normalize(vec3(
+			-refraction_filtered_slope.x,
+			1.0,
+			-refraction_filtered_slope.y
+		));
+		refraction_wave_signal_valid = true;
 	} else {
 		shading_normal_world = normalize(derived_normal);
 	}
@@ -2916,6 +2965,10 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
+			vec2 refraction_wave_slope = vec2(0.0);
+			float refraction_wave_depth_factor = 0.0;
+			float refraction_wave_grazing_factor = 0.0;
+			float refraction_wave_influence = 0.0;
 			// Keep the R2 candidate sample alive until seabed classification. This
 			// reuses the exact depth fetch that controls the refracted color.
 			vec2 candidate_refracted_uv = SCREEN_UV;
@@ -2932,6 +2985,20 @@ void fragment() {
 			// volume scattering. Use a conservative fallback when refraction is off;
 			// the existing refracted scene luminance refines it when already available.
 			float shallow_bottom_response = 0.75;
+			// Use the bounded distance to the actually visible scene sample. This is the
+			// right authority for optical deformation: a shallow submerged object must
+			// still distort even when the bathymetry below it is deep. The existing R2
+			// view-ray path remains the authority for transmission and candidate depth.
+			refraction_wave_depth_factor = 1.0 - smoothstep(
+				refraction_depth_start_m,
+				max(refraction_depth_end_m, refraction_depth_start_m + 0.001),
+				bounded_view_water_path_m
+			);
+			if (refraction_wave_signal_valid) {
+				refraction_wave_slope = refraction_long_slope * refraction_long_weight
+					+ refraction_mid_slope * refraction_mid_weight
+					+ refraction_short_slope * refraction_short_weight;
+			}
 			if (water_refraction_enabled) {
 				vec2 refraction_screen_size = max(
 					vec2(textureSize(screen_texture, 0)),
@@ -2943,6 +3010,39 @@ void fragment() {
 					* surface_normal_strength
 					* refraction_micro_normal_strength
 				);
+				// V2 changes only the normal driving the established R2 ray. The
+				// projection, candidate depth sample, validity and pixel clamp below
+				// remain unchanged. At wave strength 0 this is exactly the old path.
+				if (refraction_wave_signal_valid) {
+					vec3 refraction_wave_normal_world = normalize(vec3(
+						-refraction_wave_slope.x,
+						1.0,
+						-refraction_wave_slope.y
+					));
+					vec3 refraction_wave_normal_view = normalize(
+						mat3(VIEW_MATRIX) * refraction_wave_normal_world
+					);
+					float view_alignment = clamp(
+						abs(dot(refraction_wave_normal_view, normalize(view_direction))),
+						0.0,
+						1.0
+					);
+					// Grazing rays are more sensitive to screen-space instability;
+					// suppress the wave perturbation before they reach refract().
+					refraction_wave_grazing_factor = smoothstep(0.18, 0.58, view_alignment);
+					refraction_wave_influence = clamp(
+						refraction_wave_strength
+						* refraction_wave_depth_factor
+						* refraction_wave_grazing_factor,
+						0.0,
+						1.0
+					);
+					refraction_normal_view = normalize(mix(
+						refraction_normal_view,
+						refraction_wave_normal_view,
+						refraction_wave_influence
+					));
+				}
 				vec3 incident_view = normalize(-view_direction);
 				vec3 refracted_direction_view = refract(
 					incident_view,
@@ -3248,6 +3348,21 @@ void fragment() {
 			} else if (water_optics_debug_mode == 37) {
 				// White means no real seabed has optical authority here.
 				final_color = vec3(1.0 - optical_seabed_confidence);
+			} else if (water_optics_debug_mode == 38) {
+				// Signed Refraction V2 wave slope: R/G are direction, B is magnitude.
+				if (refraction_wave_signal_valid) {
+					vec2 signed_wave_slope = clamp(refraction_wave_slope * 0.5, -1.0, 1.0);
+					final_color = vec3(
+						signed_wave_slope * 0.5 + 0.5,
+						clamp(length(refraction_wave_slope) * 0.5, 0.0, 1.0)
+					);
+				} else {
+					final_color = vec3(0.0);
+				}
+			} else if (water_optics_debug_mode == 39) {
+				// Visible scene-depth modulation of the V2 wave contribution: white
+				// shallow, black once the configured depth end is reached.
+				final_color = vec3(refraction_wave_depth_factor);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

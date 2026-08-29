@@ -425,6 +425,38 @@ var _performance_overlay_label: Label
 		refraction_depth_tolerance_m = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
+@export_group("Water Optics / Refraction V2")
+
+@export_range(0.0, 2.0, 0.01) var refraction_wave_strength: float = 1.0:
+	set(value):
+		refraction_wave_strength = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var refraction_long_weight: float = 0.30:
+	set(value):
+		refraction_long_weight = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var refraction_mid_weight: float = 0.55:
+	set(value):
+		refraction_mid_weight = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var refraction_short_weight: float = 0.15:
+	set(value):
+		refraction_short_weight = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 50.0, 0.1) var refraction_depth_start_m: float = 1.0:
+	set(value):
+		refraction_depth_start_m = clampf(value, 0.0, 50.0)
+		_request_visual_sync()
+
+@export_range(0.1, 100.0, 0.1) var refraction_depth_end_m: float = 20.0:
+	set(value):
+		refraction_depth_end_m = clampf(value, 0.1, 100.0)
+		_request_visual_sync()
+
 @export var scattering_color: Color = Color(0.02, 0.32, 0.42, 1.0):
 	set(value):
 		scattering_color = value
@@ -511,7 +543,7 @@ var _performance_overlay_label: Label
 		seabed_match_tolerance_end_m = clampf(value, 0.1, 50.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR") var water_optics_debug_mode: int = 0:
 	set(value):
 		var next_mode := clampi(value, 0, 37)
 		if water_optics_debug_mode != next_mode:
@@ -2042,6 +2074,12 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"refraction_micro_normal_strength", refraction_micro_normal_strength)
 	material.set_shader_parameter(&"refraction_max_offset_px", refraction_max_offset_px)
 	material.set_shader_parameter(&"refraction_depth_tolerance_m", refraction_depth_tolerance_m)
+	material.set_shader_parameter(&"refraction_wave_strength", refraction_wave_strength)
+	material.set_shader_parameter(&"refraction_long_weight", refraction_long_weight)
+	material.set_shader_parameter(&"refraction_mid_weight", refraction_mid_weight)
+	material.set_shader_parameter(&"refraction_short_weight", refraction_short_weight)
+	material.set_shader_parameter(&"refraction_depth_start_m", refraction_depth_start_m)
+	material.set_shader_parameter(&"refraction_depth_end_m", refraction_depth_end_m)
 	material.set_shader_parameter(&"scattering_color", scattering_color)
 	material.set_shader_parameter(&"scattering_strength", scattering_strength)
 	material.set_shader_parameter(&"scattering_shallow_tint_influence", scattering_shallow_tint_influence)
