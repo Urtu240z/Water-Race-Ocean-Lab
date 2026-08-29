@@ -399,8 +399,18 @@ varying float shore_pre_envelope_height;
 #include "res://ocean_v3/rendering/shaders/ocean_breaking_common.gdshaderinc"
 
 vec3 level_color(float level) {
-	float wave = fract(level * 0.61803398875);
-	return mix(vec3(0.12, 0.85, 0.95), vec3(0.95, 0.25, 0.12), wave);
+	int lod = int(round(level));
+	if (lod == 0) return vec3(1.0, 0.0, 0.0);
+	if (lod == 1) return vec3(0.0, 1.0, 0.0);
+	if (lod == 2) return vec3(0.0, 0.0, 1.0);
+	if (lod == 3) return vec3(1.0, 1.0, 0.0);
+	if (lod == 4) return vec3(1.0, 0.0, 1.0);
+	if (lod == 5) return vec3(0.0, 1.0, 1.0);
+	if (lod == 6) return vec3(1.0, 0.45, 0.0);
+	if (lod == 7) return vec3(0.55, 0.0, 1.0);
+	if (lod == 8) return vec3(0.5, 1.0, 0.0);
+	if (lod == 9) return vec3(1.0, 1.0, 1.0);
+	return vec3(0.2);
 }
 
 float periodic_grid(vec2 world_xz, float domain_size_m) {
@@ -3258,5 +3268,13 @@ void fragment() {
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
+	}
+	if (clipmap_lod_debug) {
+		ALBEDO = vec3(0.0);
+		EMISSION = level_color(clipmap_level);
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+		RADIANCE = vec4(0.0);
+		ALPHA = 1.0;
 	}
 }

@@ -468,15 +468,18 @@ func _rebuild_levels() -> void:
 		var instance := MeshInstance3D.new()
 		instance.name = "Level%d" % level_index
 		instance.mesh = level_mesh
+		instance.material_override = _surface_material
 		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		instance.extra_cull_margin = clipmap_config.extra_cull_margin_m
-		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
 		add_child(instance)
+		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
 		_levels.append(instance)
 		_triangle_count += int(float(geometry.indices.size()) / 3.0)
 
 
 func _apply_debug_mode() -> void:
-	for level in _levels:
+	for level_index in _levels.size():
+		var level := _levels[level_index]
 		level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material
+		level.set_instance_shader_parameter(&"clipmap_level", float(level_index))
 	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.SLOPE))

@@ -61,8 +61,18 @@ float distance_fade(vec2 fade_range, float distance_to_camera) {
 }
 
 vec3 level_color(float level) {
-	float wave = fract(level * 0.61803398875);
-	return mix(vec3(0.12, 0.85, 0.95), vec3(0.95, 0.25, 0.12), wave);
+	int lod = int(round(level));
+	if (lod == 0) return vec3(1.0, 0.0, 0.0);
+	if (lod == 1) return vec3(0.0, 1.0, 0.0);
+	if (lod == 2) return vec3(0.0, 0.0, 1.0);
+	if (lod == 3) return vec3(1.0, 1.0, 0.0);
+	if (lod == 4) return vec3(1.0, 0.0, 1.0);
+	if (lod == 5) return vec3(0.0, 1.0, 1.0);
+	if (lod == 6) return vec3(1.0, 0.45, 0.0);
+	if (lod == 7) return vec3(0.55, 0.0, 1.0);
+	if (lod == 8) return vec3(0.5, 1.0, 0.0);
+	if (lod == 9) return vec3(1.0, 1.0, 1.0);
+	return vec3(0.2);
 }
 
 float periodic_grid(vec2 world_xz, float domain_size_m) {
@@ -205,6 +215,9 @@ void fragment() {
 			value = horizontal_weight;
 		}
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
+	}
+	if (clipmap_lod_debug) {
+		color = level_color(clipmap_level);
 	}
 	ALBEDO = color;
 }
