@@ -364,34 +364,6 @@ func toggle_periodicity_debug() -> void:
 	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 
 
-## X2.1 diagnostic A/B: use the normal surface material with this mode.
-## It removes FFT/coastal/crest displacement while retaining the exact active
-## meshes, transforms, variants and rasterization path.
-func set_clipmap_flat_geometry_debug(enabled: bool) -> void:
-	_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", enabled)
-	if enabled:
-		_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", false)
-
-
-## X2.1 diagnostic A/B: preserves vertex displacement but forces a uniform
-## opaque emission-only gray output. It isolates displaced-geometry seams from
-## lighting, reflections, foam and optical presentation.
-func set_clipmap_displaced_unlit_debug(enabled: bool) -> void:
-	_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", enabled)
-	if enabled:
-		_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
-
-
-func clipmap_diagnostic_mode_name() -> String:
-	var flat := bool(_surface_material.get_shader_parameter(&"clipmap_flat_geometry_debug"))
-	var displaced := bool(_surface_material.get_shader_parameter(&"clipmap_displaced_unlit_debug"))
-	if flat:
-		return "FLAT GEOMETRY"
-	if displaced:
-		return "DISPLACED UNLIT"
-	return "OFF"
-
-
 func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35, transform_enabled := true, eikonal_phase_debug := false) -> void:
 	## Sólo LONG consume esta transformación. MID/SHORT y sus H0 quedan intactos.
 	var enabled: bool = data != null and data.is_valid()
@@ -577,8 +549,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
 		material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
 		material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
-		material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
-		material.set_shader_parameter(&"clipmap_displaced_unlit_debug", false)
 		material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
 		material.set_shader_parameter(&"coastal_propagation_enabled", false)
 		material.set_shader_parameter(&"coastal_transform_enabled", false)
