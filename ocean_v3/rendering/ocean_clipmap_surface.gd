@@ -17,7 +17,6 @@ enum DebugMode {
 enum ClipmapTrackingDebugMode {
 	CONTINUOUS,
 	FROZEN,
-	SNAPPED,
 }
 
 enum CoastalDebugField {
@@ -60,8 +59,7 @@ enum CoastalWarpEffectDebug {
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
-@export_enum("CONTINUOUS", "FROZEN", "SNAPPED") var clipmap_tracking_debug_mode: int = ClipmapTrackingDebugMode.CONTINUOUS
-@export_range(0.05, 4.0, 0.05) var clipmap_tracking_snap_m: float = 0.25
+@export_enum("CONTINUOUS", "FROZEN") var clipmap_tracking_debug_mode: int = ClipmapTrackingDebugMode.CONTINUOUS
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
 @export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
@@ -85,9 +83,6 @@ var _breaking_debug: int = BreakingDebug.OFF
 var _tracking_camera: Camera3D
 var _tracking_debug_mode_seen := -1
 var _frozen_tracking_position_xz := Vector2.ZERO
-var _snapped_tracking_cell := Vector2i.ZERO
-var _snapped_tracking_snap_m := -1.0
-var _snapped_tracking_initialized := false
 var _triangle_count := 0
 
 
@@ -112,19 +107,15 @@ func _process(_delta: float) -> void:
 	if camera == null:
 		return
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
-	var tracking_mode := clampi(clipmap_tracking_debug_mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.SNAPPED)
+	var tracking_mode := clampi(clipmap_tracking_debug_mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.FROZEN)
 	if tracking_mode != _tracking_debug_mode_seen:
 		if tracking_mode == ClipmapTrackingDebugMode.FROZEN:
 			_frozen_tracking_position_xz = Vector2(global_position.x, global_position.z)
-		elif tracking_mode == ClipmapTrackingDebugMode.SNAPPED:
-			_snapped_tracking_initialized = false
 		_tracking_debug_mode_seen = tracking_mode
 	if tracking_mode == ClipmapTrackingDebugMode.CONTINUOUS:
 		global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
-	elif tracking_mode == ClipmapTrackingDebugMode.FROZEN:
-		global_position = Vector3(_frozen_tracking_position_xz.x, clipmap_config.sea_level_y, _frozen_tracking_position_xz.y)
 	else:
-		_update_snapped_tracking(camera_xz)
+		global_position = Vector3(_frozen_tracking_position_xz.x, clipmap_config.sea_level_y, _frozen_tracking_position_xz.y)
 	_surface_material.set_shader_parameter(&"camera_world_xz", camera_xz)
 	_wireframe_material.set_shader_parameter(&"camera_world_xz", camera_xz)
 
@@ -134,41 +125,16 @@ func set_tracking_camera(camera: Camera3D) -> void:
 
 
 func set_clipmap_tracking_debug_mode(mode: int) -> void:
-	clipmap_tracking_debug_mode = clampi(mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.SNAPPED)
+	clipmap_tracking_debug_mode = clampi(mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.FROZEN)
 	_tracking_debug_mode_seen = -1
 
 
 func toggle_clipmap_tracking_debug_mode() -> void:
-	var next_mode := ClipmapTrackingDebugMode.FROZEN
-	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.FROZEN:
-		next_mode = ClipmapTrackingDebugMode.SNAPPED
-	elif clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.SNAPPED:
-		next_mode = ClipmapTrackingDebugMode.CONTINUOUS
-	set_clipmap_tracking_debug_mode(next_mode)
+	set_clipmap_tracking_debug_mode(ClipmapTrackingDebugMode.FROZEN if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.CONTINUOUS else ClipmapTrackingDebugMode.CONTINUOUS)
 
 
 func clipmap_tracking_debug_mode_name() -> String:
-	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.FROZEN:
-		return "FROZEN"
-	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.SNAPPED:
-		return "SNAPPED (%.2f m)" % _effective_tracking_snap_m()
-	return "CONTINUOUS"
-
-
-func _effective_tracking_snap_m() -> float:
-	return clampf(clipmap_tracking_snap_m, 0.05, 4.0)
-
-
-func _update_snapped_tracking(camera_xz: Vector2) -> void:
-	var snap_m := _effective_tracking_snap_m()
-	var snap_size_changed := not is_equal_approx(_snapped_tracking_snap_m, snap_m)
-	var snapped_cell := Vector2i(roundi(camera_xz.x / snap_m), roundi(camera_xz.y / snap_m))
-	if _snapped_tracking_initialized and not snap_size_changed and snapped_cell == _snapped_tracking_cell:
-		return
-	_snapped_tracking_cell = snapped_cell
-	_snapped_tracking_snap_m = snap_m
-	_snapped_tracking_initialized = true
-	global_position = Vector3(float(snapped_cell.x) * snap_m, clipmap_config.sea_level_y, float(snapped_cell.y) * snap_m)
+	return "FROZEN" if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.FROZEN else "CONTINUOUS"
 
 
 ## Phase 4B: expone el material del clipmap como fuente única de los uniforms
