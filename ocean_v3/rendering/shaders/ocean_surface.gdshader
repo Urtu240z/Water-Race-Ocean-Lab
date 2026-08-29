@@ -203,7 +203,8 @@ uniform float coastal_bathymetry_sea_level_y = 0.0;
 // 22 RAW_WATER_FRAGMENT_DEPTH, 23 BATHYMETRY_COMPARE_VERTEX_FRAGMENT,
 // 24 DEBUG_SENTINEL_MAGENTA, 25 DEBUG_SENTINEL_GREEN, 26 SEABED_MATCH,
 // 27 BOTTOM_DEPTH_VISIBILITY, 28 BOTTOM_TRANSMISSION_WEIGHT,
-// 29 SEABED_HEIGHT_ERROR.
+// 29 SEABED_HEIGHT_ERROR, 30 ORIGINAL_SEABED_MATCH, 31 CANDIDATE_SEABED_MATCH,
+// 32 EFFECTIVE_SEABED_MATCH, 33 EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2628,14 +2629,14 @@ void fragment() {
 				&& !isnan(scene_linear_depth) && !isinf(scene_linear_depth);
 			bool water_depth_valid = water_linear_depth > WATER_OPTICS_EPSILON
 				&& !isnan(water_linear_depth) && !isinf(water_linear_depth);
-			vec3 scene_world_position = vec3(0.0);
-			bool scene_world_position_valid = scene_depth_valid
+			vec3 original_scene_world_position = vec3(0.0);
+			bool original_scene_world_position_valid = scene_depth_valid
 				&& water_optics_world_position_from_depth(
 					SCREEN_UV,
 					scene_raw_depth,
 					INV_PROJECTION_MATRIX,
 					INV_VIEW_MATRIX,
-					scene_world_position
+					original_scene_world_position
 				);
 			// Fragment diagnostics and production bathymetry intentionally bypass the
 			// interpolated Coastal metrics varying. One direct metrics sample is now
@@ -2724,15 +2725,15 @@ void fragment() {
 			// same sea-level convention, not the instantaneous FFT crest height.
 			float expected_seabed_y = coastal_bathymetry_sea_level_y
 				- max(local_water_depth_m, 0.0);
-			float seabed_height_error_m = scene_world_position_valid
-				? abs(scene_world_position.y - expected_seabed_y)
+			float original_seabed_height_error_m = original_scene_world_position_valid
+				? abs(original_scene_world_position.y - expected_seabed_y)
 				: max(seabed_match_tolerance_end_m, 10.0);
-			float seabed_match = 0.0;
-			if (scene_world_position_valid && local_water_depth_valid) {
-				seabed_match = 1.0 - smoothstep(
+			float original_seabed_match = 0.0;
+			if (original_scene_world_position_valid && local_water_depth_valid) {
+				original_seabed_match = 1.0 - smoothstep(
 					seabed_match_tolerance_start_m,
 					max(seabed_match_tolerance_end_m, seabed_match_tolerance_start_m + 0.001),
-					seabed_height_error_m
+					original_seabed_height_error_m
 				);
 			}
 			float bottom_depth_visibility = 1.0 - smoothstep(
@@ -2740,10 +2741,11 @@ void fragment() {
 				max(bottom_visibility_fade_end_m, bottom_visibility_fade_start_m + 0.001),
 				local_water_depth_m
 			);
+			float effective_seabed_match = original_seabed_match;
 			float seabed_transmission_weight = mix(
 				1.0,
 				bottom_depth_visibility,
-				seabed_match
+				effective_seabed_match
 			);
 
 			// R1 Beer-Lambert uses the view-ray path without the old optical depth
@@ -2898,6 +2900,18 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
+			// Keep the R2 candidate sample alive until seabed classification. This
+			// reuses the exact depth fetch that controls the refracted color.
+			vec2 candidate_refracted_uv = SCREEN_UV;
+			vec2 candidate_depth_uv = clamp(SCREEN_UV, vec2(0.001), vec2(0.999));
+			float candidate_raw_depth = 0.0;
+			float candidate_linear_depth = 0.0;
+			bool candidate_raw_depth_valid = false;
+			bool candidate_depth_valid = false;
+			vec3 candidate_scene_world_position = vec3(0.0);
+			bool candidate_scene_world_position_valid = false;
+			float candidate_seabed_height_error_m = max(seabed_match_tolerance_end_m, 10.0);
+			float candidate_seabed_match = original_seabed_match;
 			// This is a bounded visual shallow light lift, not a replacement for
 			// volume scattering. Use a conservative fallback when refraction is off;
 			// the existing refracted scene luminance refines it when already available.
@@ -2943,7 +2957,7 @@ void fragment() {
 						vec3 candidate_position_view = water_position_view
 							+ refracted_direction_view * path_distance;
 						bool projection_valid;
-						vec2 candidate_refracted_uv = water_optics_project_view_position(
+						candidate_refracted_uv = water_optics_project_view_position(
 							candidate_position_view, projection_matrix, projection_valid);
 						if (projection_valid) {
 							// refraction_strength remains the post-geometry artistic gain;
@@ -2962,24 +2976,47 @@ void fragment() {
 							candidate_refracted_uv = SCREEN_UV + candidate_offset_px / refraction_screen_size;
 
 							float edge_confidence = water_optics_edge_confidence(candidate_refracted_uv);
-							vec2 candidate_depth_uv = clamp(
+							candidate_depth_uv = clamp(
 								candidate_refracted_uv,
 								vec2(0.001),
 								vec2(0.999)
 							);
 							// R2 adds exactly one candidate depth fetch.
-							float candidate_raw_depth = textureLod(depth_texture, candidate_depth_uv, 0.0).r;
-							bool candidate_raw_depth_valid = candidate_raw_depth > 0.000001
+							candidate_raw_depth = textureLod(depth_texture, candidate_depth_uv, 0.0).r;
+							candidate_raw_depth_valid = candidate_raw_depth > 0.000001
 								&& candidate_raw_depth <= 1.000001
 								&& !isnan(candidate_raw_depth) && !isinf(candidate_raw_depth);
-							float candidate_linear_depth = linear_depth_from_buffer(
+							candidate_linear_depth = linear_depth_from_buffer(
 								candidate_depth_uv,
 								candidate_raw_depth,
 								INV_PROJECTION_MATRIX
 							);
-							bool candidate_depth_valid = candidate_raw_depth_valid
+							candidate_depth_valid = candidate_raw_depth_valid
 								&& candidate_linear_depth > WATER_OPTICS_EPSILON
 								&& !isnan(candidate_linear_depth) && !isinf(candidate_linear_depth);
+							candidate_scene_world_position_valid = candidate_depth_valid
+								&& water_optics_world_position_from_depth(
+									candidate_depth_uv,
+									candidate_raw_depth,
+									INV_PROJECTION_MATRIX,
+									INV_VIEW_MATRIX,
+									candidate_scene_world_position
+								);
+							// Invalid candidate geometry has no extra authority: retain the
+							// original classification rather than exposing the seabed again.
+							if (candidate_scene_world_position_valid && local_water_depth_valid) {
+								candidate_seabed_height_error_m = abs(
+									candidate_scene_world_position.y - expected_seabed_y
+								);
+								candidate_seabed_match = 1.0 - smoothstep(
+									seabed_match_tolerance_start_m,
+									max(seabed_match_tolerance_end_m, seabed_match_tolerance_start_m + 0.001),
+									candidate_seabed_height_error_m
+								);
+							} else {
+								candidate_seabed_height_error_m = max(seabed_match_tolerance_end_m, 10.0);
+								candidate_seabed_match = original_seabed_match;
+							}
 							float behind_water_confidence = candidate_depth_valid
 								? smoothstep(
 									water_linear_depth + WATER_OPTICS_FOREGROUND_MARGIN_M,
@@ -3026,6 +3063,16 @@ void fragment() {
 					0.5,
 					1.0,
 					clamp(bottom_luma, 0.0, 1.0)
+				);
+				effective_seabed_match = clamp(
+					mix(original_seabed_match, candidate_seabed_match, refraction_validity),
+					0.0,
+					1.0
+				);
+				seabed_transmission_weight = mix(
+					1.0,
+					bottom_depth_visibility,
+					effective_seabed_match
 				);
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
@@ -3150,7 +3197,7 @@ void fragment() {
 				final_color = vec3(clamp(abs(coastal_metrics.r - raw_bathymetry_m) / 20.0, 0.0, 1.0));
 			} else if (water_optics_debug_mode == 26) {
 				// White when the original scene sample matches the local seabed.
-				final_color = vec3(seabed_match);
+				final_color = vec3(original_seabed_match);
 			} else if (water_optics_debug_mode == 27) {
 				// White in shallow water; black once the local bottom is deep.
 				final_color = vec3(bottom_depth_visibility);
@@ -3158,8 +3205,21 @@ void fragment() {
 				// White when transmitted geometry is unchanged; black when seabed fades.
 				final_color = vec3(seabed_transmission_weight);
 			} else if (water_optics_debug_mode == 29) {
-				// Height error normalized to 10 m; invalid/sky samples are white.
-				final_color = vec3(clamp(seabed_height_error_m / 10.0, 0.0, 1.0));
+				// Original SCREEN_UV height error normalized to 10 m.
+				final_color = vec3(clamp(original_seabed_height_error_m / 10.0, 0.0, 1.0));
+			} else if (water_optics_debug_mode == 30) {
+				// Classification at the original SCREEN_UV depth sample.
+				final_color = vec3(original_seabed_match);
+			} else if (water_optics_debug_mode == 31) {
+				// Classification at the R2 candidate depth sample; invalid candidates
+				// intentionally fall back to the original classification.
+				final_color = vec3(candidate_seabed_match);
+			} else if (water_optics_debug_mode == 32) {
+				// The classification used by the refracted transmission path.
+				final_color = vec3(effective_seabed_match);
+			} else if (water_optics_debug_mode == 33) {
+				// Final seabed transmission weight: black means suppressed seabed.
+				final_color = vec3(seabed_transmission_weight);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
