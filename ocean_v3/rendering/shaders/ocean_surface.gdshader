@@ -588,21 +588,6 @@ float sea_state_zone_foam_activity(float long_amplitude, float mid_amplitude,
 }
 
 
-float sea_state_zone_calmness(float long_amplitude, float mid_amplitude,
-		float short_amplitude, float choppiness) {
-	// The local values already include the zone's SDF feather and strength.
-	// Clamping each term makes out-of-range authored multipliers incapable of
-	// producing negative calmness or a reflection discontinuity at the edge.
-	float long_calm = 1.0 - clamp(long_amplitude, 0.0, 1.0);
-	float mid_calm = 1.0 - clamp(mid_amplitude, 0.0, 1.0);
-	float short_calm = 1.0 - clamp(short_amplitude, 0.0, 1.0);
-	float chop_calm = 1.0 - clamp(choppiness, 0.0, 1.0);
-	return clamp(
-		0.35 * long_calm + 0.25 * mid_calm + 0.15 * short_calm + 0.25 * chop_calm,
-		0.0, 1.0);
-}
-
-
 const float WATER_IOR = 1.333;
 const float WATER_F0 = 0.020373;
 // Godot 4.7 maps dielectric SPECULAR to F0 as 0.16 * SPECULAR^2.
@@ -1196,7 +1181,6 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec2 coast_uv = coastal_uv(world_xz);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	vec4 metrics_data = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
-	bool coast_active = has_coastal_data(coast_uv, field_data);
 	float render_confidence = coastal_render_confidence(coast_uv, field_data);
 	bool coast_render_active = render_confidence > 0.001;
 	float shoaling = field_data.g;
