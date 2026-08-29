@@ -131,10 +131,6 @@ vec3 surface_displacement_break(vec2 world_xz, vec2 coast_uv, vec4 field_data, f
 	breaker_sea_state_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
 		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
 		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
-	float long_coastal_height = long_coastal.y;
-	float long_remainder_height = long_remainder.y;
-	float mid_height = mid_displacement.y;
-	float short_height = short_displacement.y;
 	long_coastal = breaker_sea_state_displacement(long_coastal, zone_long_amplitude, zone_choppiness);
 	long_remainder = breaker_sea_state_displacement(long_remainder, zone_long_amplitude, zone_choppiness);
 	mid_displacement = breaker_sea_state_displacement(mid_displacement, zone_mid_amplitude, zone_choppiness);
