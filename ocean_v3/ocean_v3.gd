@@ -473,9 +473,9 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY") var water_optics_debug_mode: int = 0:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 13)
+		water_optics_debug_mode = clampi(value, 0, 16)
 		_request_visual_sync()
 
 @export_group("Reflection")
