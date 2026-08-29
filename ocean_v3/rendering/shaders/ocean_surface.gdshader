@@ -114,8 +114,8 @@ uniform bool ocean_normal_fragment = false;   // A/B: FRAGMENT (true) vs VERTEX 
 // 5R.3B: SHORT deja de dominar la malla. LONG+MID forman el cuerpo de ola;
 // SHORT conserva una aportación física pequeña y su normal VERTEX queda fuera
 // por defecto para no dibujar los anillos/cuadrados del clipmap.
-uniform float short_geometry_strength : hint_range(0.0, 1.0, 0.01) = 0.25;
-uniform float short_vertex_normal_strength : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float short_geometry_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
+uniform float short_vertex_normal_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 
 // 5R.3B: microdetalle dedicado estilo Water Race. Estas texturas NO desplazan
 // geometría: sólo rompen reflejos y specular en fragment.
@@ -3288,8 +3288,9 @@ void fragment() {
 	}
 	}
 	if (lod_debug_index >= 0.0) {
-		ALBEDO = vec3(0.0);
-		EMISSION = level_color(lod_debug_index);
+		vec3 lod_debug_color = level_color(lod_debug_index);
+		ALBEDO = lod_debug_color;
+		EMISSION = lod_debug_color;
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
 		RADIANCE = vec4(0.0);

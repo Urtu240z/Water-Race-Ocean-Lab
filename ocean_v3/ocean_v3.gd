@@ -2060,8 +2060,17 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"seabed_match_tolerance_start_m", seabed_match_tolerance_start_m)
 	material.set_shader_parameter(&"seabed_match_tolerance_end_m", seabed_match_tolerance_end_m)
 	var bathymetry_sea_level_y := _surface_sea_level()
-	if coastal_bake_asset != null and coastal_bake_asset.is_valid():
-		bathymetry_sea_level_y = coastal_bake_asset.bathymetry_sea_level_y
+	if coastal_bake_asset != null:
+		if Engine.is_editor_hint():
+			# CoastalBakeAsset is intentionally non-tool. In the editor it can be
+			# a PlaceholderScriptInstance, so read only its serialized export via
+			# Object.get() and never call its script methods on this path.
+			var authored_sea_level_y: Variant = coastal_bake_asset.get(&"bathymetry_sea_level_y")
+			if authored_sea_level_y != null:
+				bathymetry_sea_level_y = float(authored_sea_level_y)
+		elif coastal_bake_asset.is_valid():
+			# Runtime keeps the canonical manifest validation unchanged.
+			bathymetry_sea_level_y = coastal_bake_asset.bathymetry_sea_level_y
 	material.set_shader_parameter(&"coastal_bathymetry_sea_level_y", bathymetry_sea_level_y)
 	var requested_debug_mode := int(water_optics_debug_mode)
 	material.set_shader_parameter(&"water_optics_debug_mode", requested_debug_mode)

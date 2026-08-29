@@ -1,9 +1,9 @@
-[gd_resource type="Resource" script_class="CoastalBakeAsset" format=3]
+[gd_resource type="Resource" script_class="CoastalBakeAsset" format=3 uid="uid://d3l3osm0yvf5k"]
 
-[ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/bathymetry.res" id="1_vrvcq"]
-[ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/propagation.res" id="2_8c3yh"]
-[ext_resource type="Script" path="res://ocean_v3/coastal/coastal_bake_asset.gd" id="3_l7lud"]
-[ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/warp.res" id="4_h2gwk"]
+[ext_resource type="Resource" uid="uid://cetg78vxmp40g" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/bathymetry.res" id="1_vrvcq"]
+[ext_resource type="Resource" uid="uid://b2mmf4jtpxhui" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/propagation.res" id="2_8c3yh"]
+[ext_resource type="Script" uid="uid://c04qu2dj1mkkb" path="res://ocean_v3/coastal/coastal_bake_asset.gd" id="3_l7lud"]
+[ext_resource type="Resource" uid="uid://c6eruufpeecxw" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/warp.res" id="4_h2gwk"]
 
 [resource]
 script = ExtResource("3_l7lud")

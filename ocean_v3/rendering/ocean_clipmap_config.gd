@@ -3,14 +3,14 @@ class_name OceanClipmapConfig
 extends Resource
 ## Parámetros estructurales del renderer clipmap. No alteran el campo FFT.
 
-@export var cells_per_side: int = 128
+@export var cells_per_side: int = 192
 @export var base_spacing_m := 0.25
 @export var level_count: int = 10
 @export var sea_level_y := 0.0
 @export var horizon_distance_m := 7000.0
 @export var extra_cull_margin_m := 4.0
 @export var short_fade_range_m := Vector2(24.0, 80.0)
-@export var mid_fade_range_m := Vector2(96.0, 320.0)
+@export var mid_fade_range_m := Vector2(96.0, 280.0)
 @export var long_fade_range_m := Vector2(768.0, 2500.0)
 
 

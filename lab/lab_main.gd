@@ -23,7 +23,6 @@ func _ready() -> void:
 	_set_active_camera(false)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
-	_create_demo_sea_state_zone()
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
 	_smoothed_frame_ms = 1000.0 / maxf(float(Engine.get_frames_per_second()), 1.0)
 	_update_coastal_hud()
