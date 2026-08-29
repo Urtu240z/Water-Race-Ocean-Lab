@@ -52,7 +52,6 @@ uniform bool perf_surface_foam_solver_enabled = true;
 uniform bool perf_mid_fold_history_enabled = true;
 uniform bool perf_surface_foam_render_enabled = true;
 uniform bool perf_prebreak_enabled = true;
-uniform bool clipmap_lod_debug = false;
 uniform float lod_debug_index = -1.0;
 uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
@@ -344,7 +343,6 @@ uniform int foam_debug_mode = 0;
 
 uniform vec3 slope_valley_color : source_color = vec3(0.02, 0.06, 0.12);
 uniform vec3 slope_crest_color : source_color = vec3(0.95, 0.98, 1.0);
-instance uniform float clipmap_level = 0.0;
 // 4C-S3: takeover mask debug (FORCE_LIP). Oculta el FFT base bajo el patch.
 uniform bool breaker_takeover_debug_enabled = false;
 uniform vec2 breaker_takeover_anchor_xz = vec2(0.0);
@@ -1199,7 +1197,6 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	vec4 metrics_data = textureLod(coastal_metrics_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	bool coast_active = has_coastal_data(coast_uv, field_data);
-	bool coast_transform_active = coastal_transform_enabled && coast_active;
 	float render_confidence = coastal_render_confidence(coast_uv, field_data);
 	bool coast_render_active = render_confidence > 0.001;
 	float shoaling = field_data.g;
@@ -2045,8 +2042,6 @@ void fragment() {
 	float zone_foam_activity = sea_state_zone_foam_activity(
 		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
 		zone_choppiness, zone_foam_multiplier);
-	float zone_calmness = sea_state_zone_calmness(
-		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude, zone_choppiness);
 	// Debug values use the same stable macronormal and local state as production;
 	// Surface Detail is intentionally excluded because it is visual distortion,
 	// not physical wave activity.
@@ -2277,7 +2272,6 @@ void fragment() {
 		water_reflection_roughness, reflection_and_mono_state.x, reflection_detail_metrics);
 	float sspr_filter_roughness = reflection_final_roughness(
 		water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
-	vec3 final_normal_world = normalize((INV_VIEW_MATRIX * vec4(visual_normal, 0.0)).xyz);
 	vec3 sspr_macro_normal_view = normalize((VIEW_MATRIX * vec4(sspr_macro_normal_world, 0.0)).xyz);
 	vec3 flat_normal_view = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
 	mat4 projection_matrix = PROJECTION_MATRIX;
@@ -2760,8 +2754,8 @@ void fragment() {
 			// clamp, so 25-50 m continues to attenuate instead of plateauing.
 			vec3 transmittance_rgb = exp(
 				-max(absorption_coeff_rgb, vec3(0.0)) * view_water_path_m
+				+ vec3(absorption_density + shallow_depth_range) * 0.0
 			);
-			vec3 absorbed_rgb = vec3(1.0) - transmittance_rgb;
 			// View-path saturation only: this is deliberately not a shallow/deep
 			// authority, even though it modulates the volume response.
 			float view_path_saturation_factor = clamp(
