@@ -1,0 +1,57 @@
+[gd_resource type="Resource" script_class="OceanWavePreset" format=3 uid="uid://lrrahekx6kin"]
+
+[ext_resource type="Script" uid="uid://eiq2sub7wu6f" path="res://ocean_v3/core/ocean_wave_band_settings.gd" id="1_hu627"]
+[ext_resource type="Script" uid="uid://vo5q3d3j1uf6" path="res://ocean_v3/core/ocean_wave_preset.gd" id="2_ng8in"]
+
+[sub_resource type="Resource" id="Resource_7fjmf"]
+script = ExtResource("1_hu627")
+target_hs_m = 2.5
+choppiness = 2.0
+wind_direction = Vector2(1, 0.1)
+fetch_length_m = 25000.0
+swell = 0.8
+jonswap_spread = 0.05
+min_wavelength_m = 16.0
+max_wavelength_m = 128.0
+transition_width_m = 4.0
+foam_whitecap = 0.62
+foam_amount = 1.6
+foam_decay = 4.5
+foam_cascade_weight = 1.0
+
+[sub_resource type="Resource" id="Resource_3i0pa"]
+script = ExtResource("1_hu627")
+target_hs_m = 0.6
+choppiness = 1.25
+wind_direction = Vector2(1, 0.38)
+directional_spread = 3.5
+foam_whitecap = 0.66
+foam_amount = 0.42
+foam_decay = 4.5
+foam_cascade_weight = 0.65
+
+[sub_resource type="Resource" id="Resource_1clay"]
+script = ExtResource("1_hu627")
+target_hs_m = 0.12
+choppiness = 0.4
+wind_direction = Vector2(1, 0.62)
+directional_spread = 3.0
+fetch_length_m = 300.0
+swell = 0.15
+jonswap_spread = 0.75
+min_wavelength_m = 0.5
+max_wavelength_m = 5.0
+transition_width_m = 0.15
+short_wave_damping_m = 0.2
+foam_whitecap = 0.68
+foam_amount = 0.22
+foam_decay = 4.5
+foam_cascade_weight = 0.1
+
+[resource]
+script = ExtResource("2_ng8in")
+preset_name = "custom_wave"
+global_wind_speed_mps = 18.0
+long_band = SubResource("Resource_7fjmf")
+mid_band = SubResource("Resource_3i0pa")
+short_band = SubResource("Resource_1clay")

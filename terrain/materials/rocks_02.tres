@@ -1,0 +1,25 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://6doukc5dprt7"]
+
+[ext_resource type="Texture2D" uid="uid://qjc5ek17whfb" path="res://shared/materials/terrain/textures/aerial_rocks_02/aerial_rocks_02_albedo.jpg" id="1_bfylb"]
+[ext_resource type="Texture2D" uid="uid://c3ntf6cnhrjri" path="res://shared/materials/terrain/textures/aerial_rocks_02/aerial_rocks_02_orm.jpg" id="2_fi4he"]
+[ext_resource type="Texture2D" uid="uid://ceat1hobxlurl" path="res://shared/materials/terrain/textures/aerial_rocks_02/aerial_rocks_02_normal.jpg" id="3_dg258"]
+
+[resource]
+albedo_color = Color(0.85181147, 1.022037, 1.288, 1)
+albedo_texture = ExtResource("1_bfylb")
+metallic = 1.0
+metallic_specular = 0.21
+metallic_texture = ExtResource("2_fi4he")
+metallic_texture_channel = 2
+roughness_texture = ExtResource("2_fi4he")
+roughness_texture_channel = 1
+normal_enabled = true
+normal_scale = 2.3
+normal_texture = ExtResource("3_dg258")
+anisotropy = 0.3
+ao_enabled = true
+ao_light_affect = 1.0
+ao_texture = ExtResource("2_fi4he")
+uv1_scale = Vector3(0.025, 0.025, 0.025)
+uv1_triplanar = true
+uv1_triplanar_sharpness = 5.7709775

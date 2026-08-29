@@ -2,8 +2,8 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://pcydfkomkhfw"
-path.bptc="res://.godot/imported/qwantani_dusk_1_puresky_4k.hdr-110ff179da1fce4f858ece4f77907d93.bptc.ctex"
+uid="uid://dvs2rgjqdk2vl"
+path.bptc="res://.godot/imported/rock_normal.png-73da3836a7bebb8ad9a34de961959c12.bptc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
@@ -11,18 +11,18 @@ metadata={
 
 [deps]
 
-source_file="res://qwantani_dusk_1_puresky_4k.hdr"
-dest_files=["res://.godot/imported/qwantani_dusk_1_puresky_4k.hdr-110ff179da1fce4f858ece4f77907d93.bptc.ctex"]
+source_file="res://terrain/textures/terrain_master/rock_normal.png"
+dest_files=["res://.godot/imported/rock_normal.png-73da3836a7bebb8ad9a34de961959c12.bptc.ctex"]
 
 [params]
 
 compress/mode=2
-compress/high_quality=false
+compress/high_quality=true
 compress/lossy_quality=0.7
 compress/uastc_level=0
 compress/rdo_quality_loss=0.0
 compress/hdr_compression=1
-compress/normal_map=0
+compress/normal_map=1
 compress/channel_pack=0
 mipmaps/generate=true
 mipmaps/limit=-1

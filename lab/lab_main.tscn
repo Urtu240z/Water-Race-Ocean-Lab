@@ -2,56 +2,51 @@
 
 [ext_resource type="Script" uid="uid://c2swf61455l5h" path="res://lab/lab_main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
-[ext_resource type="Texture2D" uid="uid://b1uckk3vaafyx" path="res://kloofendal_48d_partly_cloudy_puresky_4k.hdr" id="2_mi5lw"]
+[ext_resource type="Texture2D" uid="uid://b1uckk3vaafyx" path="res://kloofendal_48d_partly_cloudy_puresky_4k.hdr" id="2_ody2a"]
 [ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
 [ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
 [ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
 [ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="6_ocean"]
-[ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="7_73jaq"]
 [ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
+[ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="7_ody2a"]
 [ext_resource type="Resource" uid="uid://skgh5pkuvd52" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/coastal_bake.tres" id="8_35bca"]
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
-[ext_resource type="Texture2D" uid="uid://ctabmcfkvaxm1" path="res://paradise_island_aerial_rocks_02_diff_1k.jpg" id="10_vvhv5"]
+[ext_resource type="Material" uid="uid://dmj6dyip8ab0w" path="res://terrain/materials/sand_02.res" id="13_ody2a"]
 [ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
 [ext_resource type="Script" uid="uid://bgmu6kdgxmpru" path="res://ocean_v3/coastal/coastal_bake_authoring.gd" id="17_4qkou"]
 
-[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_5myqe"]
-panorama = ExtResource("2_mi5lw")
-energy_multiplier = 5.54
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_qvnwd"]
+panorama = ExtResource("2_ody2a")
 
 [sub_resource type="Sky" id="Sky_lab"]
-sky_material = SubResource("PanoramaSkyMaterial_5myqe")
+sky_material = SubResource("PanoramaSkyMaterial_qvnwd")
 radiance_size = 4
 
 [sub_resource type="Environment" id="Environment_lab"]
 background_mode = 2
-background_energy_multiplier = 0.19
 sky = SubResource("Sky_lab")
 ambient_light_source = 3
 tonemap_mode = 4
-tonemap_exposure = 2.38
 tonemap_agx_white = 16.5
-tonemap_agx_contrast = 1.15
-adjustment_enabled = true
+tonemap_agx_contrast = 1.0
 adjustment_saturation = 0.81
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_bk4pj"]
-albedo_texture = ExtResource("10_vvhv5")
-uv1_scale = Vector3(-0.02, -0.02, -0.02)
-uv1_triplanar = true
+[sub_resource type="CameraAttributesPhysical" id="CameraAttributesPhysical_ody2a"]
+exposure_aperture = 8.0
+exposure_shutter_speed = 500.0
 
 [node name="LabMain" type="Node3D" unique_id=1698941175]
 script = ExtResource("1_main")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=467834431]
 environment = SubResource("Environment_lab")
+camera_attributes = SubResource("CameraAttributesPhysical_ody2a")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
-transform = Transform3D(0.90630776, 0.31846967, -0.27781874, 0, 0.6573752, 0.75356334, 0.42261827, -0.68296033, 0.5957842, 0, 0, 0)
-visible = false
-light_color = Color(0.75758153, 0.87558615, 0.82974255, 1)
-light_energy = 0.3
+transform = Transform3D(0.9063077, 0.31846964, -0.27781874, 0, 0.65737516, 0.7535633, 0.42261827, -0.6829603, 0.5957841, 0, 0, 0)
+light_temperature = 5800.0
+light_angular_distance = 0.5
 shadow_enabled = true
 
 [node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
@@ -61,7 +56,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -60)
 
 [node name="FreeCamera" type="Camera3D" parent="Cameras" unique_id=301081113 groups=["lab_camera"]]
 unique_name_in_owner = true
-transform = Transform3D(1, 0, 0, 0, 0.939693, 0.34202, 0, -0.34202, 0.939693, 0, 12, 28)
+transform = Transform3D(0.9261474, 0.12899683, -0.35441616, 0, 0.93969274, 0.34201992, 0.37716177, -0.31676087, 0.870294, 398.43634, 12, 107.41211)
+fov = 59.1
 far = 7000.0
 script = ExtResource("2_free_camera")
 
@@ -79,7 +75,7 @@ script = ExtResource("4_metrics")
 [node name="OceanV3Mount" type="Node3D" parent="." unique_id=426342056]
 
 [node name="OceanV3" parent="OceanV3Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
-wave_preset = ExtResource("7_73jaq")
+wave_preset = ExtResource("7_ody2a")
 global_wind_speed_mps = 18.0
 coastal_bake_asset = ExtResource("8_35bca")
 long_target_hs_m = 2.5
@@ -97,23 +93,33 @@ short_directional_spread = 3.0
 surface_detail_wave_follow = 1.0
 surface_normal_world_size_a = 34.15
 surface_normal_world_size_b = 2.4
-surface_normal_strength = 0.66
+surface_normal_strength = 1.18
 surface_warp_world_size = 14.5
 surface_warp_strength = 1.15
-surface_detail_far_strength = 0.0
-shallow_water_color = Color(0.03667396, 0.228243, 0.18131965, 1)
-deep_water_color = Color(0.007406633, 0.066519916, 0.040230498, 1)
-horizon_water_color = Color(0.026895566, 0.17192933, 0.11843457, 1)
-trough_tint = Color(0.25521109, 0.70987785, 0.5557477, 1)
-crest_tint = Color(0.047163434, 0.23426089, 0.18137845, 1)
-near_water_alpha = 0.91
+shallow_water_color = Color(0.19490916, 0.38508072, 0.3838458, 1)
+deep_water_color = Color(0.057202213, 0.18169785, 0.17591971, 1)
+horizon_water_color = Color(0.0075189536, 0.07750165, 0.04554274, 1)
+trough_tint = Color(0.03245477, 0.15901068, 0.1167089, 1)
+crest_tint = Color(0.09311832, 0.3627099, 0.28092107, 1)
+absorption_coeff_rgb = Vector3(0.35, 0.14, 0.1)
+water_body_depth_end_m = 12.0
 deep_water_alpha = 1.0
+alpha_depth_fade_end_m = 38.0
 horizon_water_alpha = 1.0
+opacity_distance_start = 0.0
+opacity_distance_end = 1000.0
+shallow_scattering_strength = 2.0
+reflection_base_roughness = 0.08
 reflection_roughness_distance_m = Vector2(80, 300)
-reflection_sspr_resolution_scale = 1.0
-reflection_sspr_edge_fade = 0.0
-reflection_sspr_kawase_enabled = true
-reflection_sspr_kawase_radius = 1.3
+reflection_sspr_resolution_scale = 0.4
+reflection_sspr_distortion_strength = 1.0
+reflection_sspr_edge_fade = 0.25
+reflection_near_ssr_enabled = false
+reflection_near_ssr_thickness = 2.0
+reflection_near_ssr_quality = 2
+reflection_radiance_exposure_ev = -1.5
+reflection_radiance_saturation = 0.36
+reflection_screen_space_weight = 0.55
 foam_color = Color(2.3958, 3.4121144, 3.4269989, 1)
 foam_intensity = 4.0
 foam_fresh_color = Color(0.6971579, 0.7115656, 0.70580256, 1)
@@ -141,6 +147,10 @@ surface_foam_specular = 0.37
 surface_foam_source_domain_m = 14.5
 surface_foam_wind_speed_mps = 9.0
 surface_foam_micro_detail_enabled = false
+
+[node name="OceanClipmapSurface" parent="OceanV3Mount/OceanV3/OpenOceanFFT" parent_id_path=PackedInt32Array(1474607840, 396589776) index="0" unique_id=140669600]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 398.43634, 0, 107.41211)
+clipmap_tracking_debug_mode = 3
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
@@ -181,7 +191,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 527.7775, 1.2421999, -593.016
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, 5.30381, -506.55515)
 
 [node name="Terrain_Master_VIS" parent="paradise_island" index="0" unique_id=2078926670]
-surface_material_override/0 = SubResource("StandardMaterial3D_bk4pj")
+surface_material_override/0 = ExtResource("13_ody2a")
 
 [node name="Cabana_4_COL" parent="paradise_island" index="19" unique_id=1115929881]
 transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0, 1.3555894, 214.78558, -7.2204156, 331.6032)
@@ -205,4 +215,5 @@ source_root = NodePath("../paradise_island")
 cell_size_m = 4.0
 metadata/_custom_type_script = "uid://bgmu6kdgxmpru"
 
+[editable path="OceanV3Mount/OceanV3"]
 [editable path="paradise_island"]
