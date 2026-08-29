@@ -18,6 +18,7 @@ enum ClipmapTrackingDebugMode {
 	CONTINUOUS,
 	FROZEN,
 	SNAPPED,
+	PER_LEVEL_SNAPPED,
 }
 
 enum CoastalDebugField {
@@ -60,7 +61,7 @@ enum CoastalWarpEffectDebug {
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
-@export_enum("CONTINUOUS", "FROZEN", "SNAPPED") var clipmap_tracking_debug_mode: int = ClipmapTrackingDebugMode.CONTINUOUS
+@export_enum("CONTINUOUS", "FROZEN", "SNAPPED", "PER_LEVEL_SNAPPED") var clipmap_tracking_debug_mode: int = ClipmapTrackingDebugMode.CONTINUOUS
 @export_range(0.05, 4.0, 0.05) var clipmap_tracking_snap_m: float = 0.25
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
@@ -69,6 +70,20 @@ enum CoastalWarpEffectDebug {
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
 var _levels: Array[MeshInstance3D] = []
+
+class LevelRuntimeState extends RefCounted:
+	var instance: MeshInstance3D
+	var baseline_transform := Transform3D.IDENTITY
+	var variant_meshes: Array[ArrayMesh] = []
+	var variant_triangle_counts: Array[int] = []
+	var variant_memory_bytes := 0
+	var current_cell := Vector2i.ZERO
+	var current_parity := Vector2i(-1, -1)
+	var current_variant_index := 0
+	var cell_initialized := false
+	var variant_initialized := false
+
+var _level_states: Array[LevelRuntimeState] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
 var _lod_debug := false
@@ -88,6 +103,8 @@ var _frozen_tracking_position_xz := Vector2.ZERO
 var _snapped_tracking_cell := Vector2i.ZERO
 var _snapped_tracking_snap_m := -1.0
 var _snapped_tracking_initialized := false
+var _per_level_tracking_initialized := false
+var _variant_cache_memory_bytes := 0
 var _triangle_count := 0
 
 
@@ -112,14 +129,20 @@ func _process(_delta: float) -> void:
 	if camera == null:
 		return
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
-	var tracking_mode := clampi(clipmap_tracking_debug_mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.SNAPPED)
+	var tracking_mode := clampi(clipmap_tracking_debug_mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED)
 	if tracking_mode != _tracking_debug_mode_seen:
+		if tracking_mode != ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED:
+			_restore_legacy_level_state()
 		if tracking_mode == ClipmapTrackingDebugMode.FROZEN:
 			_frozen_tracking_position_xz = Vector2(global_position.x, global_position.z)
 		elif tracking_mode == ClipmapTrackingDebugMode.SNAPPED:
 			_snapped_tracking_initialized = false
+		elif tracking_mode == ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED:
+			_enter_per_level_tracking()
 		_tracking_debug_mode_seen = tracking_mode
-	if tracking_mode == ClipmapTrackingDebugMode.CONTINUOUS:
+	if tracking_mode == ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED:
+		_update_per_level_tracking(camera_xz)
+	elif tracking_mode == ClipmapTrackingDebugMode.CONTINUOUS:
 		global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
 	elif tracking_mode == ClipmapTrackingDebugMode.FROZEN:
 		global_position = Vector3(_frozen_tracking_position_xz.x, clipmap_config.sea_level_y, _frozen_tracking_position_xz.y)
@@ -134,7 +157,7 @@ func set_tracking_camera(camera: Camera3D) -> void:
 
 
 func set_clipmap_tracking_debug_mode(mode: int) -> void:
-	clipmap_tracking_debug_mode = clampi(mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.SNAPPED)
+	clipmap_tracking_debug_mode = clampi(mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED)
 	_tracking_debug_mode_seen = -1
 
 
@@ -143,6 +166,8 @@ func toggle_clipmap_tracking_debug_mode() -> void:
 	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.FROZEN:
 		next_mode = ClipmapTrackingDebugMode.SNAPPED
 	elif clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.SNAPPED:
+		next_mode = ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED
+	elif clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED:
 		next_mode = ClipmapTrackingDebugMode.CONTINUOUS
 	set_clipmap_tracking_debug_mode(next_mode)
 
@@ -152,6 +177,8 @@ func clipmap_tracking_debug_mode_name() -> String:
 		return "FROZEN"
 	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.SNAPPED:
 		return "SNAPPED (%.2f m)" % _effective_tracking_snap_m()
+	if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.PER_LEVEL_SNAPPED:
+		return "PER-LEVEL"
 	return "CONTINUOUS"
 
 
@@ -169,6 +196,101 @@ func _update_snapped_tracking(camera_xz: Vector2) -> void:
 	_snapped_tracking_snap_m = snap_m
 	_snapped_tracking_initialized = true
 	global_position = Vector3(float(snapped_cell.x) * snap_m, clipmap_config.sea_level_y, float(snapped_cell.y) * snap_m)
+
+
+func _enter_per_level_tracking() -> void:
+	# Keep the surface node as a stable anchor. Every child receives an absolute
+	# world transform below, so this also remains correct under a transformed
+	# parent and does not accumulate offsets from the previous frame.
+	global_position = Vector3(global_position.x, clipmap_config.sea_level_y, global_position.z)
+	_per_level_tracking_initialized = false
+	for state in _level_states:
+		state.cell_initialized = false
+		state.variant_initialized = false
+		state.current_parity = Vector2i(-1, -1)
+	_triangle_count = _legacy_triangle_count()
+
+
+func _update_per_level_tracking(camera_xz: Vector2) -> void:
+	var target_cells: Array[Vector2i] = []
+	var target_origins: Array[Vector2] = []
+	var target_parities: Array[Vector2i] = []
+	var target_variants: Array[int] = []
+
+	# Compute the complete target state first. No MeshInstance is changed until
+	# every level has its absolute cell, origin, parity and mesh variant.
+	for level_index in _level_states.size():
+		var spacing: float = clipmap_config.spacing_for_level(level_index)
+		var coarse_cell := _world_cell_for_spacing(camera_xz, spacing)
+		var origin := Vector2(float(coarse_cell.x) * spacing, float(coarse_cell.y) * spacing)
+		var parity := Vector2i(-1, -1)
+		var variant_index := 0
+		if level_index > 0:
+			var fine_spacing: float = clipmap_config.spacing_for_level(level_index - 1)
+			var fine_cell := _world_cell_for_spacing(camera_xz, fine_spacing)
+			parity = fine_cell - coarse_cell * 2
+			assert((parity.x == 0 or parity.x == 1) and (parity.y == 0 or parity.y == 1))
+			variant_index = _variant_index(parity.x, parity.y)
+		target_cells.append(coarse_cell)
+		target_origins.append(origin)
+		target_parities.append(parity)
+		target_variants.append(variant_index)
+
+	# Apply the already-computed batch atomically within this process callback.
+	for level_index in _level_states.size():
+		var state := _level_states[level_index]
+		var target_cell := target_cells[level_index]
+		var target_origin := target_origins[level_index]
+		var target_variant := target_variants[level_index]
+		if not state.cell_initialized or state.current_cell != target_cell:
+			state.instance.global_transform = Transform3D(
+				Basis.IDENTITY,
+				Vector3(target_origin.x, clipmap_config.sea_level_y, target_origin.y))
+			state.current_cell = target_cell
+			state.cell_initialized = true
+		if not state.variant_initialized or state.current_variant_index != target_variant:
+			var old_variant := state.current_variant_index if state.variant_initialized else 0
+			_triangle_count += state.variant_triangle_counts[target_variant] - state.variant_triangle_counts[old_variant]
+			state.instance.mesh = state.variant_meshes[target_variant]
+			state.current_variant_index = target_variant
+			state.variant_initialized = true
+		state.current_parity = target_parities[level_index]
+	_per_level_tracking_initialized = true
+
+
+func _world_cell_for_spacing(camera_xz: Vector2, spacing: float) -> Vector2i:
+	return Vector2i(floori(camera_xz.x / spacing), floori(camera_xz.y / spacing))
+
+
+func _variant_index(parity_x: int, parity_z: int) -> int:
+	assert((parity_x == 0 or parity_x == 1) and (parity_z == 0 or parity_z == 1))
+	return parity_x + parity_z * 2
+
+
+func _legacy_triangle_count() -> int:
+	var total := 0
+	for state in _level_states:
+		if not state.variant_triangle_counts.is_empty():
+			total += state.variant_triangle_counts[0]
+	return total
+
+
+func clipmap_variant_cache_memory_bytes() -> int:
+	return _variant_cache_memory_bytes
+
+
+func clipmap_tracking_snapshot() -> Array:
+	var snapshot: Array = []
+	for state in _level_states:
+		snapshot.append({
+			"cell": state.current_cell,
+			"parity": state.current_parity,
+			"variant_index": state.current_variant_index,
+			"cell_initialized": state.cell_initialized,
+			"variant_initialized": state.variant_initialized,
+			"global_position": state.instance.global_position,
+		})
+	return snapshot
 
 
 ## Phase 4B: expone el material del clipmap como fuente única de los uniforms
@@ -474,23 +596,65 @@ func _rebuild_levels() -> void:
 	for level in _levels:
 		level.queue_free()
 	_levels.clear()
+	_level_states.clear()
 	_triangle_count = 0
+	_variant_cache_memory_bytes = 0
 	for level_index in clipmap_config.level_count:
-		var geometry := MeshBuilder.build_level_geometry(clipmap_config, level_index)
-		var error := MeshBuilder.validate_geometry(geometry)
-		if not error.is_empty():
-			push_error("Clipmap L%d inválido: %s" % [level_index, error])
+		var state := LevelRuntimeState.new()
+		var variant_meshes: Array[ArrayMesh] = []
+		var variant_triangle_counts: Array[int] = []
+		variant_meshes.resize(4)
+		variant_triangle_counts.resize(4)
+		var variant_memory_bytes := 0
+		for parity_x in 2:
+			for parity_z in 2:
+				var variant_index := _variant_index(parity_x, parity_z)
+				var geometry: Dictionary
+				if level_index == 0:
+					if variant_index != 0:
+						continue
+					geometry = MeshBuilder.build_level_geometry(clipmap_config, level_index)
+				else:
+					geometry = MeshBuilder.build_level_geometry_variant(clipmap_config, level_index, parity_x, parity_z)
+				var error := MeshBuilder.validate_geometry(geometry)
+				if not error.is_empty():
+					push_error("Clipmap L%d/%d%d inválido: %s" % [level_index, parity_x, parity_z, error])
+					continue
+				variant_meshes[variant_index] = MeshBuilder.create_mesh(geometry)
+				variant_triangle_counts[variant_index] = int(float(geometry.indices.size()) / 3.0)
+				if level_index > 0:
+					variant_memory_bytes += geometry.vertices.size() * 24 + geometry.indices.size() * 4
+		if variant_meshes[0] == null:
+			push_error("Clipmap L%d no pudo crear la variante 00" % level_index)
 			continue
-		var level_mesh := MeshBuilder.create_mesh(geometry)
 		var instance := MeshInstance3D.new()
 		instance.name = "Level%d" % level_index
-		instance.mesh = level_mesh
+		instance.mesh = variant_meshes[0]
 		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		instance.extra_cull_margin = clipmap_config.extra_cull_margin_m
 		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
 		add_child(instance)
 		_levels.append(instance)
-		_triangle_count += int(float(geometry.indices.size()) / 3.0)
+		state.instance = instance
+		state.baseline_transform = instance.transform
+		state.variant_meshes = variant_meshes
+		state.variant_triangle_counts = variant_triangle_counts
+		state.variant_memory_bytes = variant_memory_bytes
+		_level_states.append(state)
+		_triangle_count += variant_triangle_counts[0]
+		_variant_cache_memory_bytes += variant_memory_bytes
+
+
+func _restore_legacy_level_state() -> void:
+	for state in _level_states:
+		state.instance.transform = state.baseline_transform
+		state.instance.mesh = state.variant_meshes[0]
+		state.current_variant_index = 0
+		state.current_parity = Vector2i(-1, -1)
+		state.cell_initialized = false
+		state.variant_initialized = false
+	_triangle_count = _legacy_triangle_count()
+	_per_level_tracking_initialized = false
 
 
 func _apply_debug_mode() -> void:
