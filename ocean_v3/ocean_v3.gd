@@ -473,9 +473,12 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN") var water_optics_debug_mode: int = 0:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 23)
+		var next_mode := clampi(value, 0, 25)
+		if water_optics_debug_mode != next_mode:
+			print("WATER_OPTICS_DEBUG_PROPERTY mode=%d" % next_mode)
+		water_optics_debug_mode = next_mode
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1078,6 +1081,8 @@ enum NearSSRQuality { LOW, MEDIUM, HIGH }
 
 
 var _visual_sync_pending := true
+var _water_optics_debug_last_reported_mode := -1
+var _water_optics_debug_last_reported_readback := ""
 var _sea_state_zones: Array[OceanSeaStateZone3D] = []
 var _sea_state_zone_descriptors: Array[Dictionary] = []
 var _sea_state_zone_uniform_data0 := PackedVector4Array()
@@ -1908,6 +1913,8 @@ func _normalize_resolution_enum(value: int) -> int:
 
 
 func _flush_visual_sync() -> void:
+	if not _visual_sync_pending:
+		return
 	_sync_water_visual_parameters()
 
 
@@ -1998,7 +2005,29 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"transmission_detail_fade_start_m", transmission_detail_fade_start_m)
 	material.set_shader_parameter(&"transmission_detail_fade_end_m", transmission_detail_fade_end_m)
 	material.set_shader_parameter(&"transmission_max_lod", transmission_max_lod)
-	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
+	var requested_debug_mode := int(water_optics_debug_mode)
+	material.set_shader_parameter(&"water_optics_debug_mode", requested_debug_mode)
+	var material_debug_readback = material.get_shader_parameter(&"water_optics_debug_mode")
+	var material_debug_readback_text := str(material_debug_readback)
+	if requested_debug_mode != _water_optics_debug_last_reported_mode or material_debug_readback_text != _water_optics_debug_last_reported_readback:
+		var level_count := 0
+		var matching_override_count := 0
+		for child in surface.get_children():
+			var level := child as MeshInstance3D
+			if level == null:
+				continue
+			level_count += 1
+			if level.material_override == material:
+				matching_override_count += 1
+		print("WATER_OPTICS_DEBUG_SYNC requested=%d readback=%s material_id=%d levels=%d override_matches=%d" % [
+			requested_debug_mode,
+			material_debug_readback_text,
+			material.get_instance_id(),
+			level_count,
+			matching_override_count,
+		])
+		_water_optics_debug_last_reported_mode = requested_debug_mode
+		_water_optics_debug_last_reported_readback = material_debug_readback_text
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
 	material.set_shader_parameter(&"reflection_distance_roughness", reflection_distance_roughness)

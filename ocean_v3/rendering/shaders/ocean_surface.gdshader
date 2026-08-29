@@ -197,7 +197,8 @@ uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 14 LOCAL_WATER_DEPTH, 15 VIEW_WATER_PATH, 16 SHALLOW_DEEP_AUTHORITY,
 // 17 RAW_BATHYMETRY_FRAGMENT, 18 BATHYMETRY_DOMAIN,
 // 19 COASTAL_PROPAGATION_VALIDITY, 20 RAW_SCENE_DEPTH, 21 SCENE_DEPTH_CLASS,
-// 22 RAW_WATER_FRAGMENT_DEPTH, 23 BATHYMETRY_COMPARE_VERTEX_FRAGMENT.
+// 22 RAW_WATER_FRAGMENT_DEPTH, 23 BATHYMETRY_COMPARE_VERTEX_FRAGMENT,
+// 24 DEBUG_SENTINEL_MAGENTA, 25 DEBUG_SENTINEL_GREEN.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1957,7 +1958,27 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 
 void fragment() {
-	vec3 color = base_color;
+	// Routing sentinels intentionally run before foam, depth, screen, bathymetry,
+	// scattering and reflection work. They prove the complete Inspector -> CPU
+	// -> material -> rendered clipmap -> fragment route without any data inputs.
+	if (water_optics_debug_mode == 24) {
+		ALBEDO = vec3(0.0);
+		EMISSION = vec3(1.0, 0.0, 1.0);
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+		RADIANCE = vec4(0.0);
+		ALPHA = 1.0;
+	}
+	else if (water_optics_debug_mode == 25) {
+		ALBEDO = vec3(0.0);
+		EMISSION = vec3(0.0, 1.0, 0.0);
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+		RADIANCE = vec4(0.0);
+		ALPHA = 1.0;
+	}
+	else {
+		vec3 color = base_color;
 	vec4 hires_foam_composition = vec4(0.0);
 	if (perf_crest_foam_solver_enabled) {
 		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
@@ -3104,7 +3125,7 @@ void fragment() {
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
 	}
-	if (clipmap_flat_geometry_debug || clipmap_displaced_unlit_debug) {
+	if (water_optics_debug_mode != 24 && water_optics_debug_mode != 25 && (clipmap_flat_geometry_debug || clipmap_displaced_unlit_debug)) {
 		// Emission-only opaque gray matches the existing unlit debug convention.
 		// The displaced mode leaves vertex geometry intact; the flat mode has
 		// already zeroed displacement in vertex().
@@ -3116,5 +3137,6 @@ void fragment() {
 		RADIANCE = vec4(0.0);
 		NORMAL = flat_normal_view;
 		ALPHA = 1.0;
+	}
 	}
 }
