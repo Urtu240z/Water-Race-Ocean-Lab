@@ -7,6 +7,7 @@ const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builde
 
 const OWNER_COARSE := 0
 const OWNER_TRANSITION := 1
+const OWNER_SKIRT := 2
 const OWNER_FINE := 2
 const MM_PER_BASE_M := 1000
 const BASE_SPACING_MM := 250
@@ -63,6 +64,8 @@ func _test_parity(config) -> void:
 
 func _test_variants(config) -> void:
 	var total_variant_bytes := 0
+	var total_skirt_triangles := 0
+	var total_skirt_memory_bytes := 0
 	# 00: all four fine boundaries coincide with coarse grid lines; the existing
 	# stitches are sufficient. 10: only the left/right boundaries need trims;
 	# 01: only bottom/top need trims; 11: all four sides need trims. In every
@@ -70,13 +73,17 @@ func _test_variants(config) -> void:
 	# overlap at the corners.
 	for level in range(1, config.level_count):
 		var baseline: Dictionary = MeshBuilder.build_level_geometry(config, level)
+		var baseline_surface: Dictionary = MeshBuilder.build_level_geometry(config, level, false)
 		var baseline_variant: Dictionary = MeshBuilder.build_level_geometry_variant(config, level, 0, 0)
-		_check(baseline.vertices == baseline_variant.vertices, "L%d/00: vertices baseline idénticos" % level)
-		_check(baseline.indices == baseline_variant.indices, "L%d/00: índices baseline idénticos" % level)
+		_check(_surface_prefix_matches(baseline, baseline_surface), "L%d: superficie horizontal idéntica sin skirt" % level)
+		_check(_surface_prefix_matches(baseline_variant, baseline_surface), "L%d/00: superficie baseline idéntica sin skirt" % level)
+		_check(int(baseline.skirt_triangle_count) == _expected_skirt_triangles(config, level), "L%d: skirt triangle count exacto" % level)
+		_check(_validate_skirt_geometry(baseline, config, level), "L%d: skirt cerrado y no degenerado" % level)
 		_check(is_equal_approx(baseline.outer_width_m, baseline_variant.outer_width_m), "L%d/00: outer extent idéntico" % level)
 		_check(is_equal_approx(baseline.inner_width_m, baseline_variant.inner_width_m), "L%d/00: inner extent idéntico" % level)
-		_check(baseline.indices.size() == baseline_variant.indices.size(), "L%d/00: triángulos baseline idénticos" % level)
-		_check(baseline.stitch_inner_positions == baseline_variant.stitch_inner_positions, "L%d/00: stitches baseline idénticos" % level)
+		_check(int(baseline.surface_triangle_count) == int(baseline_variant.surface_triangle_count), "L%d/00: surface triangle count idéntico" % level)
+		_check(int(baseline.skirt_triangle_count) == int(baseline_variant.skirt_triangle_count), "L%d/00: skirt triangle count idéntico" % level)
+		_check(baseline.stitch_inner_positions == baseline_variant.stitch_inner_positions, "L%d/00: stitches surface idénticos" % level)
 
 		for parity_x in 2:
 			for parity_z in 2:
@@ -85,14 +92,21 @@ func _test_variants(config) -> void:
 				_check(error.is_empty(), "L%d/%d%d: índices y winding válidos (%s)" % [level, parity_x, parity_z, error])
 				_check(_has_no_duplicate_triangles(geometry), "L%d/%d%d: no hay triángulos duplicados" % [level, parity_x, parity_z])
 				_check(geometry.triangle_owners.size() == geometry.indices.size() / 3, "L%d/%d%d: owner por triángulo" % [level, parity_x, parity_z])
+				_check(int(geometry.skirt_triangle_count) == _expected_skirt_triangles(config, level), "L%d/%d%d: skirt triangle count exacto" % [level, parity_x, parity_z])
+				_check(_validate_skirt_geometry(geometry, config, level), "L%d/%d%d: skirt cerrado y no degenerado" % [level, parity_x, parity_z])
 				var topology_ok := _validate_pair_topology(config, level, parity_x, parity_z, geometry)
 				_check(topology_ok, "L%d/%d%d: edges y cobertura fine/coarse" % [level, parity_x, parity_z])
 				var bytes: int = geometry.vertices.size() * 24 + geometry.indices.size() * 4
 				total_variant_bytes += bytes
+				total_skirt_triangles += int(geometry.skirt_triangle_count)
+				total_skirt_memory_bytes += int(geometry.skirt_vertex_count) * 24 + int(geometry.skirt_triangle_count) * 3 * 4
 				print("INFO: L%d/%d%d vertices=%d triangles=%d transition_triangles=%d bytes=%d" % [
 					level, parity_x, parity_z, geometry.vertices.size(), geometry.indices.size() / 3,
 					geometry.transition_triangle_count, bytes])
 	print("INFO: L1-L9 x 4 variantes: memoria aproximada vertex+normal+index=%d bytes (%.2f MiB)" % [total_variant_bytes, float(total_variant_bytes) / 1048576.0])
+	_check(total_skirt_triangles == 32768, "L1-L9 x 4 variantes: skirt triangles totales exactos")
+	_check(total_skirt_memory_bytes == 786432, "L1-L9 x 4 variantes: memoria de skirts exacta")
+	print("INFO: L1-L9 x 4 variantes: skirts=%d triangles, memoria adicional=%d bytes (%.2f MiB)" % [total_skirt_triangles, total_skirt_memory_bytes, float(total_skirt_memory_bytes) / 1048576.0])
 
 
 func _validate_pair_topology(config, level: int, parity_x: int, parity_z: int, coarse_geometry: Dictionary) -> bool:
@@ -138,6 +152,82 @@ func _validate_pair_topology(config, level: int, parity_x: int, parity_z: int, c
 
 	var coverage_ok := _validate_coverage(config, level, parity_x, parity_z, vertices, indices, owners)
 	return coverage_ok
+
+
+func _expected_skirt_triangles(config, level: int) -> int:
+	return config.cells_per_side * 8 if level < config.level_count - 1 else 0
+
+
+func _surface_prefix_matches(with_skirt: Dictionary, surface: Dictionary) -> bool:
+	if int(with_skirt.surface_vertex_count) != surface.vertices.size():
+		return false
+	if int(with_skirt.surface_triangle_count) * 3 != surface.indices.size():
+		return false
+	for index in surface.vertices.size():
+		if with_skirt.vertices[index] != surface.vertices[index] or with_skirt.normals[index] != surface.normals[index]:
+			return false
+	for index in surface.indices.size():
+		if with_skirt.indices[index] != surface.indices[index]:
+			return false
+	return true
+
+
+func _validate_skirt_geometry(geometry: Dictionary, config, level: int) -> bool:
+	var vertices: PackedVector3Array = geometry.vertices
+	var indices: PackedInt32Array = geometry.indices
+	var owners: PackedInt32Array = geometry.triangle_owners
+	var expected_triangles := _expected_skirt_triangles(config, level)
+	if int(geometry.skirt_triangle_count) != expected_triangles:
+		return false
+	if expected_triangles == 0:
+		return geometry.skirt_top_loop.is_empty() and int(geometry.skirt_vertex_count) == 0
+	var loop: PackedVector3Array = geometry.skirt_top_loop
+	var expected_loop_size: int = int(config.cells_per_side) * 4
+	if loop.size() != expected_loop_size:
+		return false
+	var vertex_keys := {}
+	for vertex in vertices:
+		vertex_keys[_position_3d_key(vertex)] = true
+	var loop_keys := {}
+	for top_position in loop:
+		var top_key := _position_key(top_position)
+		if loop_keys.has(top_key):
+			return false
+		loop_keys[top_key] = true
+		var bottom_key := _position_3d_key(Vector3(top_position.x, -float(geometry.skirt_depth_m), top_position.z))
+		if not vertex_keys.has(bottom_key):
+			return false
+	var top_edges := {}
+	for triangle_index in owners.size():
+		if owners[triangle_index] != OWNER_SKIRT:
+			continue
+		var base := triangle_index * 3
+		var a: Vector3 = vertices[indices[base]]
+		var b: Vector3 = vertices[indices[base + 1]]
+		var c: Vector3 = vertices[indices[base + 2]]
+		if (b - a).cross(c - a).length() <= 0.00000001:
+			return false
+		var top_vertices: Array[Vector3] = []
+		for vertex in [a, b, c]:
+			if is_equal_approx(vertex.y, 0.0):
+				top_vertices.append(vertex)
+			elif not is_equal_approx(vertex.y, -float(geometry.skirt_depth_m)):
+				return false
+		if top_vertices.is_empty() or top_vertices.size() > 2:
+			return false
+		if top_vertices.size() == 2:
+			var edge_key_a := _position_key(top_vertices[0])
+			var edge_key_b := _position_key(top_vertices[1])
+			var edge_key := "%s|%s" % [edge_key_a, edge_key_b] if edge_key_a < edge_key_b else "%s|%s" % [edge_key_b, edge_key_a]
+			top_edges[edge_key] = int(top_edges.get(edge_key, 0)) + 1
+	for index in loop.size():
+		var next := (index + 1) % loop.size()
+		var key_a := _position_key(loop[index])
+		var key_b := _position_key(loop[next])
+		var edge_key := "%s|%s" % [key_a, key_b] if key_a < key_b else "%s|%s" % [key_b, key_a]
+		if int(top_edges.get(edge_key, 0)) != 1:
+			return false
+	return true
 
 
 func _validate_coverage(config, level: int, parity_x: int, parity_z: int, vertices: Array[Vector3], indices: Array[int], owners: Array[int]) -> bool:
@@ -214,6 +304,8 @@ func _append_geometry(vertices: Array[Vector3], indices: Array[int], owners: Arr
 	var source_indices: PackedInt32Array = geometry.indices
 	var source_owners: PackedInt32Array = geometry.triangle_owners if geometry.has("triangle_owners") else PackedInt32Array()
 	for triangle_base in range(0, source_indices.size(), 3):
+		if not source_owners.is_empty() and source_owners[triangle_base / 3] == OWNER_SKIRT:
+			continue
 		for local_index in 3:
 			var source_position: Vector3 = source_vertices[source_indices[triangle_base + local_index]]
 			var position := Vector3(source_position.x * scale + offset.x, 0.0, source_position.z * scale + offset.y)
@@ -235,8 +327,11 @@ func _add_edge(edges: Dictionary, a: Vector3, b: Vector3) -> void:
 func _has_no_duplicate_triangles(geometry: Dictionary) -> bool:
 	var vertices: PackedVector3Array = geometry.vertices
 	var indices: PackedInt32Array = geometry.indices
+	var owners: PackedInt32Array = geometry.triangle_owners if geometry.has("triangle_owners") else PackedInt32Array()
 	var seen := {}
 	for triangle_base in range(0, indices.size(), 3):
+		if not owners.is_empty() and owners[triangle_base / 3] == OWNER_SKIRT:
+			continue
 		var key := _sorted_key([
 			_position_key(vertices[indices[triangle_base]]),
 			_position_key(vertices[indices[triangle_base + 1]]),
@@ -257,6 +352,10 @@ func _position_on_outer(key: String, outer_half: float) -> bool:
 
 func _position_key(position: Vector3) -> String:
 	return "%d:%d" % [roundi(position.x * 1000.0), roundi(position.z * 1000.0)]
+
+
+func _position_3d_key(position: Vector3) -> String:
+	return "%d:%d:%d" % [roundi(position.x * 1000.0), roundi(position.y * 1000.0), roundi(position.z * 1000.0)]
 
 
 func _sorted_key(values: Array) -> String:
