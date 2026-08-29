@@ -2231,6 +2231,7 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_detail
 			)
 	material.set_shader_parameter(&"foam_debug_mode", effective_foam_debug_mode)
+	surface.sync_lod_debug_materials_from_surface()
 
 	_visual_sync_pending = false
 
@@ -2242,8 +2243,8 @@ func set_reflection_sspr_texture(texture: Texture2D, available: bool) -> void:
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material):
 		return
-	material.set_shader_parameter(&"reflection_sspr_texture", texture)
-	material.set_shader_parameter(&"reflection_sspr_available", available)
+	surface.set_surface_shader_parameter(&"reflection_sspr_texture", texture)
+	surface.set_surface_shader_parameter(&"reflection_sspr_available", available)
 
 
 func set_reflection_sspr_raw_texture(texture: Texture2D, available: bool) -> void:
@@ -2253,8 +2254,8 @@ func set_reflection_sspr_raw_texture(texture: Texture2D, available: bool) -> voi
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material):
 		return
-	material.set_shader_parameter(&"reflection_sspr_raw_texture", texture)
-	material.set_shader_parameter(&"reflection_sspr_raw_available", available)
+	surface.set_surface_shader_parameter(&"reflection_sspr_raw_texture", texture)
+	surface.set_surface_shader_parameter(&"reflection_sspr_raw_available", available)
 
 
 func set_reflection_sspr_temporal_texture(texture: Texture2D, available: bool) -> void:
@@ -2264,8 +2265,8 @@ func set_reflection_sspr_temporal_texture(texture: Texture2D, available: bool) -
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material):
 		return
-	material.set_shader_parameter(&"reflection_sspr_temporal_texture", texture)
-	material.set_shader_parameter(&"reflection_sspr_temporal_available", available)
+	surface.set_surface_shader_parameter(&"reflection_sspr_temporal_texture", texture)
+	surface.set_surface_shader_parameter(&"reflection_sspr_temporal_available", available)
 
 
 func set_reflection_sspr_depth_texture(texture: Texture2D, available: bool) -> void:
@@ -2275,8 +2276,8 @@ func set_reflection_sspr_depth_texture(texture: Texture2D, available: bool) -> v
 	var material := surface.get_surface_material()
 	if material == null or not is_instance_valid(material):
 		return
-	material.set_shader_parameter(&"reflection_sspr_depth_texture", texture)
-	material.set_shader_parameter(&"reflection_sspr_depth_available", available)
+	surface.set_surface_shader_parameter(&"reflection_sspr_depth_texture", texture)
+	surface.set_surface_shader_parameter(&"reflection_sspr_depth_available", available)
 
 
 func get_reflection_sspr_temporal_settings() -> Dictionary:

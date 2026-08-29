@@ -60,6 +60,7 @@ enum CoastalWarpEffectDebug {
 
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
+var _lod_debug_materials: Array[ShaderMaterial] = []
 var _levels: Array[MeshInstance3D] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
@@ -103,8 +104,7 @@ func _process(_delta: float) -> void:
 		return
 	global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
-	_surface_material.set_shader_parameter(&"camera_world_xz", camera_xz)
-	_wireframe_material.set_shader_parameter(&"camera_world_xz", camera_xz)
+	_set_all_materials_shader_parameter(&"camera_world_xz", camera_xz)
 
 
 func set_tracking_camera(camera: Camera3D) -> void:
@@ -118,29 +118,84 @@ func get_surface_material() -> ShaderMaterial:
 	return _surface_material
 
 
+func set_surface_shader_parameter(parameter: StringName, value: Variant) -> void:
+	_set_surface_material_shader_parameter(parameter, value)
+
+
+func sync_lod_debug_materials_from_surface() -> void:
+	if _lod_debug_materials.is_empty() or _surface_material.shader == null:
+		return
+	const shader_parameter_prefix := "shader_parameter/"
+	for property in _surface_material.get_property_list():
+		var property_name := str(property.get("name", ""))
+		if not property_name.begins_with(shader_parameter_prefix):
+			continue
+		var parameter_name := StringName(property_name.trim_prefix(shader_parameter_prefix))
+		if parameter_name == &"lod_debug_index":
+			continue
+		var value: Variant = _surface_material.get_shader_parameter(parameter_name)
+		for material in _lod_debug_materials:
+			material.set_shader_parameter(parameter_name, value)
+
+
+func _surface_materials() -> Array[ShaderMaterial]:
+	var materials: Array[ShaderMaterial] = [_surface_material]
+	materials.append_array(_lod_debug_materials)
+	return materials
+
+
+func _all_materials() -> Array[ShaderMaterial]:
+	var materials: Array[ShaderMaterial] = [_surface_material, _wireframe_material]
+	materials.append_array(_lod_debug_materials)
+	return materials
+
+
+func _set_surface_material_shader_parameter(parameter: StringName, value: Variant) -> void:
+	for material in _surface_materials():
+		material.set_shader_parameter(parameter, value)
+
+
+func _set_all_materials_shader_parameter(parameter: StringName, value: Variant) -> void:
+	for material in _all_materials():
+		material.set_shader_parameter(parameter, value)
+
+
+func _rebuild_lod_debug_materials() -> void:
+	_lod_debug_materials.clear()
+	if _surface_material.shader == null:
+		return
+	for level_index in clipmap_config.level_count:
+		var debug_material := _surface_material.duplicate() as ShaderMaterial
+		if debug_material == null:
+			push_error("No se pudo duplicar el material debug del clipmap L%d." % level_index)
+			continue
+		debug_material.set_shader_parameter(&"lod_debug_index", float(level_index))
+		_lod_debug_materials.append(debug_material)
+
+
 func set_surface_foam_spectrum(surface_foam: Texture2DRD, field_domain_m: float) -> void:
-	_surface_material.set_shader_parameter(&"surface_foam_short", surface_foam)
-	_surface_material.set_shader_parameter(&"surface_foam_field_domain_m", field_domain_m)
+	_set_surface_material_shader_parameter(&"surface_foam_short", surface_foam)
+	_set_surface_material_shader_parameter(&"surface_foam_field_domain_m", field_domain_m)
 
 
 func set_surface_foam_jacobian(jacobian: Texture2DRD, source_domain_m: float) -> void:
-	_surface_material.set_shader_parameter(&"surface_foam_jacobian", jacobian)
-	_surface_material.set_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
+	_set_surface_material_shader_parameter(&"surface_foam_jacobian", jacobian)
+	_set_surface_material_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
 
 
 func set_surface_foam_topology(topology: Texture2DRD, source_domain_m: float) -> void:
-	_surface_material.set_shader_parameter(&"surface_foam_topology", topology)
-	_surface_material.set_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
+	_set_surface_material_shader_parameter(&"surface_foam_topology", topology)
+	_set_surface_material_shader_parameter(&"surface_foam_source_domain_m", source_domain_m)
 
 
 func set_surface_foam_mid_fold_history(history: Texture2DRD) -> void:
-	_surface_material.set_shader_parameter(&"surface_foam_mid_fold_history", history)
+	_set_surface_material_shader_parameter(&"surface_foam_mid_fold_history", history)
 
 
 ## 3B.2B: reaplica los rangos de fade (la demo ajusta long_fade para ver el
 ## warp sobre el banco local). No altera el campo FFT.
 func apply_fade_ranges(config) -> void:
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"short_fade_range_m", config.short_fade_range_m)
 		material.set_shader_parameter(&"mid_fade_range_m", config.mid_fade_range_m)
 		material.set_shader_parameter(&"long_fade_range_m", config.long_fade_range_m)
@@ -192,15 +247,13 @@ func is_band_enabled(band_index: int) -> bool:
 
 
 func _apply_band_mask(mask: Vector3) -> void:
-	_surface_material.set_shader_parameter(&"band_mask", mask)
-	_wireframe_material.set_shader_parameter(&"band_mask", mask)
+	_set_all_materials_shader_parameter(&"band_mask", mask)
 
 
 func set_module_enabled(enabled: bool) -> void:
 	_module_enabled = enabled
 	visible = enabled
-	_surface_material.set_shader_parameter(&"module_enabled", enabled)
-	_wireframe_material.set_shader_parameter(&"module_enabled", enabled)
+	_set_all_materials_shader_parameter(&"module_enabled", enabled)
 
 
 func cycle_debug_mode() -> void:
@@ -215,14 +268,13 @@ func set_debug_mode(mode: int) -> void:
 
 func toggle_lod_debug() -> void:
 	_lod_debug = not _lod_debug
-	_surface_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
-	_wireframe_material.set_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+	_set_all_materials_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+	_apply_debug_mode()
 
 
 func toggle_periodicity_debug() -> void:
 	_periodicity_debug = not _periodicity_debug
-	_surface_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
-	_wireframe_material.set_shader_parameter(&"periodicity_debug", _periodicity_debug)
+	_set_all_materials_shader_parameter(&"periodicity_debug", _periodicity_debug)
 
 
 func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_amplitude_m := 0.35, transform_enabled := true, eikonal_phase_debug := false) -> void:
@@ -233,7 +285,7 @@ func set_coastal_propagation(data, monochromatic_debug := false, monochromatic_a
 	_coastal_transform_requested = transform_enabled
 	_coastal_monochromatic_debug = monochromatic_debug
 	_coastal_eikonal_phase_debug = eikonal_phase_debug
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		# data_enabled permite MONO/Eikonal y sus probes; transform_enabled sólo
 		# autoriza el warp visual de LONG (nunca para Eikonal 3B.1).
 		material.set_shader_parameter(&"coastal_propagation_enabled", enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
@@ -263,7 +315,7 @@ func set_coastal_warp(warp_data, enabled := true) -> void:
 	var warp_enabled: bool = enabled and warp_data != null and warp_data.is_valid()
 	var textures: Dictionary = warp_data.build_gpu_textures() if warp_enabled else {}
 	_coastal_warp_available = warp_enabled
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"coastal_warp_enabled", warp_enabled and _coastal_runtime_enabled and _coastal_performance_enabled)
 		if not warp_enabled:
 			continue
@@ -278,7 +330,7 @@ func set_coastal_runtime_enabled(enabled: bool) -> void:
 	## Activa/desactiva la presentación de los datos ya horneados. No reconstruye
 	## Bathymetry, Eikonal, warp, H0 ni texturas GPU; sólo cambia uniforms.
 	_coastal_runtime_enabled = enabled
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		var effective_enabled := enabled and _coastal_performance_enabled
 		material.set_shader_parameter(&"coastal_propagation_enabled", _coastal_propagation_available and effective_enabled)
 		material.set_shader_parameter(&"coastal_transform_enabled", _coastal_propagation_available and _coastal_transform_requested and effective_enabled)
@@ -293,7 +345,7 @@ func set_performance_profile(spectral_enabled: bool, coastal_enabled: bool,
 		_breakers_enabled: bool) -> void:
 	## Performance-only shader gates. The public material controls remain unchanged.
 	var surface_available := spectral_enabled and surface_foam_solver_enabled
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"perf_spectral_enabled", spectral_enabled)
 		material.set_shader_parameter(&"perf_crest_foam_solver_enabled", crest_foam_solver_enabled)
 		material.set_shader_parameter(&"perf_surface_foam_solver_enabled", surface_available)
@@ -309,7 +361,7 @@ func coastal_runtime_enabled() -> bool:
 
 func set_coastal_composition_debug(mode: int) -> void:
 	var clamped := clampi(mode, CoastalCompositionDebug.FULL, CoastalCompositionDebug.MID_SHORT_ONLY)
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"coastal_composition_debug", clamped)
 
 
@@ -327,7 +379,7 @@ func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int
 		forced_warp_enabled: bool, forced_warp_offset_xz: Vector2, debug_gain: float,
 		delta_heatmap_enabled: bool) -> void:
 	## Sólo diagnóstico visual 3B.2B. No muta H0, la FFT ni los datos horneados.
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"coastal_composition_debug", clampi(composition_mode, CoastalCompositionDebug.FULL, CoastalCompositionDebug.MID_SHORT_ONLY))
 		material.set_shader_parameter(&"coastal_warp_effect_debug", clampi(warp_effect_mode, CoastalWarpEffectDebug.WARP_AND_SHOALING, CoastalWarpEffectDebug.SHOALING_ONLY))
 		material.set_shader_parameter(&"coastal_forced_warp_debug", forced_warp_enabled)
@@ -337,27 +389,24 @@ func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int
 
 
 func set_coastal_time(simulation_time_s: float) -> void:
-	_surface_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
-	_wireframe_material.set_shader_parameter(&"coastal_time_s", simulation_time_s)
+	_set_all_materials_shader_parameter(&"coastal_time_s", simulation_time_s)
 
 
 func set_coastal_debug_field(field: int) -> void:
 	_coastal_debug_field = clampi(field, CoastalDebugField.OFF, CoastalDebugField.SHORE_HORIZONTAL_WEIGHT)
-	_surface_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
-	_wireframe_material.set_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
+	_set_all_materials_shader_parameter(&"coastal_debug_field", _coastal_debug_field)
 
 
 func set_breaking_debug(mode: int) -> void:
 	## Activa la ruta de fetches extra sólo para el debug 4A / futuro takeover 4B.
 	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.PREBREAK)
-	_surface_material.set_shader_parameter(&"breaking_debug_mode", _breaking_debug)
-	_wireframe_material.set_shader_parameter(&"breaking_debug_mode", _breaking_debug)
+	_set_all_materials_shader_parameter(&"breaking_debug_mode", _breaking_debug)
 
 
 func set_breaking_energy_model(long_hs_m: float, coastal_energy_fraction: float) -> void:
 	## Hs del LONG completo y fracción de varianza de LONG_COASTAL. El shader
 	## estima Hs local desde energía + shoaling; nunca usa eta instantánea como H.
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"breaking_long_hs_m", maxf(long_hs_m, 0.0))
 		material.set_shader_parameter(&"breaking_coastal_energy_fraction", clampf(coastal_energy_fraction, 0.0, 1.0))
 
@@ -399,7 +448,7 @@ func final_half_extent_m() -> float:
 func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
 	# 3B.2B: índices de render -> LONG_COASTAL=0, LONG_REMAINDER=1, MID=2, SHORT=3.
 	var ids := ["long_coastal", "long_remainder", "mid", "short"]
-	for material in [_surface_material, _wireframe_material]:
+	for material in _all_materials():
 		material.set_shader_parameter(&"module_enabled", _module_enabled)
 		material.set_shader_parameter(&"perf_spectral_enabled", true)
 		material.set_shader_parameter(&"perf_crest_foam_solver_enabled", true)
@@ -434,16 +483,16 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		for index in 4:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])
-	_surface_material.set_shader_parameter(&"normal_long_coastal", normals[0])
-	_surface_material.set_shader_parameter(&"normal_long_remainder", normals[1])
-	_surface_material.set_shader_parameter(&"normal_mid", normals[2])
-	_surface_material.set_shader_parameter(&"normal_short", normals[3])
-	_surface_material.set_shader_parameter(&"foam_long_coastal", foams[0])
-	_surface_material.set_shader_parameter(&"foam_long_remainder", foams[1])
-	_surface_material.set_shader_parameter(&"foam_mid", foams[2])
-	_surface_material.set_shader_parameter(&"foam_short", foams[3])
-	_surface_material.set_shader_parameter(&"surface_foam_short", surface_foam)
-	_surface_material.set_shader_parameter(&"surface_foam_field_domain_m", surface_foam_field_domain_m)
+	_set_surface_material_shader_parameter(&"normal_long_coastal", normals[0])
+	_set_surface_material_shader_parameter(&"normal_long_remainder", normals[1])
+	_set_surface_material_shader_parameter(&"normal_mid", normals[2])
+	_set_surface_material_shader_parameter(&"normal_short", normals[3])
+	_set_surface_material_shader_parameter(&"foam_long_coastal", foams[0])
+	_set_surface_material_shader_parameter(&"foam_long_remainder", foams[1])
+	_set_surface_material_shader_parameter(&"foam_mid", foams[2])
+	_set_surface_material_shader_parameter(&"foam_short", foams[3])
+	_set_surface_material_shader_parameter(&"surface_foam_short", surface_foam)
+	_set_surface_material_shader_parameter(&"surface_foam_field_domain_m", surface_foam_field_domain_m)
 
 
 func _prepare_editor_preview() -> void:
@@ -457,6 +506,7 @@ func _rebuild_levels() -> void:
 	for level in _levels:
 		level.queue_free()
 	_levels.clear()
+	_rebuild_lod_debug_materials()
 	_triangle_count = 0
 	for level_index in clipmap_config.level_count:
 		var geometry := MeshBuilder.build_level_geometry(clipmap_config, level_index)
@@ -480,6 +530,9 @@ func _rebuild_levels() -> void:
 func _apply_debug_mode() -> void:
 	for level_index in _levels.size():
 		var level := _levels[level_index]
-		level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material
+		if _lod_debug and level_index < _lod_debug_materials.size():
+			level.material_override = _lod_debug_materials[level_index]
+		else:
+			level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material
 		level.set_instance_shader_parameter(&"clipmap_level", float(level_index))
-	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.SLOPE))
+	_set_surface_material_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.SLOPE))

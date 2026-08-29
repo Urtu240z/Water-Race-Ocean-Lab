@@ -53,6 +53,7 @@ uniform bool perf_mid_fold_history_enabled = true;
 uniform bool perf_surface_foam_render_enabled = true;
 uniform bool perf_prebreak_enabled = true;
 uniform bool clipmap_lod_debug = false;
+uniform float lod_debug_index = -1.0;
 uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
 uniform bool coastal_transform_enabled = false;
@@ -2015,7 +2016,7 @@ void fragment() {
 		ALPHA = 1.0;
 	}
 	else {
-		vec3 color = base_color;
+		vec3 color = lod_debug_index >= 0.0 ? level_color(lod_debug_index) : base_color;
 	vec4 hires_foam_composition = vec4(0.0);
 	if (perf_crest_foam_solver_enabled) {
 		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
@@ -2465,9 +2466,6 @@ void fragment() {
 		color = mix(vec3(0.0, 0.0, 0.02), vec3(1.0, 0.08, 0.0), delta_value);
 	}
 
-	if (clipmap_lod_debug) {
-		color = level_color(clipmap_level);
-	}
 	if (periodicity_debug) {
 		float lines = max(periodic_grid(ocean_base_xz, domain_long_coastal_m), max(periodic_grid(ocean_base_xz, domain_mid_m), periodic_grid(ocean_base_xz, domain_short_m)));
 		color = mix(color, vec3(1.0, 0.85, 0.15), lines);
@@ -2583,7 +2581,7 @@ void fragment() {
 		color = vec3(sspr_facet_confidence);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || clipmap_lod_debug || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -3269,9 +3267,9 @@ void fragment() {
 		}
 	}
 	}
-	if (clipmap_lod_debug) {
+	if (lod_debug_index >= 0.0) {
 		ALBEDO = vec3(0.0);
-		EMISSION = level_color(clipmap_level);
+		EMISSION = level_color(lod_debug_index);
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
 		RADIANCE = vec4(0.0);
