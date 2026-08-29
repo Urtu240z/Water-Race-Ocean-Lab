@@ -14,11 +14,6 @@ enum DebugMode {
 	WIREFRAME,
 }
 
-enum ClipmapTrackingDebugMode {
-	CONTINUOUS,
-	FROZEN,
-}
-
 enum CoastalDebugField {
 	OFF,
 	DEPTH,
@@ -59,7 +54,6 @@ enum CoastalWarpEffectDebug {
 }
 
 @export var clipmap_config := ClipmapConfigScript.new()
-@export_enum("CONTINUOUS", "FROZEN") var clipmap_tracking_debug_mode: int = ClipmapTrackingDebugMode.CONTINUOUS
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
 @export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
@@ -81,8 +75,6 @@ var _coastal_eikonal_phase_debug := false
 var _coastal_warp_available := false
 var _breaking_debug: int = BreakingDebug.OFF
 var _tracking_camera: Camera3D
-var _tracking_debug_mode_seen := -1
-var _frozen_tracking_position_xz := Vector2.ZERO
 var _triangle_count := 0
 
 
@@ -106,35 +98,14 @@ func _process(_delta: float) -> void:
 	var camera := _tracking_camera if is_instance_valid(_tracking_camera) else get_viewport().get_camera_3d()
 	if camera == null:
 		return
+	global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
-	var tracking_mode := clampi(clipmap_tracking_debug_mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.FROZEN)
-	if tracking_mode != _tracking_debug_mode_seen:
-		if tracking_mode == ClipmapTrackingDebugMode.FROZEN:
-			_frozen_tracking_position_xz = Vector2(global_position.x, global_position.z)
-		_tracking_debug_mode_seen = tracking_mode
-	if tracking_mode == ClipmapTrackingDebugMode.CONTINUOUS:
-		global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
-	else:
-		global_position = Vector3(_frozen_tracking_position_xz.x, clipmap_config.sea_level_y, _frozen_tracking_position_xz.y)
 	_surface_material.set_shader_parameter(&"camera_world_xz", camera_xz)
 	_wireframe_material.set_shader_parameter(&"camera_world_xz", camera_xz)
 
 
 func set_tracking_camera(camera: Camera3D) -> void:
 	_tracking_camera = camera
-
-
-func set_clipmap_tracking_debug_mode(mode: int) -> void:
-	clipmap_tracking_debug_mode = clampi(mode, ClipmapTrackingDebugMode.CONTINUOUS, ClipmapTrackingDebugMode.FROZEN)
-	_tracking_debug_mode_seen = -1
-
-
-func toggle_clipmap_tracking_debug_mode() -> void:
-	set_clipmap_tracking_debug_mode(ClipmapTrackingDebugMode.FROZEN if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.CONTINUOUS else ClipmapTrackingDebugMode.CONTINUOUS)
-
-
-func clipmap_tracking_debug_mode_name() -> String:
-	return "FROZEN" if clipmap_tracking_debug_mode == ClipmapTrackingDebugMode.FROZEN else "CONTINUOUS"
 
 
 ## Phase 4B: expone el material del clipmap como fuente única de los uniforms

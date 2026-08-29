@@ -5,7 +5,7 @@ const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | Shift+F: clipmap CONTINUOUS/FROZEN | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | H: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | H: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -58,10 +58,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			ocean_v3.cycle_ocean_band_debug()
 		KEY_L:
 			ocean_v3.toggle_ocean_clipmap_lod_debug()
-		KEY_F:
-			if event.shift_pressed:
-				ocean_v3.toggle_ocean_clipmap_tracking_debug_mode()
-				_update_coastal_hud()
 		KEY_T:
 			ocean_v3.toggle_ocean_periodicity_debug()
 		KEY_X:
@@ -154,10 +150,10 @@ func _create_demo_sea_state_zone() -> void:
 
 func _update_coastal_hud() -> void:
 	if ocean_v3 == null:
-		controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nClipmap Tracking: UNAVAILABLE\nC: Coastal unavailable | Shift+C: composition\nReflection Debug: UNAVAILABLE"
+		controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nC: Coastal unavailable | Shift+C: composition\nReflection Debug: UNAVAILABLE"
 		return
 	var state := "ON" if ocean_v3.coastal_enabled() else "OFF"
-	controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nClipmap Tracking: %s\nCoastal: %s | Composition: %s\nReflection Debug: %s" % [ocean_v3.clipmap_tracking_debug_mode_name(), state, ocean_v3.coastal_composition_debug_name(), ocean_v3.reflection_debug_name()]
+	controls_label.text = CONTROLS_TEXT + "\nBreaker HUD: Ctrl+Shift+J verbose\nCoastal: %s | Composition: %s\nReflection Debug: %s" % [state, ocean_v3.coastal_composition_debug_name(), ocean_v3.reflection_debug_name()]
 
 
 func _set_active_camera(use_race_camera: bool) -> void:
