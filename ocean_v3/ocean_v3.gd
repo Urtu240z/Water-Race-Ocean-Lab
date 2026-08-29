@@ -448,39 +448,9 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export var caustics_enabled: bool = true:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR") var water_optics_debug_mode: int = 0:
 	set(value):
-		caustics_enabled = value
-		_request_visual_sync()
-
-@export_range(0.0, 2.0, 0.01) var caustics_strength: float = 0.45:
-	set(value):
-		caustics_strength = clampf(value, 0.0, 2.0)
-		_request_visual_sync()
-
-@export_range(0.1, 10.0, 0.1) var caustics_scale_m: float = 1.5:
-	set(value):
-		caustics_scale_m = clampf(value, 0.1, 10.0)
-		_request_visual_sync()
-
-@export_range(0.0, 20.0, 0.1) var caustics_depth_fade_start_m: float = 2.0:
-	set(value):
-		caustics_depth_fade_start_m = clampf(value, 0.0, 20.0)
-		_request_visual_sync()
-
-@export_range(0.1, 30.0, 0.1) var caustics_depth_fade_end_m: float = 10.0:
-	set(value):
-		caustics_depth_fade_end_m = clampf(value, 0.1, 30.0)
-		_request_visual_sync()
-
-@export_range(0.0, 2.0, 0.01) var caustics_wave_warp_strength: float = 0.35:
-	set(value):
-		caustics_wave_warp_strength = clampf(value, 0.0, 2.0)
-		_request_visual_sync()
-
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "CAUSTICS_PATTERN", "CAUSTICS_MASK") var water_optics_debug_mode: int = 0:
-	set(value):
-		water_optics_debug_mode = clampi(value, 0, 12)
+		water_optics_debug_mode = clampi(value, 0, 10)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1985,12 +1955,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"transmission_detail_fade_start_m", transmission_detail_fade_start_m)
 	material.set_shader_parameter(&"transmission_detail_fade_end_m", transmission_detail_fade_end_m)
 	material.set_shader_parameter(&"transmission_max_lod", transmission_max_lod)
-	material.set_shader_parameter(&"caustics_enabled", caustics_enabled)
-	material.set_shader_parameter(&"caustics_strength", caustics_strength)
-	material.set_shader_parameter(&"caustics_scale_m", caustics_scale_m)
-	material.set_shader_parameter(&"caustics_depth_fade_start_m", caustics_depth_fade_start_m)
-	material.set_shader_parameter(&"caustics_depth_fade_end_m", caustics_depth_fade_end_m)
-	material.set_shader_parameter(&"caustics_wave_warp_strength", caustics_wave_warp_strength)
 	material.set_shader_parameter(&"water_optics_debug_mode", water_optics_debug_mode)
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
