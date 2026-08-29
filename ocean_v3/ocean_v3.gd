@@ -418,6 +418,31 @@ var _performance_overlay_label: Label
 		scattering_strength = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
+@export_range(0.0, 1.0, 0.01) var scattering_shallow_tint_influence: float = 1.0:
+	set(value):
+		scattering_shallow_tint_influence = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var scattering_deep_tint_influence: float = 0.15:
+	set(value):
+		scattering_deep_tint_influence = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 2.0, 0.01) var shallow_scattering_strength: float = 0.5:
+	set(value):
+		shallow_scattering_strength = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 20.0, 0.1) var shallow_scattering_depth_start_m: float = 1.0:
+	set(value):
+		shallow_scattering_depth_start_m = clampf(value, 0.0, 20.0)
+		_request_visual_sync()
+
+@export_range(0.1, 30.0, 0.1) var shallow_scattering_depth_end_m: float = 8.0:
+	set(value):
+		shallow_scattering_depth_end_m = clampf(value, 0.1, 30.0)
+		_request_visual_sync()
+
 @export_range(0.0, 2.0, 0.01) var water_turbidity: float = 0.35:
 	set(value):
 		water_turbidity = clampf(value, 0.0, 2.0)
@@ -448,9 +473,9 @@ var _performance_overlay_label: Label
 		transmission_max_lod = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL") var water_optics_debug_mode: int = 0:
 	set(value):
-		water_optics_debug_mode = clampi(value, 0, 10)
+		water_optics_debug_mode = clampi(value, 0, 13)
 		_request_visual_sync()
 
 @export_group("Reflection")
@@ -1949,6 +1974,11 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"refraction_depth_tolerance_m", refraction_depth_tolerance_m)
 	material.set_shader_parameter(&"scattering_color", scattering_color)
 	material.set_shader_parameter(&"scattering_strength", scattering_strength)
+	material.set_shader_parameter(&"scattering_shallow_tint_influence", scattering_shallow_tint_influence)
+	material.set_shader_parameter(&"scattering_deep_tint_influence", scattering_deep_tint_influence)
+	material.set_shader_parameter(&"shallow_scattering_strength", shallow_scattering_strength)
+	material.set_shader_parameter(&"shallow_scattering_depth_start_m", shallow_scattering_depth_start_m)
+	material.set_shader_parameter(&"shallow_scattering_depth_end_m", shallow_scattering_depth_end_m)
 	material.set_shader_parameter(&"water_turbidity", water_turbidity)
 	material.set_shader_parameter(&"crest_transmission_boost", crest_transmission_boost)
 	material.set_shader_parameter(&"trough_density_boost", trough_density_boost)

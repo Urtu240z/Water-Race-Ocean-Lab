@@ -174,6 +174,11 @@ uniform float refraction_depth_tolerance_m : hint_range(0.0, 2.0, 0.01) = 0.35;
 // scattering without changing the R1 Beer-Lambert terms or the R2 ray path.
 uniform vec4 scattering_color : source_color = vec4(0.02, 0.32, 0.42, 1.0);
 uniform float scattering_strength : hint_range(0.0, 2.0, 0.01) = 0.45;
+uniform float scattering_shallow_tint_influence : hint_range(0.0, 1.0, 0.01) = 1.0;
+uniform float scattering_deep_tint_influence : hint_range(0.0, 1.0, 0.01) = 0.15;
+uniform float shallow_scattering_strength : hint_range(0.0, 2.0, 0.01) = 0.5;
+uniform float shallow_scattering_depth_start_m : hint_range(0.0, 20.0, 0.1) = 1.0;
+uniform float shallow_scattering_depth_end_m : hint_range(0.1, 30.0, 0.1) = 8.0;
 uniform float water_turbidity : hint_range(0.0, 2.0, 0.01) = 0.35;
 uniform float crest_transmission_boost : hint_range(0.0, 0.5, 0.01) = 0.12;
 uniform float trough_density_boost : hint_range(0.0, 0.5, 0.01) = 0.10;
@@ -183,7 +188,8 @@ uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
-// 10 ALPHA_DEPTH_FACTOR.
+// 10 ALPHA_DEPTH_FACTOR, 11 SHALLOW_SCATTERING_FACTOR,
+// 12 SCATTERING_TINT_INFLUENCE, 13 SHALLOW_SCATTERING_FINAL.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -2679,10 +2685,24 @@ void fragment() {
 				0.0,
 				1.0
 			);
+			// Keep the volume response depth-driven, but give the artistic tint a
+			// separate shallow/deep authority. Shallow water can catch the tint fully;
+			// deep water keeps the deep-water base dominant with a subtle warm influence.
+			float shallow_scattering_factor = 1.0 - smoothstep(
+				shallow_scattering_depth_start_m,
+				max(shallow_scattering_depth_end_m, shallow_scattering_depth_start_m + 0.001),
+				physical_water_thickness
+			);
+			float scattering_tint_influence = mix(
+				clamp(scattering_deep_tint_influence, 0.0, 1.0),
+				clamp(scattering_shallow_tint_influence, 0.0, 1.0),
+				shallow_scattering_factor
+			);
+			vec3 deep_scattering_base_color = deep_water_color.rgb * 0.65;
 			vec3 scattering_tint = mix(
+				deep_scattering_base_color,
 				scattering_color.rgb,
-				deep_water_color.rgb * 0.65,
-				bounded_depth_factor * 0.55
+				scattering_tint_influence
 			);
 			// Treat scattering as a bounded share of the absorbed body response.
 			// This preserves the R1 body at strength 0 and avoids stacking the
@@ -2697,6 +2717,11 @@ void fragment() {
 			vec3 water_scattering = scattering_tint * effective_absorbed_rgb;
 			vec3 scattering_component = water_scattering
 				* scattering_share * trough_density_factor;
+			float transmittance_luma = clamp(
+				dot(effective_transmittance_rgb, vec3(0.2126, 0.7152, 0.0722)),
+				0.0,
+				1.0
+			);
 
 			vec3 surface_color = mix(
 				body_color,
@@ -2710,6 +2735,10 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
+			// This is a bounded visual shallow light lift, not a replacement for
+			// volume scattering. Use a conservative fallback when refraction is off;
+			// the existing refracted scene luminance refines it when already available.
+			float shallow_bottom_response = 0.75;
 			if (water_refraction_enabled) {
 				vec2 refraction_screen_size = max(
 					vec2(textureSize(screen_texture, 0)),
@@ -2826,12 +2855,34 @@ void fragment() {
 					final_refracted_uv,
 					transmission_lod
 				).rgb;
+				float bottom_luma = dot(
+					max(refracted_scene, vec3(0.0)),
+					vec3(0.2126, 0.7152, 0.0722)
+				);
+				shallow_bottom_response = mix(
+					0.5,
+					1.0,
+					clamp(bottom_luma, 0.0, 1.0)
+				);
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
 				// R1 transmittance_rgb remains available to debug mode 2.
 				vec3 transmitted_component = refracted_scene * effective_transmittance_rgb;
 				optical_scene = transmitted_component + body_component + scattering_component;
 			}
+			float shallow_light_response = shallow_scattering_factor
+				* transmittance_luma
+				* shallow_bottom_response;
+			float shallow_scattering_share = clamp(
+				shallow_light_response
+				* clamp(shallow_scattering_strength, 0.0, 2.0)
+				* clamp(scattering_strength, 0.0, 2.0)
+				* 0.55,
+				0.0,
+				0.30
+			);
+			vec3 shallow_scattering_component = scattering_tint * shallow_scattering_share;
+			optical_scene += shallow_scattering_component;
 
 			// The existing physical Fresnel is the single optical balance between
 			// transmission and the surface/body response. The refraction offset above
@@ -2892,6 +2943,12 @@ void fragment() {
 				final_color = vec3(body_depth_factor);
 			} else if (water_optics_debug_mode == 10) {
 				final_color = vec3(alpha_depth_factor);
+			} else if (water_optics_debug_mode == 11) {
+				final_color = vec3(shallow_scattering_factor);
+			} else if (water_optics_debug_mode == 12) {
+				final_color = vec3(scattering_tint_influence);
+			} else if (water_optics_debug_mode == 13) {
+				final_color = shallow_scattering_component;
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
