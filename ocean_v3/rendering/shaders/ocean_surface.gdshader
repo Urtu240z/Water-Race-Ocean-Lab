@@ -1962,7 +1962,7 @@ void fragment() {
 	// scattering and reflection work. They prove the complete Inspector -> CPU
 	// -> material -> rendered clipmap -> fragment route without any data inputs.
 	if (water_optics_debug_mode == 24) {
-		ALBEDO = vec3(0.0);
+		ALBEDO = vec3(1.0, 0.0, 1.0);
 		EMISSION = vec3(1.0, 0.0, 1.0);
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
@@ -1970,7 +1970,7 @@ void fragment() {
 		ALPHA = 1.0;
 	}
 	else if (water_optics_debug_mode == 25) {
-		ALBEDO = vec3(0.0);
+		ALBEDO = vec3(0.0, 1.0, 0.0);
 		EMISSION = vec3(0.0, 1.0, 0.0);
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
@@ -3100,7 +3100,7 @@ void fragment() {
 			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
 			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 			if (water_optics_debug_mode > 0) {
-				ALBEDO = vec3(0.0);
+				ALBEDO = final_color;
 				EMISSION = final_color;
 				ROUGHNESS = 1.0;
 				SPECULAR = 0.0;
