@@ -306,16 +306,16 @@ static func _add_variant_side_component(vertices: PackedVector3Array, normals: P
 static func _add_variant_rect(vertices: PackedVector3Array, normals: PackedVector3Array,
 		indices: PackedInt32Array, owners: PackedInt32Array, vertex_indices: Dictionary,
 		x0: float, x1: float, z0: float, z1: float, owner: int, interface_side: int,
-		coarse_spacing: float, fine_spacing: float) -> void:
+		_coarse_spacing: float, fine_spacing: float) -> void:
 	if x1 <= x0 or z1 <= z0:
 		return
 	if interface_side < 0:
-		var a := _vertex(vertices, normals, vertex_indices, Vector3(x0, 0.0, z0))
-		var b := _vertex(vertices, normals, vertex_indices, Vector3(x1, 0.0, z0))
-		var c := _vertex(vertices, normals, vertex_indices, Vector3(x1, 0.0, z1))
-		var d := _vertex(vertices, normals, vertex_indices, Vector3(x0, 0.0, z1))
-		_add_variant_triangle(vertices, indices, owners, a, c, b, owner)
-		_add_variant_triangle(vertices, indices, owners, a, d, c, owner)
+		var a_corner := _vertex(vertices, normals, vertex_indices, Vector3(x0, 0.0, z0))
+		var b_corner := _vertex(vertices, normals, vertex_indices, Vector3(x1, 0.0, z0))
+		var c_corner := _vertex(vertices, normals, vertex_indices, Vector3(x1, 0.0, z1))
+		var d_corner := _vertex(vertices, normals, vertex_indices, Vector3(x0, 0.0, z1))
+		_add_variant_triangle(vertices, indices, owners, a_corner, c_corner, b_corner, owner)
+		_add_variant_triangle(vertices, indices, owners, a_corner, d_corner, c_corner, owner)
 		return
 
 	var interface_length := (z1 - z0) if interface_side <= 1 else (x1 - x0)
