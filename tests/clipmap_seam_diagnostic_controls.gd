@@ -1,5 +1,5 @@
 extends SceneTree
-## X2.1B: valida la exposición runtime del diagnóstico de seams desde Lab Main.
+## X2.3: valida la exposición runtime de los diagnósticos de seams desde Lab Main.
 ## El test usa la misma ruta pública que la combinación Ctrl+L del laboratorio.
 
 var _frame := 0
@@ -11,6 +11,9 @@ var _controls_label: Label
 var _meshes_before: Array[Mesh] = []
 var _transforms_before: Array[Transform3D] = []
 var _clipmap_levels_before: Array[float] = []
+var _tracking_snapshot_before: Array = []
+var _triangle_count_before := 0
+var _true_opaque_material: ShaderMaterial
 
 
 func _initialize() -> void:
@@ -50,6 +53,7 @@ func _validate_controls() -> void:
 	_surface.set_clipmap_flat_geometry_debug(false)
 	_surface.set_clipmap_displaced_unlit_debug(false)
 	_surface.set_clipmap_true_opaque_flat_debug(false)
+	_surface.set_clipmap_canonical_opaque_flat_debug(false)
 	_surface.set_clipmap_tracking_debug_mode(3)
 	_surface._process(0.0)
 	var tracking_before: String = _ocean_v3.clipmap_tracking_debug_mode_name()
@@ -61,6 +65,8 @@ func _validate_controls() -> void:
 		_meshes_before.append(instance.mesh)
 		_transforms_before.append(instance.global_transform)
 		_clipmap_levels_before.append(float(instance.get_instance_shader_parameter(&"clipmap_level")))
+	_tracking_snapshot_before = _surface.call("clipmap_tracking_snapshot")
+	_triangle_count_before = int(_surface.call("triangle_count"))
 	_check(levels_before.size() == 10, "PER_LEVEL_SNAPPED conserva una instancia por nivel")
 	_check(_ocean_v3.clipmap_diagnostic_mode_name() == "OFF", "estado inicial OFF")
 
@@ -75,7 +81,12 @@ func _validate_controls() -> void:
 	_send_ctrl_l()
 	_check_diagnostic("TRUE OPAQUE FLAT", "Ctrl+L activa TRUE OPAQUE FLAT")
 	_check(_controls_label.text.contains("Clipmap Seam Debug: TRUE OPAQUE FLAT"), "HUD muestra TRUE OPAQUE FLAT")
-	_check_opaque_material_active()
+	_check_opaque_material_active("ocean_clipmap_opaque_debug.gdshader", "TRUE OPAQUE FLAT")
+
+	_send_ctrl_l()
+	_check_diagnostic("CANONICAL OPAQUE FLAT", "Ctrl+L activa CANONICAL OPAQUE FLAT")
+	_check(_controls_label.text.contains("Clipmap Seam Debug: CANONICAL OPAQUE FLAT"), "HUD muestra CANONICAL OPAQUE FLAT")
+	_check_opaque_material_active("ocean_clipmap_canonical_opaque_debug.gdshader", "CANONICAL OPAQUE FLAT")
 
 	_send_ctrl_l()
 	_check_diagnostic("OFF", "Ctrl+L devuelve a OFF")
@@ -115,34 +126,43 @@ func _check_diagnostic(expected: String, label: String) -> void:
 	_check(displaced == (expected == "DISPLACED UNLIT"), label + ": sólo uniform DISPLACED")
 	_check(not (flat and displaced), label + ": uniforms mutuamente excluyentes")
 	_check(bool(_surface.get("_true_opaque_flat_debug")) == (expected == "TRUE OPAQUE FLAT"), label + ": estado TRUE OPAQUE coherente")
+	_check(bool(_surface.get("_canonical_opaque_flat_debug")) == (expected == "CANONICAL OPAQUE FLAT"), label + ": estado CANONICAL coherente")
 
 
-func _check_opaque_material_active() -> void:
+func _check_opaque_material_active(shader_filename: String, label: String) -> void:
 	var levels: Array = _surface.get("_levels")
-	_check(levels.size() == _meshes_before.size(), "TRUE OPAQUE no reconstruye niveles")
+	_check(levels.size() == _meshes_before.size(), label + " no reconstruye niveles")
 	var first_material: ShaderMaterial
 	for index in levels.size():
 		var level = levels[index]
 		var instance := level as MeshInstance3D
-		_check(instance.mesh == _meshes_before[index], "TRUE OPAQUE conserva meshes")
-		_check(instance.global_transform == _transforms_before[index], "TRUE OPAQUE conserva transforms")
-		_check(is_equal_approx(float(instance.get_instance_shader_parameter(&"clipmap_level")), _clipmap_levels_before[index]), "TRUE OPAQUE conserva clipmap_level")
+		_check(instance.mesh == _meshes_before[index], label + " conserva meshes")
+		_check(instance.global_transform == _transforms_before[index], label + " conserva transforms")
+		_check(is_equal_approx(float(instance.get_instance_shader_parameter(&"clipmap_level")), _clipmap_levels_before[index]), label + " conserva clipmap_level")
 		var material := instance.material_override as ShaderMaterial
-		_check(material != null, "TRUE OPAQUE usa material override")
+		_check(material != null, label + " usa material override")
 		if material == null:
 			continue
 		if first_material == null:
 			first_material = material
-		_check(material == first_material, "TRUE OPAQUE usa un material común")
+		_check(material == first_material, label + " usa un material común")
+		if label == "TRUE OPAQUE FLAT":
+			_true_opaque_material = material
+		else:
+			_check(material != _true_opaque_material, label + " cambia sólo material_override respecto a TRUE")
 		var shader := material.shader
-		_check(shader != null and shader.resource_path.ends_with("ocean_clipmap_opaque_debug.gdshader"), "TRUE OPAQUE usa shader opaco dedicado")
+		_check(shader != null and shader.resource_path.ends_with(shader_filename), label + " usa shader dedicado")
 		if shader == null:
 			continue
 		var code := shader.code
-		_check(code.contains("shader_type spatial"), "shader opaco es spatial")
-		_check(code.contains("unshaded") and code.contains("depth_draw_opaque"), "shader opaco es unshaded y opaque")
-		_check(code.contains("ALBEDO") and not code.contains("ALPHA"), "shader opaco no escribe alpha")
-		_check(not code.contains("screen_texture") and not code.contains("depth_texture"), "shader opaco no depende de screen/depth textures")
+		_check(code.contains("shader_type spatial"), label + " shader es spatial")
+		_check(code.contains("unshaded") and code.contains("depth_draw_opaque"), label + " shader es unshaded y opaque")
+		_check(code.contains("ALBEDO") and not code.contains("ALPHA"), label + " shader no escribe alpha")
+		_check(not code.contains("screen_texture") and not code.contains("depth_texture"), label + " shader no depende de screen/depth textures")
+		if label == "CANONICAL OPAQUE FLAT":
+			_check(code.contains("MODEL_MATRIX") and code.contains("VIEW_MATRIX") and code.contains("PROJECTION_MATRIX") and code.contains("POSITION"), "CANONICAL usa world/view/projection explícitos")
+		_check(_surface.call("clipmap_tracking_snapshot") == _tracking_snapshot_before, label + " conserva cell/origin/parity")
+		_check(int(_surface.call("triangle_count")) == _triangle_count_before, label + " conserva triangle_count")
 
 
 func _check_opaque_material_restored(production_material: ShaderMaterial) -> void:
