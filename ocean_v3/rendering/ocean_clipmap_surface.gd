@@ -70,7 +70,6 @@ enum CoastalWarpEffectDebug {
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
 var _opaque_debug_material := ShaderMaterial.new()
-var _canonical_opaque_debug_material := ShaderMaterial.new()
 var _levels: Array[MeshInstance3D] = []
 
 class LevelRuntimeState extends RefCounted:
@@ -88,7 +87,6 @@ class LevelRuntimeState extends RefCounted:
 var _level_states: Array[LevelRuntimeState] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _true_opaque_flat_debug := false
-var _canonical_opaque_flat_debug := false
 var _module_enabled := true
 var _lod_debug := false
 var _periodicity_debug := false
@@ -124,7 +122,6 @@ func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
 	_opaque_debug_material.shader = load("res://ocean_v3/rendering/shaders/ocean_clipmap_opaque_debug.gdshader")
-	_canonical_opaque_debug_material.shader = load("res://ocean_v3/rendering/shaders/ocean_clipmap_canonical_opaque_debug.gdshader")
 	_configure_materials(configs, displacements, normals, foams, surface_foam, surface_foam_field_domain_m)
 	_rebuild_levels()
 	_apply_debug_mode()
@@ -376,7 +373,6 @@ func toggle_periodicity_debug() -> void:
 func set_clipmap_flat_geometry_debug(enabled: bool) -> void:
 	if enabled:
 		_true_opaque_flat_debug = false
-		_canonical_opaque_flat_debug = false
 	_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", enabled)
 	if enabled:
 		_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", false)
@@ -389,7 +385,6 @@ func set_clipmap_flat_geometry_debug(enabled: bool) -> void:
 func set_clipmap_displaced_unlit_debug(enabled: bool) -> void:
 	if enabled:
 		_true_opaque_flat_debug = false
-		_canonical_opaque_flat_debug = false
 	_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", enabled)
 	if enabled:
 		_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
@@ -399,16 +394,6 @@ func set_clipmap_displaced_unlit_debug(enabled: bool) -> void:
 func set_clipmap_true_opaque_flat_debug(enabled: bool) -> void:
 	_true_opaque_flat_debug = enabled
 	if enabled:
-		_canonical_opaque_flat_debug = false
-		_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
-		_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", false)
-	_apply_debug_mode()
-
-
-func set_clipmap_canonical_opaque_flat_debug(enabled: bool) -> void:
-	_canonical_opaque_flat_debug = enabled
-	if enabled:
-		_true_opaque_flat_debug = false
 		_surface_material.set_shader_parameter(&"clipmap_flat_geometry_debug", false)
 		_surface_material.set_shader_parameter(&"clipmap_displaced_unlit_debug", false)
 	_apply_debug_mode()
@@ -423,22 +408,16 @@ func cycle_clipmap_seam_diagnostic() -> void:
 		"DISPLACED UNLIT":
 			set_clipmap_true_opaque_flat_debug(true)
 		"TRUE OPAQUE FLAT":
-			set_clipmap_canonical_opaque_flat_debug(true)
-		"CANONICAL OPAQUE FLAT":
-			set_clipmap_canonical_opaque_flat_debug(false)
 			set_clipmap_true_opaque_flat_debug(false)
 			set_clipmap_flat_geometry_debug(false)
 			set_clipmap_displaced_unlit_debug(false)
 		_:
-			set_clipmap_canonical_opaque_flat_debug(false)
 			set_clipmap_true_opaque_flat_debug(false)
 			set_clipmap_flat_geometry_debug(false)
 			set_clipmap_displaced_unlit_debug(false)
 
 
 func clipmap_diagnostic_mode_name() -> String:
-	if _canonical_opaque_flat_debug:
-		return "CANONICAL OPAQUE FLAT"
 	if _true_opaque_flat_debug:
 		return "TRUE OPAQUE FLAT"
 	var flat := bool(_surface_material.get_shader_parameter(&"clipmap_flat_geometry_debug"))
@@ -677,7 +656,6 @@ func _prepare_editor_preview() -> void:
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
 	_opaque_debug_material.shader = load("res://ocean_v3/rendering/shaders/ocean_clipmap_opaque_debug.gdshader")
-	_canonical_opaque_debug_material.shader = load("res://ocean_v3/rendering/shaders/ocean_clipmap_canonical_opaque_debug.gdshader")
 	if _levels.is_empty() and clipmap_config.is_valid():
 		_rebuild_levels()
 	_apply_debug_mode()
@@ -748,7 +726,7 @@ func _restore_legacy_level_state() -> void:
 
 
 func _apply_debug_mode() -> void:
-	var active_material: Material = _canonical_opaque_debug_material if _canonical_opaque_flat_debug else (_opaque_debug_material if _true_opaque_flat_debug else (_wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material))
+	var active_material: Material = _opaque_debug_material if _true_opaque_flat_debug else (_wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material)
 	for level in _levels:
 		level.material_override = active_material
 	_surface_material.set_shader_parameter(&"debug_mode", mini(_debug_mode, DebugMode.SLOPE))
