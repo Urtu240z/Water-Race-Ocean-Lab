@@ -289,6 +289,23 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 
+@export_group("Diagnostics / Spectral Bands")
+@export var diagnostic_long_enabled: bool = true:
+	set(value):
+		diagnostic_long_enabled = value
+		_sync_diagnostic_band_mask()
+
+@export var diagnostic_mid_enabled: bool = true:
+	set(value):
+		diagnostic_mid_enabled = value
+		_sync_diagnostic_band_mask()
+
+@export var diagnostic_short_enabled: bool = true:
+	set(value):
+		diagnostic_short_enabled = value
+		_sync_diagnostic_band_mask()
+
+
 @export_group("Water Optics")
 @export var shallow_water_color: Color = Color(0.035, 0.43, 0.55, 1.0):
 	set(value):
@@ -1127,6 +1144,7 @@ func _ready() -> void:
 	if wave_preset != null:
 		apply_selected_wave_preset()
 	_configure_coastal_bake_asset()
+	_sync_diagnostic_band_mask()
 	if not Engine.is_editor_hint():
 		_reflection_sspr_manager = SSPR_MANAGER_SCRIPT.new()
 		_reflection_sspr_manager.name = &"OceanSSPRManager"
@@ -1384,6 +1402,16 @@ func _runtime_fft_module() -> OpenOceanFFTModule:
 	if Engine.is_editor_hint():
 		return null
 	return get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+
+
+func _sync_diagnostic_band_mask() -> void:
+	var fft_module := _runtime_fft_module()
+	if fft_module != null:
+		fft_module.set_band_enabled(
+			diagnostic_long_enabled,
+			diagnostic_mid_enabled,
+			diagnostic_short_enabled
+		)
 
 
 func toggle_ocean_enabled() -> void:
