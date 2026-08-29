@@ -53,6 +53,10 @@ uniform bool perf_mid_fold_history_enabled = true;
 uniform bool perf_surface_foam_render_enabled = true;
 uniform bool perf_prebreak_enabled = true;
 uniform bool clipmap_lod_debug = false;
+// X2.1 seam diagnosis only. These are opt-in and do not alter topology,
+// transforms, LOD variants, or production shading when disabled.
+uniform bool clipmap_flat_geometry_debug = false;
+uniform bool clipmap_displaced_unlit_debug = false;
 uniform bool periodicity_debug = false;
 uniform bool coastal_propagation_enabled = false;
 uniform bool coastal_transform_enabled = false;
@@ -1142,6 +1146,10 @@ void vertex() {
 		float production_takeover = breaker_takeover_production_mask(world_xz);
 		float takeover_submerge_m = max(0.15, breaking_long_hs_m * breaker_takeover_submerge_hs);
 		displacement.y -= takeover_submerge_m * production_takeover;
+	}
+	if (clipmap_flat_geometry_debug) {
+		displacement = vec3(0.0);
+		ocean_normal = vec3(0.0, 1.0, 0.0);
 	}
 	ocean_wave_height = displacement.y;
 	vec3 displaced_vertex = VERTEX + displacement;
@@ -3095,5 +3103,18 @@ void fragment() {
 			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
 			ALPHA = clamp(1.0 + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
 		}
+	}
+	if (clipmap_flat_geometry_debug || clipmap_displaced_unlit_debug) {
+		// Emission-only opaque gray matches the existing unlit debug convention.
+		// The displaced mode leaves vertex geometry intact; the flat mode has
+		// already zeroed displacement in vertex().
+		ALBEDO = vec3(0.0);
+		EMISSION = vec3(0.5);
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+		METALLIC = 0.0;
+		RADIANCE = vec4(0.0);
+		NORMAL = flat_normal_view;
+		ALPHA = 1.0;
 	}
 }
