@@ -2089,21 +2089,12 @@ void fragment() {
 	float zone_foam_activity = sea_state_zone_foam_activity(
 		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
 		zone_choppiness, zone_foam_multiplier);
-	// Debug values use the same stable macronormal and local state as production;
-	// Surface Detail is intentionally excluded because it is visual distortion,
-	// not physical wave activity.
-	float debug_camera_distance = distance(ocean_world_xz, camera_world_xz);
-	float debug_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
-	vec2 debug_reflection_metrics = vec2(0.0);
-	if (perf_benchmark_debug_reflection_enabled && perf_spectral_enabled) {
-		debug_reflection_metrics = reflection_unresolved_detail_metrics(
-			ocean_base_xz, debug_footprint, zone_mid_amplitude, zone_short_amplitude);
-	}
-	float debug_slope_variance = debug_reflection_metrics.y;
-	float debug_reflection_roughness = physical_ocean_roughness(
-		debug_camera_distance, debug_footprint, debug_reflection_metrics);
-	debug_reflection_roughness = reflection_crest_shaped_roughness(
-		debug_reflection_roughness, reflection_and_mono_state.x, debug_reflection_metrics);
+	// Debug reuses the production reflection context below. Surface Detail is
+	// intentionally excluded because it is visual distortion, not physical wave
+	// activity. Keeping only the scalar outputs here avoids a second FFT-normal
+	// sampling pass in normal production rendering.
+	float debug_slope_variance = 0.0;
+	float debug_reflection_roughness = 0.0;
 	float debug_sun_specular = 0.0;
 	// Keep Surface Foam's independent history/topology intact; only its
 	// presentation contribution is locally attenuated by the zone state.
@@ -2342,10 +2333,6 @@ void fragment() {
 	NORMAL = visual_normal;
 
 	vec3 view_direction = normalize(VIEW);
-	if (perf_benchmark_debug_reflection_enabled) {
-		debug_sun_specular = sun_specular_brdf(
-			normalize(visual_normal), view_direction, debug_reflection_roughness);
-	}
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
 	float reflection_pixel_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
 	vec2 reflection_detail_metrics = vec2(0.0);
@@ -2357,6 +2344,14 @@ void fragment() {
 		camera_distance, reflection_pixel_footprint, reflection_detail_metrics);
 	water_reflection_roughness = reflection_crest_shaped_roughness(
 		water_reflection_roughness, reflection_and_mono_state.x, reflection_detail_metrics);
+	// The reflection debug views expose the exact values that production uses.
+	// No debug-only unresolved-detail re-sampling is permitted here.
+	debug_slope_variance = reflection_detail_metrics.y;
+	debug_reflection_roughness = water_reflection_roughness;
+	if (reflection_debug_mode == 3) {
+		debug_sun_specular = sun_specular_brdf(
+			normalize(visual_normal), view_direction, debug_reflection_roughness);
+	}
 	float sspr_filter_roughness = reflection_final_roughness(
 		water_reflection_roughness, surface_foam_mask, foam_residual_mask, foam_fresh_mask);
 	vec3 sspr_macro_normal_view = normalize((VIEW_MATRIX * vec4(sspr_macro_normal_world, 0.0)).xyz);
