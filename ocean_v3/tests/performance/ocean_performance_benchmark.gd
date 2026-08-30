@@ -33,6 +33,7 @@ const GPU_TIMING_UNAVAILABLE := "unavailable"
 @export_range(5, 10, 1) var paired_repetitions := 7
 @export_range(1, 10000, 1) var readiness_timeout_frames := DEFAULT_READINESS_TIMEOUT_FRAMES
 @export var include_isolated_presets := true
+@export var full_only := false
 @export var auto_start := true
 @export var quit_when_complete := true
 
@@ -152,11 +153,15 @@ func _read_command_line_overrides() -> void:
 			readiness_timeout_frames = maxi(int(argument.get_slice("=", 1)), 1)
 		elif argument == "--ocean-benchmark-core-only":
 			include_isolated_presets = false
+		elif argument == "--ocean-benchmark-full-only":
+			full_only = true
 		elif argument == "--ocean-benchmark-keep-open":
 			quit_when_complete = false
 
 
 func _benchmark_presets() -> Array:
+	if full_only:
+		return ["FULL"]
 	if run_mode.to_upper() == "PAIRED":
 		return ["FULL"] + PAIRED_TESTS
 	var result: Array = CORE_PRESETS.duplicate()
