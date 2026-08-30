@@ -2530,6 +2530,7 @@ void fragment() {
 		if (breaking_debug_mode == 2) value = breaking_indices.y;
 		else if (breaking_debug_mode == 3) value = breaking_indices.z;
 		else if (breaking_debug_mode == 4) value = breaking_indices.w;
+		#ifdef OCEAN_BREAKING_DIAGNOSTICS
 		else if (breaking_debug_mode >= 5 && breaking_debug_mode <= 11) {
 			// STEP 2 deliberately keeps this extra FFT evaluation debug-only. The
 			// production ribbon path remains the bounded legacy Coastal detector.
@@ -2586,6 +2587,7 @@ void fragment() {
 				value = segment_coherence;
 			}
 		}
+		#endif // OCEAN_BREAKING_DIAGNOSTICS
 		// Azul (0) -> cian -> amarillo -> rojo (1), visible tanto desde top como grazing.
 		vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));
 		heat = mix(heat, vec3(1.0, 0.86, 0.08), smoothstep(0.35, 0.72, value));

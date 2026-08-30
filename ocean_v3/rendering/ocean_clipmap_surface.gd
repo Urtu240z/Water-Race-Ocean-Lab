@@ -5,6 +5,7 @@ extends Node3D
 
 const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
 const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
+const BreakingDiagnosticShader := preload("res://ocean_v3/rendering/shaders/ocean_surface_debug.gdshader")
 
 enum DebugMode {
 	FULL_DISPLACEMENT,
@@ -70,6 +71,9 @@ enum CoastalWarpEffectDebug {
 
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
+var _breaking_debug_material: ShaderMaterial
+# LOD colours are a diagnostic view.  Keeping this cache empty in production is
+# intentional: each entry is a complete ShaderMaterial with all ocean uniforms.
 var _lod_debug_materials: Array[ShaderMaterial] = []
 var _levels: Array[MeshInstance3D] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
@@ -98,14 +102,25 @@ func _ready() -> void:
 
 
 func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
+	var configure_started_usec := Time.get_ticks_usec()
 	assert(clipmap_config.is_valid())
 	# 3B.2B: 4 cascadas de render: LONG_COASTAL, LONG_REMAINDER, MID, SHORT.
 	assert(configs.size() == 4 and displacements.size() == 4 and normals.size() == 4 and foams.size() == 4 and surface_foam != null)
 	_surface_material.shader = load("res://ocean_v3/rendering/shaders/ocean_surface.gdshader")
 	_wireframe_material.shader = load("res://ocean_v3/rendering/shaders/ocean_wireframe.gdshader")
+	var shader_assigned_usec := Time.get_ticks_usec()
 	_configure_materials(configs, displacements, normals, foams, surface_foam, surface_foam_field_domain_m)
+	var materials_configured_usec := Time.get_ticks_usec()
 	_rebuild_levels()
+	var levels_rebuilt_usec := Time.get_ticks_usec()
 	_apply_debug_mode()
+	print("OCEAN STARTUP surface: shader=%d ms materials=%d ms clipmap=%d ms lod_debug=%d total=%d ms" % [
+		(shader_assigned_usec - configure_started_usec) / 1000,
+		(materials_configured_usec - shader_assigned_usec) / 1000,
+		(levels_rebuilt_usec - materials_configured_usec) / 1000,
+		0 if _lod_debug_materials.is_empty() else 1,
+		(Time.get_ticks_usec() - configure_started_usec) / 1000,
+	])
 
 
 func _process(_delta: float) -> void:
@@ -114,7 +129,9 @@ func _process(_delta: float) -> void:
 		return
 	global_position = Vector3(camera.global_position.x, clipmap_config.sea_level_y, camera.global_position.z)
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
-	_set_all_materials_shader_parameter(&"camera_world_xz", camera_xz)
+	# The wireframe shader has no camera-relative ocean sampling.  Do not publish
+	# a per-frame value to it (or to inactive LOD diagnostics).
+	_set_surface_material_shader_parameter(&"camera_world_xz", camera_xz)
 
 
 func set_tracking_camera(camera: Camera3D) -> void:
@@ -133,30 +150,27 @@ func set_surface_shader_parameter(parameter: StringName, value: Variant) -> void
 
 
 func sync_lod_debug_materials_from_surface() -> void:
-	if _lod_debug_materials.is_empty() or _surface_material.shader == null:
-		return
-	const shader_parameter_prefix := "shader_parameter/"
-	for property in _surface_material.get_property_list():
-		var property_name := str(property.get("name", ""))
-		if not property_name.begins_with(shader_parameter_prefix):
-			continue
-		var parameter_name := StringName(property_name.trim_prefix(shader_parameter_prefix))
-		if parameter_name == &"lod_debug_index":
-			continue
-		var value: Variant = _surface_material.get_shader_parameter(parameter_name)
-		for material in _lod_debug_materials:
-			material.set_shader_parameter(parameter_name, value)
+	# Kept as a compatibility entry point for OceanV3.  The former implementation
+	# enumerated every shader property and copied it to every dormant LOD material
+	# after every visual sync.  Lazy creation duplicates the current material,
+	# while normal update routes keep the small dynamic set in sync when LOD debug
+	# is actually visible; there is no production-wide property-list fanout.
+	pass
 
 
 func _surface_materials() -> Array[ShaderMaterial]:
 	var materials: Array[ShaderMaterial] = [_surface_material]
-	materials.append_array(_lod_debug_materials)
+	if _breaking_diagnostic_active() and _breaking_debug_material != null:
+		materials.append(_breaking_debug_material)
+	if _lod_debug:
+		materials.append_array(_lod_debug_materials)
 	return materials
 
 
 func _all_materials() -> Array[ShaderMaterial]:
 	var materials: Array[ShaderMaterial] = [_surface_material, _wireframe_material]
-	materials.append_array(_lod_debug_materials)
+	if _lod_debug:
+		materials.append_array(_lod_debug_materials)
 	return materials
 
 
@@ -170,10 +184,14 @@ func _set_all_materials_shader_parameter(parameter: StringName, value: Variant) 
 		material.set_shader_parameter(parameter, value)
 
 
-func _rebuild_lod_debug_materials() -> void:
+func _ensure_lod_debug_materials() -> void:
+	if _lod_debug_materials.size() == clipmap_config.level_count:
+		return
 	_lod_debug_materials.clear()
 	if _surface_material.shader == null:
 		return
+	# Duplicate only at first explicit LOD-debug activation.  This captures the
+	# complete current uniform state once, without get_shader_parameter readbacks.
 	for level_index in clipmap_config.level_count:
 		var debug_material := _surface_material.duplicate() as ShaderMaterial
 		if debug_material == null:
@@ -181,6 +199,20 @@ func _rebuild_lod_debug_materials() -> void:
 			continue
 		debug_material.set_shader_parameter(&"lod_debug_index", float(level_index))
 		_lod_debug_materials.append(debug_material)
+
+
+func _breaking_diagnostic_active() -> bool:
+	return _breaking_debug >= BreakingDebug.OPEN_BREAK
+
+
+func _ensure_breaking_debug_material() -> void:
+	if _breaking_debug_material != null:
+		return
+	_breaking_debug_material = _surface_material.duplicate() as ShaderMaterial
+	if _breaking_debug_material == null:
+		push_error("No se pudo duplicar el material de diagnóstico de breaking.")
+		return
+	_breaking_debug_material.shader = BreakingDiagnosticShader
 
 
 func set_surface_foam_spectrum(surface_foam: Texture2DRD, field_domain_m: float) -> void:
@@ -278,7 +310,9 @@ func set_debug_mode(mode: int) -> void:
 
 func toggle_lod_debug() -> void:
 	_lod_debug = not _lod_debug
-	_set_all_materials_shader_parameter(&"clipmap_lod_debug", _lod_debug)
+	if _lod_debug:
+		_ensure_lod_debug_materials()
+	_set_surface_material_shader_parameter(&"clipmap_lod_debug", _lod_debug)
 	_apply_debug_mode()
 
 
@@ -416,7 +450,7 @@ func set_coastal_render_diagnostics(composition_mode: int, warp_effect_mode: int
 
 
 func set_coastal_time(simulation_time_s: float) -> void:
-	_set_all_materials_shader_parameter(&"coastal_time_s", simulation_time_s)
+	_set_surface_material_shader_parameter(&"coastal_time_s", simulation_time_s)
 
 
 func set_coastal_debug_field(field: int) -> void:
@@ -427,7 +461,10 @@ func set_coastal_debug_field(field: int) -> void:
 func set_breaking_debug(mode: int) -> void:
 	## Las señales 5R.3 siguen siendo GPU/debug-only: no crean candidates CPU.
 	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.SEGMENT_COHERENCE)
-	_set_all_materials_shader_parameter(&"breaking_debug_mode", _breaking_debug)
+	if _breaking_diagnostic_active():
+		_ensure_breaking_debug_material()
+	_set_surface_material_shader_parameter(&"breaking_debug_mode", _breaking_debug)
+	_apply_debug_mode()
 
 
 func set_breaking_energy_model(long_hs_m: float, coastal_energy_fraction: float) -> void:
@@ -559,7 +596,11 @@ func _rebuild_levels() -> void:
 	for level in _levels:
 		level.queue_free()
 	_levels.clear()
-	_rebuild_lod_debug_materials()
+	# A topology rebuild invalidates the per-level overrides, but does not create
+	# them unless the user has explicitly requested the diagnostic view.
+	_lod_debug_materials.clear()
+	if _lod_debug:
+		_ensure_lod_debug_materials()
 	_triangle_count = 0
 	for level_index in clipmap_config.level_count:
 		var geometry := MeshBuilder.build_level_geometry(clipmap_config, level_index)
@@ -581,9 +622,13 @@ func _rebuild_levels() -> void:
 
 
 func _apply_debug_mode() -> void:
+	if _lod_debug:
+		_ensure_lod_debug_materials()
 	for level_index in _levels.size():
 		var level := _levels[level_index]
-		if _lod_debug and level_index < _lod_debug_materials.size():
+		if _breaking_diagnostic_active() and _breaking_debug_material != null:
+			level.material_override = _breaking_debug_material
+		elif _lod_debug and level_index < _lod_debug_materials.size():
 			level.material_override = _lod_debug_materials[level_index]
 		else:
 			level.material_override = _wireframe_material if _debug_mode == DebugMode.WIREFRAME else _surface_material

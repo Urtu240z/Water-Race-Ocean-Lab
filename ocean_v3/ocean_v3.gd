@@ -1137,9 +1137,6 @@ enum NearSSRQuality { LOW, MEDIUM, HIGH }
 
 
 var _visual_sync_pending := true
-var _water_optics_debug_last_reported_mode := -1
-var _water_optics_debug_last_reported_readback := ""
-var _refraction_v2_last_reported_readback := ""
 var _sea_state_zones: Array[OceanSeaStateZone3D] = []
 var _sea_state_zone_descriptors: Array[Dictionary] = []
 var _sea_state_zone_uniform_data0 := PackedVector4Array()
@@ -1151,9 +1148,14 @@ var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
 var _reflection_sspr_manager: Node
+var _startup_started_usec := 0
+var _startup_setup_usec := 0
+var _startup_stable_frames := 0
+var _startup_reported := false
 
 
 func _ready() -> void:
+	_startup_started_usec = Time.get_ticks_usec()
 	add_to_group(&"ocean_v3_root")
 	for node in get_tree().get_nodes_in_group(&"ocean_sea_state_zone"):
 		if node is OceanSeaStateZone3D:
@@ -1171,6 +1173,7 @@ func _ready() -> void:
 		_reflection_sspr_manager.configure(self, _surface_sea_level(), reflection_sspr_enabled)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
+	_startup_setup_usec = Time.get_ticks_usec()
 	call_deferred(&"_flush_visual_sync")
 
 
@@ -1658,6 +1661,16 @@ func _process(_delta: float) -> void:
 	# the root setter ran while the scene was loading.
 	if _visual_sync_pending:
 		_sync_water_visual_parameters()
+	if not _startup_reported and not _visual_sync_pending:
+		# Three rendered process frames avoid calling a deferred setup frame
+		# "stable" while retaining zero recurring instrumentation cost.
+		_startup_stable_frames += 1
+		if _startup_stable_frames >= 3:
+			_startup_reported = true
+			print("OCEAN STARTUP root: setup=%d ms first_stable_frame=%d ms" % [
+				(_startup_setup_usec - _startup_started_usec) / 1000,
+				(Time.get_ticks_usec() - _startup_started_usec) / 1000,
+			])
 	if _wave_spectrum_dirty and auto_apply_wave_changes and Time.get_ticks_msec() >= _wave_spectrum_apply_at_ms:
 		apply_wave_changes()
 	_update_wave_transition_exports()
@@ -2061,25 +2074,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"refraction_short_weight", refraction_short_weight)
 	material.set_shader_parameter(&"refraction_depth_start_m", refraction_depth_start_m)
 	material.set_shader_parameter(&"refraction_depth_end_m", refraction_depth_end_m)
-	var refraction_v2_readback := "%s|%s|%s|%s|%s|%s" % [
-		str(material.get_shader_parameter(&"refraction_wave_strength")),
-		str(material.get_shader_parameter(&"refraction_long_weight")),
-		str(material.get_shader_parameter(&"refraction_mid_weight")),
-		str(material.get_shader_parameter(&"refraction_short_weight")),
-		str(material.get_shader_parameter(&"refraction_depth_start_m")),
-		str(material.get_shader_parameter(&"refraction_depth_end_m")),
-	]
-	if refraction_v2_readback != _refraction_v2_last_reported_readback:
-		print("REFRACTION_V2_SYNC material_id=%d wave=%s long=%s mid=%s short=%s depth_start=%s depth_end=%s" % [
-			material.get_instance_id(),
-			material.get_shader_parameter(&"refraction_wave_strength"),
-			material.get_shader_parameter(&"refraction_long_weight"),
-			material.get_shader_parameter(&"refraction_mid_weight"),
-			material.get_shader_parameter(&"refraction_short_weight"),
-			material.get_shader_parameter(&"refraction_depth_start_m"),
-			material.get_shader_parameter(&"refraction_depth_end_m"),
-		])
-		_refraction_v2_last_reported_readback = refraction_v2_readback
 	material.set_shader_parameter(&"scattering_color", scattering_color)
 	material.set_shader_parameter(&"scattering_strength", scattering_strength)
 	material.set_shader_parameter(&"scattering_shallow_tint_influence", scattering_shallow_tint_influence)
@@ -2115,27 +2109,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"coastal_bathymetry_sea_level_y", bathymetry_sea_level_y)
 	var requested_debug_mode := int(water_optics_debug_mode)
 	material.set_shader_parameter(&"water_optics_debug_mode", requested_debug_mode)
-	var material_debug_readback = material.get_shader_parameter(&"water_optics_debug_mode")
-	var material_debug_readback_text := str(material_debug_readback)
-	if requested_debug_mode != _water_optics_debug_last_reported_mode or material_debug_readback_text != _water_optics_debug_last_reported_readback:
-		var level_count := 0
-		var matching_override_count := 0
-		for child in surface.get_children():
-			var level := child as MeshInstance3D
-			if level == null:
-				continue
-			level_count += 1
-			if level.material_override == material:
-				matching_override_count += 1
-		print("WATER_OPTICS_DEBUG_SYNC requested=%d readback=%s material_id=%d levels=%d override_matches=%d" % [
-			requested_debug_mode,
-			material_debug_readback_text,
-			material.get_instance_id(),
-			level_count,
-			matching_override_count,
-		])
-		_water_optics_debug_last_reported_mode = requested_debug_mode
-		_water_optics_debug_last_reported_readback = material_debug_readback_text
 	material.set_shader_parameter(&"reflection_min_roughness", reflection_min_roughness)
 	material.set_shader_parameter(&"reflection_base_roughness", reflection_base_roughness)
 	material.set_shader_parameter(&"reflection_distance_roughness", reflection_distance_roughness)
@@ -2281,7 +2254,9 @@ func _sync_water_visual_parameters() -> void:
 				surface_foam_detail
 			)
 	material.set_shader_parameter(&"foam_debug_mode", effective_foam_debug_mode)
-	surface.sync_lod_debug_materials_from_surface()
+	# LOD debug materials are created from this fully configured material only on
+	# explicit activation.  Do not enumerate and copy the complete property list
+	# on every normal visual sync.
 
 	_visual_sync_pending = false
 

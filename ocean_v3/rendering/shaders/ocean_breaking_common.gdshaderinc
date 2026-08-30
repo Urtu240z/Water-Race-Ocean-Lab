@@ -155,6 +155,10 @@ float breaking_reference_wavelength(float min_wavelength_m, float max_wavelength
 	return sqrt(max(min_wavelength_m, 0.05) * max(max_wavelength_m, min_wavelength_m));
 }
 
+// Steps 2–4 are research diagnostics only.  They are intentionally excluded
+// from the normal ocean shader program; ocean_surface_debug.gdshader defines
+// this symbol before including the shared surface implementation.
+#ifdef OCEAN_BREAKING_DIAGNOSTICS
 // Returns crestness, the measured face slope and local crest elevation of one
 // actual FFT band. The crest elevation is eta_center minus the two-sided local
 // neighbourhood, so it is a local measured quantity rather than Hs.
@@ -283,6 +287,8 @@ float open_break_at(vec2 world_xz) {
 	return components.x + components.y - components.x * components.y;
 }
 
+#endif // OCEAN_BREAKING_DIAGNOSTICS
+
 // 4B: estado escalar local del modelo de energía de 4A, sin muestras de cresta.
 // Devuelve vec4(amplitude_m, wavelength_m, local_k, local_hs).
 // Réplica CPU: BreakerRibbonPool.estimate_local_hs / depth pressure.
@@ -370,6 +376,7 @@ vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 met
 	return depth_break_indices_at(world_xz, coast_uv, field_data, metrics_data, phase_data);
 }
 
+#ifdef OCEAN_BREAKING_DIAGNOSTICS
 // x = OPEN_BREAK, y = DEPTH_BREAK, z = BREAK_ONSET. DEPTH_BREAK is exactly
 // zero without valid Coastal data; OPEN_BREAK never samples that validity gate.
 vec3 breaking_onset_signals_at(vec2 world_xz) {
@@ -509,3 +516,5 @@ void crest_segment_descriptor_at(vec2 seed_world_xz,
 	float right_mean = right_count > 0.0 ? right_onset_sum / right_count : 0.0;
 	lateral_state = vec3(left_mean, right_mean, (right_extent_m - left_extent_m) / max(total_span_m, 0.001));
 }
+
+#endif // OCEAN_BREAKING_DIAGNOSTICS

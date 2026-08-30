@@ -320,6 +320,7 @@ func coastal_render_memory_diagnostics() -> Dictionary:
 
 
 func _ready() -> void:
+	var startup_started_usec := Time.get_ticks_usec()
 	add_to_group(&"ocean_fft")
 	_sea_state = SeaStateScript.State.RACE
 	_sea_state_initialized = true
@@ -331,6 +332,7 @@ func _ready() -> void:
 			push_error("ConfiguraciÃ³n FFT invÃ¡lida para %s." % config.id)
 			return
 		h0_datas.append(_build_h0(config, SimulationClock.simulation_seed))
+	var h0_built_usec := Time.get_ticks_usec()
 	# 3B.2B: LONG se divide en LONG_COASTAL + LONG_REMAINDER (misma física del
 	# config LONG, H0 diferentes por máscara direccional). La query física sigue
 	# usando el LONG original (configs[0]); sólo el render usa la 4.ª cascada.
@@ -344,12 +346,14 @@ func _ready() -> void:
 		h0_datas[1],
 		h0_datas[2],
 	]
+	var h0_split_usec := Time.get_ticks_usec()
 	_current_render_h0_datas = render_h0
 	_cascades.append(_make_cascade(long_config, split["coastal"], "Ocean2B.LONG_COASTAL"))
 	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
 	for index in [1, 2]:
 		_cascades.append(_make_cascade(configs[index], h0_datas[index], "Ocean2B.%s" % configs[index].id))
 	_initialize_surface_foam_solver()
+	var gpu_submission_usec := Time.get_ticks_usec()
 
 	_enabled = enabled_on_start
 	dispatches_per_update = 0
@@ -366,6 +370,7 @@ func _ready() -> void:
 	_query_reduced.set_spectrum(configs, h0_datas)
 	_query_reduced.set_sea_level(surface.clipmap_config.sea_level_y)
 	_query_reduced.set_budget(reduced_long_pairs, reduced_mid_pairs, reduced_short_pairs)
+	var query_ready_usec := Time.get_ticks_usec()
 	# Backend NATIVE (GDExtension) si estÃ¡ disponible; si no, fallback GDScript.
 	if query_native_enabled:
 		_query_native = _try_create_native_backend()
@@ -379,6 +384,7 @@ func _ready() -> void:
 		_query_golden.set_sea_level(surface.clipmap_config.sea_level_y)
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _surface_foam_texture, _surface_foam_field_domain_m)
+	var surface_ready_usec := Time.get_ticks_usec()
 	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
 	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_source_domain_m)
 	surface.set_surface_foam_mid_fold_history(_surface_foam_mid_fold_history_texture)
@@ -398,6 +404,14 @@ func _ready() -> void:
 	OceanModuleRegistry.module_state_changed.connect(_on_module_state_changed)
 	SimulationClock.seed_changed.connect(_on_seed_changed)
 	SimulationClock.reset_completed.connect(_on_reset_completed)
+	print("OCEAN STARTUP fft: h0=%d ms split=%d ms gpu_submit=%d ms query=%d ms surface=%d ms total=%d ms" % [
+		(h0_built_usec - startup_started_usec) / 1000,
+		(h0_split_usec - h0_built_usec) / 1000,
+		(gpu_submission_usec - h0_split_usec) / 1000,
+		(query_ready_usec - gpu_submission_usec) / 1000,
+		(surface_ready_usec - query_ready_usec) / 1000,
+		(Time.get_ticks_usec() - startup_started_usec) / 1000,
+	])
 
 
 func _make_cascade(config: OpenOceanFFTConfig, h0_data: PackedByteArray, resource_prefix: String) -> Dictionary:

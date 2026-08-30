@@ -295,6 +295,7 @@ func _finish_measurement() -> void:
 		"preset": _current_preset,
 		"avg_ms": statistics["avg_ms"],
 		"median_ms": statistics["median_ms"],
+		"p95_ms": statistics["p95_ms"],
 		"p99_ms": statistics["p99_ms"],
 		"min_ms": statistics["min_ms"],
 		"max_ms": statistics["max_ms"],
@@ -303,10 +304,10 @@ func _finish_measurement() -> void:
 		"physics_ms": physics_ms,
 		"gpu_ms": GPU_TIMING_UNAVAILABLE,
 	})
-	print("%s: %s run %d avg=%.4f ms median=%.4f ms p99=%.4f ms" % [
+	print("%s: %s run %d avg=%.4f ms median=%.4f ms p95=%.4f ms p99=%.4f ms" % [
 		"PERF-2A" if _paired_mode else "PERF-1B", _current_preset,
 		_paired_repetition_index + 1 if _paired_mode else _repetition_index + 1,
-		statistics["avg_ms"], statistics["median_ms"], statistics["p99_ms"]
+		statistics["avg_ms"], statistics["median_ms"], statistics["p95_ms"], statistics["p99_ms"]
 	])
 	if _paired_mode:
 		if _paired_side_full:
@@ -356,7 +357,7 @@ func _advance_configuration() -> void:
 
 func _frame_statistics(samples: PackedFloat64Array) -> Dictionary:
 	if samples.is_empty():
-		return {"avg_ms": 0.0, "median_ms": 0.0, "p99_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0, "avg_fps": 0.0}
+		return {"avg_ms": 0.0, "median_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0, "avg_fps": 0.0}
 	var sorted := samples.duplicate()
 	sorted.sort()
 	var total := 0.0
@@ -364,10 +365,12 @@ func _frame_statistics(samples: PackedFloat64Array) -> Dictionary:
 		total += value
 	var average := total / float(samples.size())
 	var median := _nearest_rank(sorted, 0.50)
+	var p95 := _nearest_rank(sorted, 0.95)
 	var p99 := _nearest_rank(sorted, 0.99)
 	return {
 		"avg_ms": average,
 		"median_ms": median,
+		"p95_ms": p95,
 		"p99_ms": p99,
 		"min_ms": sorted[0],
 		"max_ms": sorted[sorted.size() - 1],
@@ -425,11 +428,11 @@ func _write_results() -> Dictionary:
 		csv.store_line("# requested_resolution=%dx%d actual_viewport=%dx%d seed=%d warmup_frames=%d measurement_frames=%d stabilization_frames=%d repetitions=%d" % [
 			BENCHMARK_RESOLUTION.x, BENCHMARK_RESOLUTION.y, viewport.x, viewport.y, FIXED_SEED, warmup_frames, measurement_frames, stabilization_frames, repetitions
 		])
-		csv.store_line("repetition,preset,avg_ms,median_ms,p99_ms,min_ms,max_ms,avg_fps,process_ms,physics_ms,gpu_ms")
+		csv.store_line("repetition,preset,avg_ms,median_ms,p95_ms,p99_ms,min_ms,max_ms,avg_fps,process_ms,physics_ms,gpu_ms")
 		for row in _results:
 			csv.store_line(",".join([
 				str(row["repetition"]), String(row["preset"]), _csv_value(row["avg_ms"]), _csv_value(row["median_ms"]),
-				_csv_value(row["p99_ms"]), _csv_value(row["min_ms"]), _csv_value(row["max_ms"]), _csv_value(row["avg_fps"]),
+				_csv_value(row["p95_ms"]), _csv_value(row["p99_ms"]), _csv_value(row["min_ms"]), _csv_value(row["max_ms"]), _csv_value(row["avg_fps"]),
 				_csv_value(row["process_ms"]), _csv_value(row["physics_ms"]), String(row["gpu_ms"])
 			]))
 		csv.close()
@@ -473,7 +476,7 @@ func _build_summary() -> String:
 	for preset in _benchmark_presets():
 		var aggregate := _aggregate_for(String(preset))
 		lines.append("%s | runs=%d" % [preset, aggregate["count"]])
-		lines.append("  Avg frame: %8.4f ms | Median: %8.4f ms | P99: %8.4f ms" % [aggregate["avg_ms"], aggregate["median_ms"], aggregate["p99_ms"]])
+		lines.append("  Avg frame: %8.4f ms | Median: %8.4f ms | P95: %8.4f ms | P99: %8.4f ms" % [aggregate["avg_ms"], aggregate["median_ms"], aggregate["p95_ms"], aggregate["p99_ms"]])
 		lines.append("  Min:       %8.4f ms | Max:    %8.4f ms | Avg FPS: %8.2f" % [aggregate["min_ms"], aggregate["max_ms"], aggregate["avg_fps"]])
 		lines.append("  Run variance: mean %.4f ms | stdev %.4f ms | range %.4f..%.4f ms" % [aggregate["run_mean_ms"], aggregate["run_stdev_ms"], aggregate["run_min_ms"], aggregate["run_max_ms"]])
 		lines.append("  CPU monitors: process=%s ms | physics=%s ms" % [_summary_value(aggregate["process_ms"]), _summary_value(aggregate["physics_ms"])])
@@ -542,14 +545,16 @@ func _aggregate_for(preset: String) -> Dictionary:
 		if String(row["preset"]) == preset:
 			rows.append(row)
 	if rows.is_empty():
-		return {"count": 0, "avg_ms": 0.0, "median_ms": 0.0, "p99_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0, "avg_fps": 0.0, "process_ms": null, "physics_ms": null, "run_mean_ms": 0.0, "run_stdev_ms": 0.0, "run_min_ms": 0.0, "run_max_ms": 0.0}
+		return {"count": 0, "avg_ms": 0.0, "median_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "min_ms": 0.0, "max_ms": 0.0, "avg_fps": 0.0, "process_ms": null, "physics_ms": null, "run_mean_ms": 0.0, "run_stdev_ms": 0.0, "run_min_ms": 0.0, "run_max_ms": 0.0}
 	var average := _mean_field(rows, "avg_ms")
 	var frame_medians := PackedFloat64Array()
+	var frame_p95s := PackedFloat64Array()
 	var frame_p99s := PackedFloat64Array()
 	var frame_mins := PackedFloat64Array()
 	var frame_maxs := PackedFloat64Array()
 	for row in rows:
 		frame_medians.append(float(row["median_ms"]))
+		frame_p95s.append(float(row["p95_ms"]))
 		frame_p99s.append(float(row["p99_ms"]))
 		frame_mins.append(float(row["min_ms"]))
 		frame_maxs.append(float(row["max_ms"]))
@@ -567,6 +572,7 @@ func _aggregate_for(preset: String) -> Dictionary:
 		"count": rows.size(),
 		"avg_ms": average,
 		"median_ms": _mean_packed(frame_medians),
+		"p95_ms": _mean_packed(frame_p95s),
 		"p99_ms": _mean_packed(frame_p99s),
 		"min_ms": _mean_packed(frame_mins),
 		"max_ms": _mean_packed(frame_maxs),
