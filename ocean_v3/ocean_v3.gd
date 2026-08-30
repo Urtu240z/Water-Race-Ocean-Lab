@@ -1668,8 +1668,8 @@ func _process(_delta: float) -> void:
 		if _startup_stable_frames >= 3:
 			_startup_reported = true
 			print("OCEAN STARTUP root: setup=%d ms first_stable_frame=%d ms" % [
-				(_startup_setup_usec - _startup_started_usec) / 1000,
-				(Time.get_ticks_usec() - _startup_started_usec) / 1000,
+				int(float(_startup_setup_usec - _startup_started_usec) / 1000.0),
+				int(float(Time.get_ticks_usec() - _startup_started_usec) / 1000.0),
 			])
 	if _wave_spectrum_dirty and auto_apply_wave_changes and Time.get_ticks_msec() >= _wave_spectrum_apply_at_ms:
 		apply_wave_changes()
