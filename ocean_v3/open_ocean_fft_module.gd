@@ -405,12 +405,12 @@ func _ready() -> void:
 	SimulationClock.seed_changed.connect(_on_seed_changed)
 	SimulationClock.reset_completed.connect(_on_reset_completed)
 	print("OCEAN STARTUP fft: h0=%d ms split=%d ms gpu_submit=%d ms query=%d ms surface=%d ms total=%d ms" % [
-		(h0_built_usec - startup_started_usec) / 1000,
-		(h0_split_usec - h0_built_usec) / 1000,
-		(gpu_submission_usec - h0_split_usec) / 1000,
-		(query_ready_usec - gpu_submission_usec) / 1000,
-		(surface_ready_usec - query_ready_usec) / 1000,
-		(Time.get_ticks_usec() - startup_started_usec) / 1000,
+		int(float(h0_built_usec - startup_started_usec) / 1000.0),
+		int(float(h0_split_usec - h0_built_usec) / 1000.0),
+		int(float(gpu_submission_usec - h0_split_usec) / 1000.0),
+		int(float(query_ready_usec - gpu_submission_usec) / 1000.0),
+		int(float(surface_ready_usec - query_ready_usec) / 1000.0),
+		int(float(Time.get_ticks_usec() - startup_started_usec) / 1000.0),
 	])
 
 
