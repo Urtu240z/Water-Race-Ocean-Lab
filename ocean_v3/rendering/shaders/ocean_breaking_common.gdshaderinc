@@ -183,33 +183,10 @@ vec3 open_band_crest_and_slope(vec2 world_xz, vec2 propagation, float wavelength
 	return vec3(crestness, face_slope, crest_elevation);
 }
 
-// Returns vec2(LONG contribution, MID contribution), each in [0,1]. It uses
-// actual FFT displacement/crest geometry. SHORT deliberately has no sample in
-// this function, so it cannot create a main geometric breaker candidate.
-vec2 open_break_components_at(vec2 world_xz) {
-	float long_wavelength = breaking_reference_wavelength(breaking_long_min_wavelength_m, breaking_long_max_wavelength_m);
-	float mid_wavelength = breaking_reference_wavelength(breaking_mid_min_wavelength_m, breaking_mid_max_wavelength_m);
-	float long_amplitude = max(0.5 * breaking_long_hs_m, 0.01);
-	float mid_amplitude = max(0.5 * breaking_mid_hs_m, 0.01);
-	vec3 long_geometry = open_band_crest_and_slope(world_xz, breaking_long_direction_xz, long_wavelength, long_amplitude, false);
-	vec3 mid_geometry = open_band_crest_and_slope(world_xz, breaking_mid_direction_xz, mid_wavelength, mid_amplitude, true);
-	float long_k = TAU / max(long_wavelength, 0.05);
-	float mid_k = TAU / max(mid_wavelength, 0.05);
-	float long_steepness = max(long_geometry.y, long_k * long_amplitude);
-	float mid_steepness = max(mid_geometry.y, mid_k * mid_amplitude);
-	float long_steepness_score = smoothstep(0.10, 0.30, long_steepness);
-	float mid_steepness_score = smoothstep(0.08, 0.24, mid_steepness);
-	float long_signal = long_geometry.x * long_steepness_score;
-	float mid_signal = mid_geometry.x * mid_steepness_score;
-	return clamp(vec2(long_signal, mid_signal), vec2(0.0), vec2(1.0));
-}
-
-// Step 3 local parent descriptor. This deliberately describes the crest at the
-// current world position; it does not manufacture persistent parent-wave IDs.
-// LONG and MID each contribute by measured crest support. Outputs are metres,
-// except attribution and steepness. The final two outputs are conservative
-// parent-derived safety values for a future geometry phase only.
-void parent_crest_descriptor_at(vec2 world_xz,
+// Shared Step 2/3 geometry evaluation. It keeps OPEN_BREAK and the parent
+// descriptor on the same five-position LONG/MID samples instead of evaluating
+// the local crest twice. SHORT deliberately has no sample in this function.
+void open_break_parent_geometry_at(vec2 world_xz, out vec2 components,
 		out float crest_scale_m, out float effective_height_m, out float effective_wavelength_m,
 		out vec2 dominant_direction_xz, out vec2 attribution_long_mid,
 		out float effective_steepness, out float max_lip_height_m,
@@ -224,6 +201,11 @@ void parent_crest_descriptor_at(vec2 world_xz,
 	float mid_k = TAU / max(mid_wavelength, 0.05);
 	float long_steepness = max(long_geometry.y, long_k * long_amplitude);
 	float mid_steepness = max(mid_geometry.y, mid_k * mid_amplitude);
+	float long_steepness_score = smoothstep(0.10, 0.30, long_steepness);
+	float mid_steepness_score = smoothstep(0.08, 0.24, mid_steepness);
+	float long_signal = long_geometry.x * long_steepness_score;
+	float mid_signal = mid_geometry.x * mid_steepness_score;
+	components = clamp(vec2(long_signal, mid_signal), vec2(0.0), vec2(1.0));
 	// Crestness prevents a broad trough from becoming a parent; the local
 	// elevation retains the actual FFT scale once a crest has been found.
 	float long_support = long_geometry.x * max(long_geometry.z, 0.0001);
@@ -244,6 +226,41 @@ void parent_crest_descriptor_at(vec2 world_xz,
 	effective_steepness = attribution_long_mid.x * long_steepness + attribution_long_mid.y * mid_steepness;
 	max_lip_height_m = 0.75 * effective_height_m;
 	max_forward_projection_m = 0.20 * effective_wavelength_m;
+}
+
+// Returns vec2(LONG contribution, MID contribution), each in [0,1]. It uses
+// actual FFT displacement/crest geometry. SHORT cannot create a main
+// geometric breaker candidate.
+vec2 open_break_components_at(vec2 world_xz) {
+	vec2 components;
+	float crest_scale_m;
+	float effective_height_m;
+	float effective_wavelength_m;
+	vec2 dominant_direction_xz;
+	vec2 attribution_long_mid;
+	float effective_steepness;
+	float max_lip_height_m;
+	float max_forward_projection_m;
+	open_break_parent_geometry_at(world_xz, components, crest_scale_m, effective_height_m,
+		effective_wavelength_m, dominant_direction_xz, attribution_long_mid,
+		effective_steepness, max_lip_height_m, max_forward_projection_m);
+	return components;
+}
+
+// Step 3 local parent descriptor. This deliberately describes the crest at the
+// current world position; it does not manufacture persistent parent-wave IDs.
+// LONG and MID each contribute by measured crest support. Outputs are metres,
+// except attribution and steepness. The final two outputs are conservative
+// parent-derived safety values for a future geometry phase only.
+void parent_crest_descriptor_at(vec2 world_xz,
+		out float crest_scale_m, out float effective_height_m, out float effective_wavelength_m,
+		out vec2 dominant_direction_xz, out vec2 attribution_long_mid,
+		out float effective_steepness, out float max_lip_height_m,
+		out float max_forward_projection_m) {
+	vec2 ignored_components;
+	open_break_parent_geometry_at(world_xz, ignored_components, crest_scale_m, effective_height_m,
+		effective_wavelength_m, dominant_direction_xz, attribution_long_mid,
+		effective_steepness, max_lip_height_m, max_forward_projection_m);
 }
 
 // BREAK_STRENGTH is intentionally distinct from onset. Onset answers whether a
@@ -364,4 +381,131 @@ vec3 breaking_onset_signals_at(vec2 world_xz) {
 	float depth_break = depth_break_at(world_xz, uv, field_data, metrics_data, phase_data);
 	float onset = open_break + depth_break - open_break * depth_break;
 	return clamp(vec3(open_break, depth_break, onset), vec3(0.0), vec3(1.0));
+}
+
+// One bounded Step 4 probe. The shared LONG/MID evaluation supplies both the
+// local parent data and OPEN_BREAK, so a lateral sample does not re-run Step 3
+// merely to obtain strength. DEPTH_BREAK remains local to the probe.
+void crest_segment_sample_at(vec2 world_xz, out float onset, out float strength,
+		out float effective_height_m, out float effective_wavelength_m,
+		out vec2 forward_direction_xz, out vec2 attribution_long_mid) {
+	vec2 components;
+	float crest_scale_m;
+	float effective_steepness;
+	float max_lip_height_m;
+	float max_forward_projection_m;
+	open_break_parent_geometry_at(world_xz, components, crest_scale_m, effective_height_m,
+		effective_wavelength_m, forward_direction_xz, attribution_long_mid,
+		effective_steepness, max_lip_height_m, max_forward_projection_m);
+	vec2 uv = coastal_uv(world_xz);
+	vec4 field_data = textureLod(coastal_field_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 metrics_data = textureLod(coastal_metrics_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 phase_data = textureLod(coastal_phase_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	float open_break = components.x + components.y - components.x * components.y;
+	float depth_break = depth_break_at(world_xz, uv, field_data, metrics_data, phase_data);
+	onset = clamp(open_break + depth_break - open_break * depth_break, 0.0, 1.0);
+	strength = break_strength_from_parent(onset, effective_height_m, effective_wavelength_m, effective_steepness);
+}
+
+// Step 4 spatial-only crest segment. It begins from a stronger seed then walks
+// exactly three probes to each side along the Step 3 crest tangent. A single
+// weak bridge is allowed, but two weak probes stop the trace, preventing a
+// bounded scan from joining a separate breaking lobe.
+void crest_segment_descriptor_at(vec2 seed_world_xz,
+		out vec2 segment_center_xz, out vec2 forward_direction_xz, out vec2 crest_tangent_xz,
+		out float left_extent_m, out float right_extent_m, out float total_span_m,
+		out vec4 onset_strength_stats, out vec4 parent_state,
+		out vec3 lateral_state, out float segment_coherence, out float search_radius_m) {
+	float seed_onset;
+	float seed_strength;
+	float seed_height_m;
+	float seed_wavelength_m;
+	vec2 seed_attribution;
+	crest_segment_sample_at(seed_world_xz, seed_onset, seed_strength, seed_height_m,
+		seed_wavelength_m, forward_direction_xz, seed_attribution);
+	segment_center_xz = seed_world_xz;
+	crest_tangent_xz = vec2(-forward_direction_xz.y, forward_direction_xz.x);
+	parent_state = vec4(seed_height_m, seed_wavelength_m, seed_attribution);
+	left_extent_m = 0.0;
+	right_extent_m = 0.0;
+	total_span_m = 0.0;
+	onset_strength_stats = vec4(seed_onset, seed_onset, seed_strength, seed_strength);
+	lateral_state = vec3(0.0);
+	segment_coherence = 0.0;
+	// Physical/spectral scale reference, not an implied breaker length. The
+	// practical cap is 12 m and the fixed three samples derive their spacing
+	// from it instead of using a universal one-metre march.
+	search_radius_m = min(0.40 * seed_wavelength_m + 2.0 * seed_height_m, 12.0);
+	search_radius_m = max(search_radius_m, 0.75);
+	float spacing_m = clamp(search_radius_m / 3.0, 0.25, 4.0);
+	search_radius_m = spacing_m * 3.0;
+	// Robustness heuristic: seed is deliberately stronger than continuation.
+	// It uses Step 2/3 normalised fields and never changes their semantics.
+	if (seed_onset < 0.60 || seed_strength < 0.08) return;
+	float onset_sum = seed_onset;
+	float strength_sum = seed_strength;
+	float accepted_count = 1.0;
+	float left_onset_sum = 0.0;
+	float right_onset_sum = 0.0;
+	float left_count = 0.0;
+	float right_count = 0.0;
+	segment_coherence = 1.0;
+	for (int side_index = 0; side_index < 2; side_index++) {
+		float side_sign = side_index == 0 ? -1.0 : 1.0;
+		bool tracing = true;
+		bool bridge_available = true;
+		for (int sample_index = 1; sample_index <= 3; sample_index++) {
+			if (!tracing) continue;
+			float sample_onset;
+			float sample_strength;
+			float sample_height_m;
+			float sample_wavelength_m;
+			vec2 sample_direction;
+			vec2 sample_attribution;
+			float distance_m = float(sample_index) * spacing_m;
+			crest_segment_sample_at(seed_world_xz + crest_tangent_xz * side_sign * distance_m,
+				sample_onset, sample_strength, sample_height_m, sample_wavelength_m,
+				sample_direction, sample_attribution);
+			float scale_ratio = min(sample_height_m, seed_height_m) / max(max(sample_height_m, seed_height_m), 0.05);
+			float attribution_coherence = dot(seed_attribution, sample_attribution);
+			float direction_coherence = dot(forward_direction_xz, sample_direction);
+			float local_coherence = min(min(scale_ratio, attribution_coherence), clamp(direction_coherence, 0.0, 1.0));
+			bool continues = sample_onset >= 0.42
+				&& sample_strength >= max(0.04, seed_strength * 0.30)
+				&& scale_ratio >= 0.30
+				&& attribution_coherence >= 0.55
+				&& direction_coherence >= 0.82;
+			if (continues) {
+				if (side_index == 0) {
+					left_extent_m = distance_m;
+					left_onset_sum += sample_onset;
+					left_count += 1.0;
+				} else {
+					right_extent_m = distance_m;
+					right_onset_sum += sample_onset;
+					right_count += 1.0;
+				}
+				onset_sum += sample_onset;
+				strength_sum += sample_strength;
+				accepted_count += 1.0;
+				onset_strength_stats.y = max(onset_strength_stats.y, sample_onset);
+				onset_strength_stats.w = max(onset_strength_stats.w, sample_strength);
+				segment_coherence = min(segment_coherence, local_coherence);
+			} else if (bridge_available && sample_onset >= 0.26
+					&& sample_strength >= max(0.02, seed_strength * 0.15)
+					&& attribution_coherence >= 0.45 && direction_coherence >= 0.70) {
+				// One bounded hysteresis gap. It adds no extent or aggregate itself;
+				// only a following continuation can extend past it.
+				bridge_available = false;
+			} else {
+				tracing = false;
+			}
+		}
+	}
+	total_span_m = left_extent_m + right_extent_m;
+	onset_strength_stats.x = onset_sum / accepted_count;
+	onset_strength_stats.z = strength_sum / accepted_count;
+	float left_mean = left_count > 0.0 ? left_onset_sum / left_count : 0.0;
+	float right_mean = right_count > 0.0 ? right_onset_sum / right_count : 0.0;
+	lateral_state = vec3(left_mean, right_mean, (right_extent_m - left_extent_m) / max(total_span_m, 0.001));
 }

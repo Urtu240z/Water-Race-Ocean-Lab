@@ -73,7 +73,9 @@ uniform int coastal_debug_field = 0;
 // Phase 5R.2: instrumentación de elegibilidad. 0 OFF, 1 DEPTH,
 // 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK/legacy, 5 OPEN_BREAK,
 // 6 DEPTH_BREAK, 7 BREAK_ONSET, 8 BREAK_STRENGTH, 9 PARENT_HEIGHT,
-// 10 PARENT_CREST_SCALE, 11 BAND_ATTRIBUTION (red LONG, blue MID).
+// 10 PARENT_CREST_SCALE, 11 BAND_ATTRIBUTION (red LONG, blue MID),
+// 12 SEGMENT_SPAN, 13 SEGMENT_ASYMMETRY (blue left, red right),
+// 14 SEGMENT_COHERENCE.
 uniform int breaking_debug_mode = 0;
 // Hs de LONG completo en deep water y fracción de energía del split COASTAL.
 // Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
@@ -2519,11 +2521,13 @@ void fragment() {
 	if (perf_prebreak_enabled && breaking_debug_mode > 0) {
 		float value = breaking_indices.x;
 		bool band_attribution_debug = false;
+		bool segment_asymmetry_debug = false;
 		vec2 attribution_long_mid = vec2(0.5);
+		vec2 segment_extents_m = vec2(0.0);
 		if (breaking_debug_mode == 2) value = breaking_indices.y;
 		else if (breaking_debug_mode == 3) value = breaking_indices.z;
 		else if (breaking_debug_mode == 4) value = breaking_indices.w;
-		else if (breaking_debug_mode >= 5) {
+		else if (breaking_debug_mode >= 5 && breaking_debug_mode <= 11) {
 			// STEP 2 deliberately keeps this extra FFT evaluation debug-only. The
 			// production ribbon path remains the bounded legacy Coastal detector.
 			vec3 onset_signals = breaking_onset_signals_at(ocean_base_xz);
@@ -2553,12 +2557,43 @@ void fragment() {
 					band_attribution_debug = true;
 				}
 			}
+		} else if (breaking_debug_mode >= 12) {
+			// STEP 4 stays a bounded, instant-only diagnostic. It has no candidate
+			// storage, no readback and no effect on production Coastal ribbons.
+			vec2 segment_center_xz;
+			vec2 forward_direction_xz;
+			vec2 crest_tangent_xz;
+			float left_extent_m;
+			float right_extent_m;
+			float total_span_m;
+			vec4 onset_strength_stats;
+			vec4 parent_state;
+			vec3 lateral_state;
+			float segment_coherence;
+			float search_radius_m;
+			crest_segment_descriptor_at(ocean_base_xz, segment_center_xz, forward_direction_xz,
+				crest_tangent_xz, left_extent_m, right_extent_m, total_span_m,
+				onset_strength_stats, parent_state, lateral_state, segment_coherence, search_radius_m);
+			segment_extents_m = vec2(left_extent_m, right_extent_m);
+			if (breaking_debug_mode == 12) {
+				value = total_span_m / max(2.0 * search_radius_m, 0.001);
+			} else if (breaking_debug_mode == 13) {
+				segment_asymmetry_debug = true;
+			} else {
+				value = segment_coherence;
+			}
 		}
 		// Azul (0) -> cian -> amarillo -> rojo (1), visible tanto desde top como grazing.
 		vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));
 		heat = mix(heat, vec3(1.0, 0.86, 0.08), smoothstep(0.35, 0.72, value));
 		heat = mix(heat, vec3(1.0, 0.06, 0.02), smoothstep(0.70, 1.0, value));
-		color = band_attribution_debug ? mix(vec3(0.04, 0.14, 1.0), vec3(1.0, 0.08, 0.03), attribution_long_mid.x) : heat;
+		vec3 asymmetry_color = vec3(
+			clamp(segment_extents_m.y / 12.0, 0.0, 1.0),
+			0.06,
+			clamp(segment_extents_m.x / 12.0, 0.0, 1.0)
+		);
+		color = band_attribution_debug ? mix(vec3(0.04, 0.14, 1.0), vec3(1.0, 0.08, 0.03), attribution_long_mid.x)
+			: (segment_asymmetry_debug ? asymmetry_color : heat);
 	}
 	if (coastal_delta_heatmap) {
 		float delta_value = clamp(coastal_warp_delta_m * 8.0, 0.0, 1.0);

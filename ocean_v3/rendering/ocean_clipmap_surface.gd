@@ -43,6 +43,9 @@ enum BreakingDebug {
 	PARENT_HEIGHT,
 	PARENT_CREST_SCALE,
 	BAND_ATTRIBUTION,
+	SEGMENT_SPAN,
+	SEGMENT_ASYMMETRY,
+	SEGMENT_COHERENCE,
 }
 
 ## Instrumentación temporal 3B.2B: selecciona contribuciones reales, no color.
@@ -423,7 +426,7 @@ func set_coastal_debug_field(field: int) -> void:
 
 func set_breaking_debug(mode: int) -> void:
 	## Las señales 5R.3 siguen siendo GPU/debug-only: no crean candidates CPU.
-	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.BAND_ATTRIBUTION)
+	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.SEGMENT_COHERENCE)
 	_set_all_materials_shader_parameter(&"breaking_debug_mode", _breaking_debug)
 
 
