@@ -248,7 +248,7 @@ metadata/_custom_type_script = "uid://didnedvqjuvg1"
 [node name="CoastalBakeAuthoring" type="Node" parent="." unique_id=1647447480 node_paths=PackedStringArray("source_root")]
 script = ExtResource("17_4qkou")
 coast_id = "paradise_island_phase_test"
-source_root = NodePath("../paradise_island")
+source_root = NodePath("../paradise_island/Terrain_Master_VIS")
 cell_size_m = 4.0
 optical_seabed_feather_m = null
 metadata/_custom_type_script = "uid://bgmu6kdgxmpru"

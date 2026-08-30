@@ -4,6 +4,12 @@ extends Node
 ## Herramienta offline/dev-time. Rasteriza una o varias superficies a datos
 ## 2D; el runtime sólo consulta BathymetryData y nunca vuelve a tocar triángulos.
 
+## Bathymetry samples represent the seabed/top surface, not near-vertical coast
+## walls. Mesh winding is not part of this contract, hence the absolute value.
+## Without this filter, a side face can win the XZ projection and create a false
+## deep-water sample immediately beside the shoreline.
+const MIN_SURFACE_HORIZONTALNESS := 0.7
+
 @export var source_root: Node3D
 @export var source: MeshInstance3D
 @export var sea_level_y := 0.0
@@ -254,6 +260,10 @@ func _rasterize_triangles_to_top_surface(world_faces: PackedVector3Array, data, 
 		var a: Vector3 = world_faces[face_index]
 		var b: Vector3 = world_faces[face_index + 1]
 		var c: Vector3 = world_faces[face_index + 2]
+		var face_cross: Vector3 = (b - a).cross(c - a)
+		var face_length_squared: float = face_cross.length_squared()
+		if face_length_squared <= 1.0e-12 or absf(face_cross.y) / sqrt(face_length_squared) < MIN_SURFACE_HORIZONTALNESS:
+			continue
 		var v0 := Vector2(b.x - a.x, b.z - a.z)
 		var v1 := Vector2(c.x - a.x, c.z - a.z)
 		var det := v0.x * v1.y - v1.x * v0.y
