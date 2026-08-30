@@ -29,6 +29,9 @@ var _wave_transition_target_preset: OceanWavePreset = null
 var _wave_transition_target_configs: Array[OpenOceanFFTConfig] = []
 var _wave_transition_start_short_geometry := 0.25
 var _performance_sync_pending := false
+## Ephemeral A/B controls consumed only by the Ocean V3 benchmark. They are
+## deliberately not exported quality settings and always default to production.
+var _benchmark_diagnostic_gates: Dictionary = {}
 var _performance_overlay_layer: CanvasLayer
 var _performance_overlay_label: Label
 
@@ -1212,6 +1215,13 @@ func set_performance_profile(profile: Dictionary) -> void:
 	_apply_performance_profile()
 
 
+func set_benchmark_diagnostic_gates(gates: Dictionary) -> void:
+	## Benchmark-only: each false value removes one coherent visual block. This
+	## does not change authored parameters or persist into scene resources.
+	_benchmark_diagnostic_gates = gates.duplicate(true)
+	_request_visual_sync()
+
+
 func apply_performance_preset(preset: StringName) -> bool:
 	## Presets are intentionally explicit so automated A/B tests can request them.
 	var key := String(preset).to_upper().replace("-", "_").replace(" ", "_")
@@ -2023,6 +2033,12 @@ func _sync_water_visual_parameters() -> void:
 		and surface_normal_texture_b != null \
 		and surface_warp_texture != null
 	material.set_shader_parameter(&"surface_detail_enabled", detail_ready)
+	material.set_shader_parameter(&"perf_benchmark_surface_detail_enabled", bool(_benchmark_diagnostic_gates.get("surface_detail", true)))
+	material.set_shader_parameter(&"perf_benchmark_debug_reflection_enabled", bool(_benchmark_diagnostic_gates.get("debug_reflection", true)))
+	material.set_shader_parameter(&"perf_benchmark_crest_shape_enabled", bool(_benchmark_diagnostic_gates.get("crest_shape", true)))
+	material.set_shader_parameter(&"perf_benchmark_near_ssr_enabled", bool(_benchmark_diagnostic_gates.get("near_ssr", true)))
+	material.set_shader_parameter(&"perf_benchmark_optics_enabled", bool(_benchmark_diagnostic_gates.get("optics", true)))
+	material.set_shader_parameter(&"perf_benchmark_refraction_wave_enabled", bool(_benchmark_diagnostic_gates.get("refraction_wave", true)))
 	if detail_ready:
 		material.set_shader_parameter(&"surface_normal_texture_a", surface_normal_texture_a)
 		material.set_shader_parameter(&"surface_normal_texture_b", surface_normal_texture_b)

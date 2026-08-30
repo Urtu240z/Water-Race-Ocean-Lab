@@ -113,6 +113,14 @@ uniform float coastal_time_s = 0.0;
 uniform vec3 base_color : source_color = vec3(0.018, 0.075, 0.095);
 // 5R.1: debug de forma (silueta/crest/valle/choppiness). Neutro, sin foam/emission.
 uniform bool ocean_shape_debug = false;
+// R4B benchmark-only runtime gates. They default to production behaviour and
+// are set only by OceanV3.set_benchmark_diagnostic_gates().
+uniform bool perf_benchmark_crest_shape_enabled = true;
+uniform bool perf_benchmark_surface_detail_enabled = true;
+uniform bool perf_benchmark_debug_reflection_enabled = true;
+uniform bool perf_benchmark_near_ssr_enabled = true;
+uniform bool perf_benchmark_optics_enabled = true;
+uniform bool perf_benchmark_refraction_wave_enabled = true;
 // 5R.1C: crest sharpening por compresión/convergencia (geometría, sin lip).
 uniform float ocean_crest_sharpen_strength = 1.0;
 uniform float ocean_crest_sharpen_threshold = 0.15;
@@ -1115,7 +1123,7 @@ void vertex() {
 
 	// 5R.1C / Reflection 1C: ambos consumidores reutilizan la misma medida de
 	// convexidad LONG+MID. La modulación de roughness no cambia la geometría.
-	bool crest_shape_data_needed = module_enabled && !coastal_monochromatic_debug
+	bool crest_shape_data_needed = perf_benchmark_crest_shape_enabled && module_enabled && !coastal_monochromatic_debug
 		&& (ocean_crest_sharpen_strength > 0.0 || reflection_crest_specular_enabled);
 	if (crest_shape_data_needed) {
 		float swell_lambda = coastal_metrics.g > 0.5 ? coastal_metrics.g : (TAU / max(coastal_k0_rad_m, 0.001));
@@ -1853,7 +1861,7 @@ vec3 reflection_near_ssr(vec3 water_position_view, vec3 macro_normal_view,
 		camera_distance
 	);
 	float roughness_fade = 1.0 - smoothstep(0.55, 0.90, final_roughness);
-	if (!reflection_near_ssr_enabled || camera_distance >= distance_limit
+	if (!reflection_near_ssr_enabled || !perf_benchmark_near_ssr_enabled || camera_distance >= distance_limit
 			|| distance_fade <= 0.001 || roughness_fade <= 0.001) {
 		return vec3(0.0);
 	}
@@ -2087,7 +2095,7 @@ void fragment() {
 	float debug_camera_distance = distance(ocean_world_xz, camera_world_xz);
 	float debug_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
 	vec2 debug_reflection_metrics = vec2(0.0);
-	if (perf_spectral_enabled) {
+	if (perf_benchmark_debug_reflection_enabled && perf_spectral_enabled) {
 		debug_reflection_metrics = reflection_unresolved_detail_metrics(
 			ocean_base_xz, debug_footprint, zone_mid_amplitude, zone_short_amplitude);
 	}
@@ -2320,7 +2328,7 @@ void fragment() {
 		visual_normal = normalize(visual_normal + micro_offset_view * surface_foam_mask);
 	}
 	vec3 surface_detail_offset_view = vec3(0.0);
-	if (surface_detail_enabled) {
+	if (surface_detail_enabled && perf_benchmark_surface_detail_enabled) {
 		vec3 detail_normal = sample_surface_detail(surface_detail_carrier_xz(), camera_distance);
 		vec2 detail_slope = detail_normal.xy / max(detail_normal.z, 0.08);
 		surface_detail_offset_view = mat3(VIEW_MATRIX) * vec3(
@@ -2334,8 +2342,10 @@ void fragment() {
 	NORMAL = visual_normal;
 
 	vec3 view_direction = normalize(VIEW);
-	debug_sun_specular = sun_specular_brdf(
-		normalize(visual_normal), view_direction, debug_reflection_roughness);
+	if (perf_benchmark_debug_reflection_enabled) {
+		debug_sun_specular = sun_specular_brdf(
+			normalize(visual_normal), view_direction, debug_reflection_roughness);
+	}
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
 	float reflection_pixel_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
 	vec2 reflection_detail_metrics = vec2(0.0);
@@ -2754,7 +2764,7 @@ void fragment() {
 			0.0,
 			1.0
 		);
-		if (water_optics_enabled) {
+		if (water_optics_enabled && perf_benchmark_optics_enabled) {
 			// 5R.3C: profundidad óptica real desde el depth buffer.
 			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
 			bool scene_is_sky = scene_raw_depth <= 0.000001;
@@ -3117,15 +3127,17 @@ void fragment() {
 			// right authority for optical deformation: a shallow submerged object must
 			// still distort even when the bathymetry below it is deep. The existing R2
 			// view-ray path remains the authority for transmission and candidate depth.
-			refraction_wave_depth_factor = 1.0 - smoothstep(
-				refraction_depth_start_m,
-				max(refraction_depth_end_m, refraction_depth_start_m + 0.001),
-				bounded_view_water_path_m
-			);
-			if (refraction_wave_signal_valid) {
-				refraction_wave_slope = refraction_long_slope * refraction_long_weight
-					+ refraction_mid_slope * refraction_mid_weight
-					+ refraction_short_slope * refraction_short_weight;
+			if (perf_benchmark_refraction_wave_enabled) {
+				refraction_wave_depth_factor = 1.0 - smoothstep(
+					refraction_depth_start_m,
+					max(refraction_depth_end_m, refraction_depth_start_m + 0.001),
+					bounded_view_water_path_m
+				);
+				if (refraction_wave_signal_valid) {
+					refraction_wave_slope = refraction_long_slope * refraction_long_weight
+						+ refraction_mid_slope * refraction_mid_weight
+						+ refraction_short_slope * refraction_short_weight;
+				}
 			}
 			if (water_refraction_enabled) {
 				vec2 refraction_screen_size = max(

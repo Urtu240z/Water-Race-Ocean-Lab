@@ -22,6 +22,10 @@ const ISOLATED_PRESETS := [
 const PAIRED_TESTS := [
 	"NO_SSPR", "NO_REFRACTION", "NO_FOAM", "NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"
 ]
+const BASE_PAIRED_TESTS := [
+	"NO_BASE_OPTICS", "NO_BASE_NEAR_SSR", "NO_BASE_CREST_SHAPE",
+	"NO_BASE_SURFACE_DETAIL", "NO_BASE_REFRACTION_WAVE", "NO_BASE_DEBUG_REFLECTION"
+]
 const GPU_TIMING_UNAVAILABLE := "unavailable"
 
 @export_group("Benchmark schedule")
@@ -60,6 +64,8 @@ var _summary_path := ""
 var _paired_csv_path := ""
 var _exit_countdown_frames := -1
 var _paired_mode := false
+var _paired_baseline_preset := "FULL"
+var _paired_test_filter := PackedStringArray()
 var _paired_side_full := true
 var _paired_repetition_index := 0
 var _paired_test_index := 0
@@ -136,7 +142,12 @@ func _configure_camera() -> void:
 func _read_command_line_overrides() -> void:
 	# These options make syntax/smoke validation short without changing the
 	# production defaults of 300/1200/3.
-	for argument in OS.get_cmdline_args():
+	# Godot strips arguments following `--` from get_cmdline_args() on some
+	# launch paths, placing them in get_cmdline_user_args() instead. Preserve
+	# both so command-line benchmark modes cannot silently fall back to defaults.
+	var arguments: PackedStringArray = OS.get_cmdline_args()
+	arguments.append_array(OS.get_cmdline_user_args())
+	for argument in arguments:
 		if argument.begins_with("--ocean-benchmark-warmup="):
 			warmup_frames = maxi(int(argument.get_slice("=", 1)), 0)
 		elif argument.begins_with("--ocean-benchmark-measure="):
@@ -147,8 +158,13 @@ func _read_command_line_overrides() -> void:
 			repetitions = clampi(int(argument.get_slice("=", 1)), 1, 10)
 		elif argument == "--ocean-benchmark-paired":
 			run_mode = "PAIRED"
+		elif argument == "--ocean-benchmark-base-paired":
+			run_mode = "PAIRED"
+			_paired_baseline_preset = "BASE"
+		elif argument.begins_with("--ocean-benchmark-paired-tests="):
+			_paired_test_filter = PackedStringArray(argument.get_slice("=", 1).split(",", false))
 		elif argument.begins_with("--ocean-benchmark-paired-repetitions="):
-			paired_repetitions = clampi(int(argument.get_slice("=", 1)), 5, 10)
+			paired_repetitions = clampi(int(argument.get_slice("=", 1)), 3, 10)
 		elif argument.begins_with("--ocean-benchmark-ready-timeout="):
 			readiness_timeout_frames = maxi(int(argument.get_slice("=", 1)), 1)
 		elif argument == "--ocean-benchmark-core-only":
@@ -163,7 +179,7 @@ func _benchmark_presets() -> Array:
 	if full_only:
 		return ["FULL"]
 	if run_mode.to_upper() == "PAIRED":
-		return ["FULL"] + PAIRED_TESTS
+		return [_paired_baseline_preset] + _paired_tests()
 	var result: Array = CORE_PRESETS.duplicate()
 	if include_isolated_presets:
 		result.append_array(ISOLATED_PRESETS)
@@ -224,17 +240,21 @@ func _set_clean_benchmark_state() -> void:
 
 func _apply_current_configuration() -> void:
 	if _paired_mode:
-		_current_preset = "FULL" if _paired_side_full else String(PAIRED_TESTS[_paired_test_index])
+		_current_preset = _paired_baseline_preset if _paired_side_full else String(_paired_tests()[_paired_test_index])
 	else:
 		var presets := _benchmark_presets()
 		_current_preset = String(presets[_preset_index])
+	_ocean.set_benchmark_diagnostic_gates({})
 	if CORE_PRESETS.has(_current_preset):
 		if not _ocean.apply_performance_preset(StringName(_current_preset)):
 			push_error("PERF-1B: failed to apply preset %s" % _current_preset)
+	elif _paired_mode and _paired_baseline_preset == "BASE":
+		_ocean.apply_performance_preset(&"BASE")
+		_ocean.set_benchmark_diagnostic_gates(_base_diagnostic_gates(_current_preset))
 	else:
 		_ocean.set_performance_profile(_isolated_profile(_current_preset))
 	if _paired_mode:
-		print("PERF-2A: pair %d/%d %s -> %s" % [_paired_repetition_index + 1, paired_repetitions, "FULL" if _paired_side_full else "TEST", _current_preset])
+		print("PERF-2A: pair %d/%d %s -> %s" % [_paired_repetition_index + 1, paired_repetitions, _paired_baseline_preset if _paired_side_full else "TEST", _current_preset])
 	else:
 		print("PERF-1B: repetition %d/%d -> %s" % [_repetition_index + 1, repetitions, _current_preset])
 
@@ -261,6 +281,29 @@ func _isolated_profile(name: String) -> Dictionary:
 		"NO_SURFACE_FOAM_RENDER": profile["surface_foam_render"] = false
 		_: push_error("PERF-1B: unsupported isolated profile %s" % name)
 	return profile
+
+
+func _paired_tests() -> Array:
+	var available: Array = BASE_PAIRED_TESTS if _paired_baseline_preset == "BASE" else PAIRED_TESTS
+	if _paired_test_filter.is_empty():
+		return available
+	var filtered: Array = []
+	for test in available:
+		if _paired_test_filter.has(test):
+			filtered.append(test)
+	return filtered
+
+
+func _base_diagnostic_gates(name: String) -> Dictionary:
+	match name:
+		"NO_BASE_OPTICS": return {"optics": false}
+		"NO_BASE_NEAR_SSR": return {"near_ssr": false}
+		"NO_BASE_CREST_SHAPE": return {"crest_shape": false}
+		"NO_BASE_SURFACE_DETAIL": return {"surface_detail": false}
+		"NO_BASE_REFRACTION_WAVE": return {"refraction_wave": false}
+		"NO_BASE_DEBUG_REFLECTION": return {"debug_reflection": false}
+		_: push_error("PERF-R4B: unsupported BASE diagnostic %s" % name)
+	return {}
 
 
 func _begin_warmup() -> void:
@@ -333,7 +376,7 @@ func _finish_measurement() -> void:
 			"test_median_ms": statistics["median_ms"],
 		})
 		_paired_test_index += 1
-		if _paired_test_index >= PAIRED_TESTS.size():
+		if _paired_test_index >= _paired_tests().size():
 			_paired_test_index = 0
 			_paired_repetition_index += 1
 			if _paired_repetition_index >= paired_repetitions:
@@ -449,7 +492,7 @@ func _write_results() -> Dictionary:
 		if paired_csv == null:
 			push_error("PERF-2A: cannot open paired CSV result path %s" % ProjectSettings.globalize_path(paired_csv_path))
 		else:
-			paired_csv.store_line("# paired_repetitions=%d tests=%s" % [paired_repetitions, ";".join(PAIRED_TESTS)])
+			paired_csv.store_line("# paired_repetitions=%d baseline=%s tests=%s" % [paired_repetitions, _paired_baseline_preset, ";".join(_paired_tests())])
 			paired_csv.store_line("repetition,test_preset,full_avg_ms,test_avg_ms,delta_ms,full_median_ms,test_median_ms")
 			for row in _paired_deltas:
 				paired_csv.store_line(",".join([
@@ -488,13 +531,13 @@ func _build_summary() -> String:
 		lines.append("  Min:       %8.4f ms | Max:    %8.4f ms | Avg FPS: %8.2f" % [aggregate["min_ms"], aggregate["max_ms"], aggregate["avg_fps"]])
 		lines.append("  Run variance: mean %.4f ms | stdev %.4f ms | range %.4f..%.4f ms" % [aggregate["run_mean_ms"], aggregate["run_stdev_ms"], aggregate["run_min_ms"], aggregate["run_max_ms"]])
 		lines.append("  CPU monitors: process=%s ms | physics=%s ms" % [_summary_value(aggregate["process_ms"]), _summary_value(aggregate["physics_ms"])])
-	var full := _aggregate_for("FULL")
+	var full := _aggregate_for(_paired_baseline_preset if _paired_mode else "FULL")
 	lines.append("")
-	lines.append("ESTIMATED MARGINAL FRAME COST RELATIVE TO FULL")
-	lines.append("delta_ms = FULL_avg_ms - TEST_avg_ms; interactions are not additive costs")
+	lines.append("ESTIMATED MARGINAL FRAME COST RELATIVE TO %s" % (_paired_baseline_preset if _paired_mode else "FULL"))
+	lines.append("delta_ms = baseline_avg_ms - TEST_avg_ms; interactions are not additive costs")
 	for preset in _benchmark_presets():
 		var name := String(preset)
-		if name == "FULL":
+		if name == (_paired_baseline_preset if _paired_mode else "FULL"):
 			continue
 		var aggregate := _aggregate_for(name)
 		var delta_ms: float = full["avg_ms"] - aggregate["avg_ms"]
@@ -503,20 +546,21 @@ func _build_summary() -> String:
 	if _paired_mode:
 		lines.append("")
 		lines.append("PAIRED DECOMPOSITION")
-		lines.append("Each TEST is immediately paired with a preceding FULL run after the same stabilization/warm-up protocol.")
-		for test in PAIRED_TESTS:
+		lines.append("Each TEST is immediately paired with the preceding %s run after the same stabilization/warm-up protocol." % _paired_baseline_preset)
+		for test in _paired_tests():
 			var pair_aggregate := _paired_delta_aggregate(test)
 			lines.append("%-24s pairs=%d | delta mean %8.4f ms | median %8.4f ms | stdev %8.4f ms | range %.4f..%.4f ms" % [
 				test, pair_aggregate["count"], pair_aggregate["mean_ms"], pair_aggregate["median_ms"],
 				pair_aggregate["stdev_ms"], pair_aggregate["min_ms"], pair_aggregate["max_ms"]
 			])
-		var additive := 0.0
-		for test in ["NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"]:
-			additive += float(_paired_delta_aggregate(test)["mean_ms"])
-		var observed_no_foam := _paired_delta_aggregate("NO_FOAM")
-		lines.append("Additive interaction: sum(individual foam deltas)=%.4f ms | NO_FOAM paired delta=%.4f ms | residual=%.4f ms" % [
-			additive, observed_no_foam["mean_ms"], observed_no_foam["mean_ms"] - additive
-		])
+		if _paired_baseline_preset == "FULL":
+			var additive := 0.0
+			for test in ["NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"]:
+				additive += float(_paired_delta_aggregate(test)["mean_ms"])
+			var observed_no_foam := _paired_delta_aggregate("NO_FOAM")
+			lines.append("Additive interaction: sum(individual foam deltas)=%.4f ms | NO_FOAM paired delta=%.4f ms | residual=%.4f ms" % [
+				additive, observed_no_foam["mean_ms"], observed_no_foam["mean_ms"] - additive
+			])
 	lines.append("")
 	lines.append("Notes: no GPU sync/readback is used. GPU time is unavailable; do not infer GPU cost from FPS.")
 	lines.append("Coastal bake is resident and included; no per-frame bake is performed by the benchmark.")
