@@ -72,7 +72,8 @@ uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
 // Phase 5R.2: instrumentación de elegibilidad. 0 OFF, 1 DEPTH,
 // 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK/legacy, 5 OPEN_BREAK,
-// 6 DEPTH_BREAK, 7 BREAK_ONSET.
+// 6 DEPTH_BREAK, 7 BREAK_ONSET, 8 BREAK_STRENGTH, 9 PARENT_HEIGHT,
+// 10 PARENT_CREST_SCALE, 11 BAND_ATTRIBUTION (red LONG, blue MID).
 uniform int breaking_debug_mode = 0;
 // Hs de LONG completo en deep water y fracción de energía del split COASTAL.
 // Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
@@ -160,8 +161,8 @@ uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
 uniform vec4 horizon_water_color : source_color = vec4(0.025, 0.22, 0.34, 1.0);
 uniform vec4 trough_tint : source_color = vec4(0.002, 0.025, 0.075, 1.0);
 uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
-// Legacy scalar retained for material/resource compatibility. Production
-// water optics use absorption_coeff_rgb.
+// Legacy absorption scalar retained for material/resource compatibility.
+// Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.12, 0.055);
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
@@ -176,16 +177,15 @@ uniform float alpha_depth_fade_end_m : hint_range(0.1, 100.0, 0.1) = 12.0;
 uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
-uniform float refraction_strength : hint_range(0.0, 0.05, 0.0005) = 0.009;
 uniform float refraction_micro_normal_strength : hint_range(0.0, 0.5, 0.01) = 0.15;
 uniform float refraction_max_offset_px : hint_range(0.0, 64.0, 1.0) = 24.0;
 uniform float refraction_depth_tolerance_m : hint_range(0.0, 2.0, 0.01) = 0.35;
 // Refraction V2: weights for the same filtered LONG/MID/SHORT slope signal
 // used by pixel_ocean_normal(). These affect only the refraction normal.
-uniform float refraction_wave_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
-uniform float refraction_long_weight : hint_range(0.0, 2.0, 0.01) = 0.30;
-uniform float refraction_mid_weight : hint_range(0.0, 2.0, 0.01) = 0.55;
-uniform float refraction_short_weight : hint_range(0.0, 2.0, 0.01) = 0.15;
+uniform float refraction_wave_strength : hint_range(0.0, 20.0, 0.01) = 1.0;
+uniform float refraction_long_weight : hint_range(0.0, 20.0, 0.01) = 0.30;
+uniform float refraction_mid_weight : hint_range(0.0, 20.0, 0.01) = 0.55;
+uniform float refraction_short_weight : hint_range(0.0, 20.0, 0.01) = 0.15;
 uniform float refraction_depth_start_m : hint_range(0.0, 50.0, 0.1) = 1.0;
 uniform float refraction_depth_end_m : hint_range(0.1, 100.0, 0.1) = 20.0;
 // R3 body polish. These controls add bounded single-pass water-column
@@ -414,6 +414,10 @@ varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculad
 varying float shore_vertical_weight_varying;
 varying float shore_horizontal_weight_varying;
 varying float shore_pre_envelope_height;
+// Refraction V2 in VERTEX mode reuses these already calculated vertex slopes.
+// LONG/MID are packed together to stay within the varying-location budget.
+varying vec4 refraction_vertex_long_mid_slope;
+varying vec2 refraction_vertex_short_slope;
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -942,6 +946,8 @@ void vertex() {
 	shore_vertical_weight_varying = 1.0;
 	shore_horizontal_weight_varying = 1.0;
 	shore_pre_envelope_height = 0.0;
+	refraction_vertex_long_mid_slope = vec4(0.0);
+	refraction_vertex_short_slope = vec2(0.0);
 	coastal_field = vec4(0.0);
 	coastal_metrics = vec4(0.0);
 	coastal_phase_data = vec4(0.0);
@@ -1046,14 +1052,15 @@ void vertex() {
 		warp_jacobian.g * slope_deep.x + warp_jacobian.a * slope_deep.y
 	);
 	vec2 slope_coastal = mix(slope_open, slope_warped_world, warp_confidence);
-	vec2 slope = (slope_coastal * zone_long_amplitude * effective_shoaling + long_coastal_height * zone_grad_long)
+	vec2 long_slope_component = (slope_coastal * zone_long_amplitude * effective_shoaling + long_coastal_height * zone_grad_long)
 		* coastal_weight * coastal_gain;
 	vec3 long_remainder_normal = normalize(textureLod(normal_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rgb);
-	slope += (slope_from_normal(long_remainder_normal) * zone_long_amplitude + long_remainder_height * zone_grad_long) * remainder_weight;
-	slope += (slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * zone_mid_amplitude + mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
+	long_slope_component += (slope_from_normal(long_remainder_normal) * zone_long_amplitude + long_remainder_height * zone_grad_long) * remainder_weight;
+	vec2 mid_slope_component = (slope_from_normal(normalize(textureLod(normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb)) * zone_mid_amplitude + mid_height * zone_grad_mid) * mid_weight * mid_short_weight;
 	// SHORT no debe grabar los anillos del clipmap en la normal VERTEX.
-	slope += (slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * zone_short_amplitude + short_height * zone_grad_short)
+	vec2 short_slope_component = (slope_from_normal(normalize(textureLod(normal_short, spectrum_uv(world_xz, domain_short_m), 0.0).rgb)) * zone_short_amplitude + short_height * zone_grad_short)
 		* short_weight * mid_short_weight * short_vertex_normal_strength;
+	vec2 slope = long_slope_component + mid_slope_component + short_slope_component;
 	vec3 ocean_normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 
 	if (coastal_monochromatic_debug) {
@@ -1163,6 +1170,11 @@ void vertex() {
 	displacement.y *= shore_vertical_weight_varying;
 	vec2 shore_final_slope = slope * shore_vertical_weight_varying
 		+ shore_pre_envelope_height * shore_vertical_gradient;
+	refraction_vertex_long_mid_slope = vec4(
+		long_slope_component * shore_vertical_weight_varying,
+		mid_slope_component * shore_vertical_weight_varying
+	);
+	refraction_vertex_short_slope = short_slope_component * shore_vertical_weight_varying;
 	ocean_normal = !module_enabled ? vec3(0.0, 1.0, 0.0) : normalize(vec3(-shore_final_slope.x, 1.0, -shore_final_slope.y));
 	// Production handoff is deliberately after the shoreline envelope: the
 	// stabilized FFT remains the host, while only the tracked breaker footprint
@@ -2251,6 +2263,15 @@ void fragment() {
 			-refraction_filtered_slope.y
 		));
 		refraction_wave_signal_valid = true;
+	} else if (perf_spectral_enabled) {
+		// VERTEX production path: use the interpolated band slopes computed by
+		// vertex() from the same four FFT normal samples already used by geometry.
+		refraction_long_slope = refraction_vertex_long_mid_slope.xy;
+		refraction_mid_slope = refraction_vertex_long_mid_slope.zw;
+		refraction_short_slope = refraction_vertex_short_slope;
+		refraction_filtered_slope = refraction_long_slope
+			+ refraction_mid_slope + refraction_short_slope;
+		refraction_wave_signal_valid = true;
 	} else {
 		shading_normal_world = normalize(derived_normal);
 	}
@@ -2494,6 +2515,8 @@ void fragment() {
 	}
 	if (perf_prebreak_enabled && breaking_debug_mode > 0) {
 		float value = breaking_indices.x;
+		bool band_attribution_debug = false;
+		vec2 attribution_long_mid = vec2(0.5);
 		if (breaking_debug_mode == 2) value = breaking_indices.y;
 		else if (breaking_debug_mode == 3) value = breaking_indices.z;
 		else if (breaking_debug_mode == 4) value = breaking_indices.w;
@@ -2503,13 +2526,36 @@ void fragment() {
 			vec3 onset_signals = breaking_onset_signals_at(ocean_base_xz);
 			if (breaking_debug_mode == 5) value = onset_signals.x;
 			else if (breaking_debug_mode == 6) value = onset_signals.y;
-			else value = onset_signals.z;
+			else if (breaking_debug_mode == 7) value = onset_signals.z;
+			else {
+				float crest_scale_m;
+				float effective_height_m;
+				float effective_wavelength_m;
+				vec2 dominant_direction_xz;
+				float effective_steepness;
+				float max_lip_height_m;
+				float max_forward_projection_m;
+				parent_crest_descriptor_at(
+					ocean_base_xz, crest_scale_m, effective_height_m, effective_wavelength_m,
+					dominant_direction_xz, attribution_long_mid, effective_steepness,
+					max_lip_height_m, max_forward_projection_m
+				);
+				if (breaking_debug_mode == 8) {
+					value = break_strength_from_parent(onset_signals.z, effective_height_m, effective_wavelength_m, effective_steepness);
+				} else if (breaking_debug_mode == 9) {
+					value = smoothstep(0.10, 1.25, effective_height_m);
+				} else if (breaking_debug_mode == 10) {
+					value = smoothstep(0.05, 0.625, crest_scale_m);
+				} else {
+					band_attribution_debug = true;
+				}
+			}
 		}
 		// Azul (0) -> cian -> amarillo -> rojo (1), visible tanto desde top como grazing.
 		vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));
 		heat = mix(heat, vec3(1.0, 0.86, 0.08), smoothstep(0.35, 0.72, value));
 		heat = mix(heat, vec3(1.0, 0.06, 0.02), smoothstep(0.70, 1.0, value));
-		color = heat;
+		color = band_attribution_debug ? mix(vec3(0.04, 0.14, 1.0), vec3(1.0, 0.08, 0.03), attribution_long_mid.x) : heat;
 	}
 	if (coastal_delta_heatmap) {
 		float delta_value = clamp(coastal_warp_delta_m * 8.0, 0.0, 1.0);
@@ -2975,7 +3021,7 @@ void fragment() {
 				distance_opacity
 			);
 
-			// R2: derive the refraction ray from the clean FFT macro normal and IOR.
+			// R2: derive the refraction ray from the V2 normal and IOR.
 			// Surface Detail contributes only through the already sampled detail offset;
 			// foam normals deliberately stay out of this path.
 			vec3 optical_scene = body_component + scattering_component;
@@ -3027,7 +3073,6 @@ void fragment() {
 					+ surface_detail_offset_view
 					* surface_normal_strength
 					* refraction_micro_normal_strength
-					* (water_optics_debug_mode == 40 ? 0.0 : 1.0)
 				);
 				// V2 changes only the normal driving the established R2 ray. The
 				// projection, candidate depth sample, validity and pixel clamp below
@@ -3095,11 +3140,6 @@ void fragment() {
 						candidate_refracted_uv = water_optics_project_view_position(
 							candidate_position_view, projection_matrix, projection_valid);
 						if (projection_valid) {
-							// refraction_strength remains the post-geometry artistic gain;
-							// its historic default 0.009 maps to nominal gain 1.
-							float refraction_gain = max(refraction_strength, 0.0) / 0.009;
-							candidate_refracted_uv = SCREEN_UV
-								+ (candidate_refracted_uv - SCREEN_UV) * refraction_gain;
 							vec2 candidate_offset_px = (candidate_refracted_uv - SCREEN_UV) * refraction_screen_size;
 							float candidate_offset_length_px = length(candidate_offset_px);
 							float max_offset_px = max(refraction_max_offset_px, 0.0);
@@ -3176,8 +3216,7 @@ void fragment() {
 								0.0,
 								1.0
 							);
-							float debug_offset_scale = water_optics_debug_mode == 40 ? 8.0 : 1.0;
-							refraction_final_offset_px = candidate_offset_px * refraction_validity * debug_offset_scale;
+							refraction_final_offset_px = candidate_offset_px * refraction_validity;
 						}
 					}
 				}

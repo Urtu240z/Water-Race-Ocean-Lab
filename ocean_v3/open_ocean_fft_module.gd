@@ -819,7 +819,8 @@ func ocean_crest_sharpen_debug_name() -> String:
 func toggle_ocean_normal_fragment() -> void:
 	## 5R2: A/B normal shading FRAGMENT vs VERTEX. No altera geometría.
 	_ocean_normal_fragment = not _ocean_normal_fragment
-	surface.get_surface_material().set_shader_parameter(&"ocean_normal_fragment", _ocean_normal_fragment)
+	# Keep the base material and any active per-LOD debug material in lockstep.
+	surface.set_surface_shader_parameter(&"ocean_normal_fragment", _ocean_normal_fragment)
 
 
 func ocean_normal_fragment_name() -> String:
