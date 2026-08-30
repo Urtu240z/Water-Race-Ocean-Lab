@@ -1,0 +1,38 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://ocean_v3/tests/performance/breaker_ribbon_p1_scaling_benchmark.gd" id="1_benchmark"]
+[ext_resource type="PackedScene" path="res://ocean_v3/ocean_v3.tscn" id="2_ocean"]
+[ext_resource type="Resource" path="res://ocean_v3/presets/waves/rough.tres" id="3_wave"]
+[ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/coastal_bake.tres" id="4_coastal"]
+
+[sub_resource type="Environment" id="Environment_benchmark"]
+background_mode = 1
+background_color = Color(0.015, 0.035, 0.06, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.25, 0.34, 0.45, 1)
+ambient_light_energy = 0.65
+reflected_light_source = 2
+tonemap_mode = 2
+
+[node name="BreakerRibbonP1ScalingBenchmark" type="Node3D"]
+script = ExtResource("1_benchmark")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_benchmark")
+
+[node name="BenchmarkLight" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-42, -28, 0)
+light_color = Color(1, 0.94, 0.84, 1)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="BenchmarkCamera" type="Camera3D" parent="."]
+current = true
+
+[node name="OceanV3" parent="." instance=ExtResource("2_ocean")]
+wave_preset = ExtResource("3_wave")
+coastal_bake_asset = ExtResource("4_coastal")
+coastal_enabled_on_start = true
+reflection_sspr_enabled = true
+perf_overlay_enabled = false
+foam_debug_mode = 0

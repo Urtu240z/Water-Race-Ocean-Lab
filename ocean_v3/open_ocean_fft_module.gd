@@ -1533,6 +1533,11 @@ func set_breaker_performance_diagnostics_enabled(enabled: bool) -> void:
 		_breaker_pool.set_performance_diagnostics_enabled(enabled)
 
 
+func set_breaker_performance_diagnostics_timing_enabled(enabled: bool) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_performance_diagnostics_timing_enabled(enabled)
+
+
 func reset_breaker_performance_diagnostics() -> void:
 	if _breaker_pool != null:
 		_breaker_pool.reset_performance_diagnostics()
@@ -1542,6 +1547,12 @@ func breaker_performance_diagnostics_snapshot() -> Dictionary:
 	if _breaker_pool == null:
 		return {}
 	return _breaker_pool.performance_diagnostics_snapshot()
+
+
+func configure_breaker_performance_checkpoint_active_breakers(active_count: int, age_s: float) -> Dictionary:
+	if _breaker_pool == null:
+		return {"configured": false, "reason": "POOL_UNAVAILABLE", "requested_active": active_count}
+	return _breaker_pool.configure_performance_checkpoint_active_breakers(active_count, age_s)
 
 
 func breaker_tracking_snapshot() -> Array:

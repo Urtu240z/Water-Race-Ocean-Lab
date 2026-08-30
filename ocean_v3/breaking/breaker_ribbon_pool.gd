@@ -224,6 +224,28 @@ var _performance_diagnostic_detector_ticks := 0
 var _performance_diagnostic_detector_slots := 0
 var _performance_diagnostic_detector_height_points := 0
 var _performance_diagnostic_detector_slope_points := 0
+var _performance_diagnostic_timing_enabled := false
+var _performance_diagnostic_tracking_usec := 0
+var _performance_diagnostic_tracking_timer_pairs := 0
+var _performance_diagnostic_predicted_usec := 0
+var _performance_diagnostic_predicted_timer_pairs := 0
+var _performance_diagnostic_velocity_usec := 0
+var _performance_diagnostic_velocity_timer_pairs := 0
+var _performance_diagnostic_velocity_coastal_usec := 0
+var _performance_diagnostic_velocity_coastal_timer_pairs := 0
+var _performance_diagnostic_host_coastal_usec := 0
+var _performance_diagnostic_host_coastal_timer_pairs := 0
+var _performance_diagnostic_velocity_cell_accesses := 0
+var _performance_diagnostic_velocity_unique_cells := 0
+var _performance_diagnostic_velocity_repeated_cells := 0
+var _performance_diagnostic_frame_velocity_cells: Dictionary = {}
+var _performance_diagnostic_frame_velocity_cell_accesses := 0
+
+# PERF-P1 benchmark-only state. It is never armed by production code.  The
+# checkpoint reuses the actual pool records and _update_tracking path, but pins
+# age so scaling is not confounded by SimulationClock progression.
+var _performance_checkpoint_active_count := -1
+var _performance_checkpoint_age_s := -1.0
 
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
@@ -661,6 +683,12 @@ func performance_diagnostics_enabled() -> bool:
 	return _performance_diagnostics_enabled
 
 
+func set_performance_diagnostics_timing_enabled(enabled: bool) -> void:
+	## PERF-P1 only. Timers are intentionally opt-in because timing each nested
+	## call would otherwise perturb the production hot path.
+	_performance_diagnostic_timing_enabled = enabled
+
+
 func reset_performance_diagnostics() -> void:
 	_reset_performance_diagnostics()
 
@@ -686,6 +714,20 @@ func performance_diagnostics_snapshot() -> Dictionary:
 		"detector_slots": _performance_diagnostic_detector_slots,
 		"detector_height_points": _performance_diagnostic_detector_height_points,
 		"detector_slope_points": _performance_diagnostic_detector_slope_points,
+		"timing_enabled": _performance_diagnostic_timing_enabled,
+		"tracking_usec": _performance_diagnostic_tracking_usec,
+		"tracking_timer_pairs": _performance_diagnostic_tracking_timer_pairs,
+		"predicted_usec": _performance_diagnostic_predicted_usec,
+		"predicted_timer_pairs": _performance_diagnostic_predicted_timer_pairs,
+		"velocity_usec": _performance_diagnostic_velocity_usec,
+		"velocity_timer_pairs": _performance_diagnostic_velocity_timer_pairs,
+		"velocity_coastal_usec": _performance_diagnostic_velocity_coastal_usec,
+		"velocity_coastal_timer_pairs": _performance_diagnostic_velocity_coastal_timer_pairs,
+		"host_coastal_usec": _performance_diagnostic_host_coastal_usec,
+		"host_coastal_timer_pairs": _performance_diagnostic_host_coastal_timer_pairs,
+		"velocity_cell_accesses": _performance_diagnostic_velocity_cell_accesses,
+		"velocity_unique_cells": _performance_diagnostic_velocity_unique_cells,
+		"velocity_repeated_cells": _performance_diagnostic_velocity_repeated_cells,
 	}
 
 
@@ -705,6 +747,66 @@ func _reset_performance_diagnostics() -> void:
 	_performance_diagnostic_detector_slots = 0
 	_performance_diagnostic_detector_height_points = 0
 	_performance_diagnostic_detector_slope_points = 0
+	_performance_diagnostic_tracking_usec = 0
+	_performance_diagnostic_tracking_timer_pairs = 0
+	_performance_diagnostic_predicted_usec = 0
+	_performance_diagnostic_predicted_timer_pairs = 0
+	_performance_diagnostic_velocity_usec = 0
+	_performance_diagnostic_velocity_timer_pairs = 0
+	_performance_diagnostic_velocity_coastal_usec = 0
+	_performance_diagnostic_velocity_coastal_timer_pairs = 0
+	_performance_diagnostic_host_coastal_usec = 0
+	_performance_diagnostic_host_coastal_timer_pairs = 0
+	_performance_diagnostic_velocity_cell_accesses = 0
+	_performance_diagnostic_velocity_unique_cells = 0
+	_performance_diagnostic_velocity_repeated_cells = 0
+	_performance_diagnostic_frame_velocity_cells.clear()
+	_performance_diagnostic_frame_velocity_cell_accesses = 0
+
+
+func configure_performance_checkpoint_active_breakers(active_count: int, age_s: float) -> Dictionary:
+	## PERF-P1 benchmark-only fixture. It seeds genuine pool tracking records via
+	## _spawn_breaker, then on subsequent calls only pins their spawn_time. The
+	## normal _process still owns lifecycle, RK2, sampling, publication and all
+	## rendering state. Inactive slots remain in ordinary cooldown so DETECT has
+	## no candidates and cannot contaminate the controlled active-count window.
+	if _propagation == null or not _propagation.is_valid() or _anchors.size() < active_count or _ribbons.size() != _anchors.size():
+		return {"configured": false, "reason": "INSUFFICIENT_POOL_CAPACITY", "requested_active": active_count}
+	var safe_count := clampi(active_count, 0, mini(max_breakers, _anchors.size()))
+	var safe_age := maxf(age_s, 0.0)
+	var clock = get_node_or_null("/root/SimulationClock")
+	var render_time: float = clock.get_render_time() if clock != null else _last_track_time
+	if _performance_checkpoint_active_count != safe_count or not is_equal_approx(_performance_checkpoint_age_s, safe_age):
+		_clear_tracking()
+		for index in safe_count:
+			var anchor: Dictionary = _anchors[index]
+			var state := _base_state({})
+			_apply_anchor_diagnostics(state, anchor)
+			_spawn_breaker(index, anchor, 0.0, Vector2(anchor["direction"]).normalized(), float(anchor["wavelength_m"]), 1.0, render_time, state)
+		_performance_checkpoint_active_count = safe_count
+		_performance_checkpoint_age_s = safe_age
+	for index in _tracking.size():
+		var entry: Dictionary = _tracking[index]
+		if index < safe_count:
+			entry["active"] = true
+			entry["valid"] = 1.0
+			entry["spawn_time"] = render_time - safe_age
+			entry["lifecycle_duration"] = maxf(float(entry.get("lifecycle_duration", LIFECYCLE_DURATION_MIN)), safe_age + 0.05)
+			entry["next_spawn_time"] = render_time + SPAWN_INTERVAL_MAX
+		else:
+			entry["active"] = false
+			entry["valid"] = 0.0
+			entry["next_spawn_time"] = render_time + SPAWN_INTERVAL_MAX
+	var steps := clampi(int(ceil(safe_age / TRAJECTORY_STEP_S)), 1, TRAJECTORY_MAX_STEPS) if safe_count > 0 else 0
+	return {
+		"configured": true,
+		"active_count": safe_count,
+		"age_s": safe_age,
+		"steps_per_breaker": steps,
+		"sum_steps": safe_count * steps,
+		"velocity_calls_per_frame": safe_count * steps * 2,
+		"coastal_samples_per_frame": safe_count * (steps * 2 + 1),
+	}
 
 
 func _record_performance_diagnostic_frame() -> void:
@@ -713,6 +815,34 @@ func _record_performance_diagnostic_frame() -> void:
 		_performance_diagnostic_active_frames += 1
 	else:
 		_performance_diagnostic_idle_frames += 1
+
+
+func _begin_performance_diagnostic_tracking() -> int:
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_frame_velocity_cells.clear()
+		_performance_diagnostic_frame_velocity_cell_accesses = 0
+	return Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
+
+
+func _finish_performance_diagnostic_tracking(start_usec: int) -> void:
+	if _performance_diagnostics_enabled:
+		var unique_cells := _performance_diagnostic_frame_velocity_cells.size()
+		_performance_diagnostic_velocity_unique_cells += unique_cells
+		_performance_diagnostic_velocity_repeated_cells += maxi(0, _performance_diagnostic_frame_velocity_cell_accesses - unique_cells)
+	if _performance_diagnostic_timing_enabled:
+		_performance_diagnostic_tracking_usec += Time.get_ticks_usec() - start_usec
+		_performance_diagnostic_tracking_timer_pairs += 1
+
+
+func _record_performance_diagnostic_velocity_cell(world_xz: Vector2) -> void:
+	if _propagation == null or _propagation.width < 2 or _propagation.height < 2 or _propagation.cell_size_m <= 0.0:
+		return
+	var grid: Vector2 = (world_xz - _propagation.world_origin_xz) / _propagation.cell_size_m
+	var x0 := mini(int(floor(clampf(grid.x, 0.0, float(_propagation.width - 1)))), _propagation.width - 2)
+	var z0 := mini(int(floor(clampf(grid.y, 0.0, float(_propagation.height - 1)))), _propagation.height - 2)
+	_performance_diagnostic_velocity_cell_accesses += 1
+	_performance_diagnostic_frame_velocity_cell_accesses += 1
+	_performance_diagnostic_frame_velocity_cells[z0 * _propagation.width + x0] = true
 
 
 func summary() -> Dictionary:
@@ -935,7 +1065,9 @@ func _update_tracking() -> void:
 	##  - DETECT: sólo se consulta en ticks de DETECTOR_INTERVAL (20 Hz), con
 	##    round robin de DETECTOR_SLOTS_PER_TICK slots por tick y UNA llamada
 	##    batch por tick. Sin catch-up de ticks perdidos.
+	var timing_start_usec := _begin_performance_diagnostic_tracking()
 	if _anchors.is_empty() or _ribbons.size() != _anchors.size():
+		_finish_performance_diagnostic_tracking(timing_start_usec)
 		return
 	var clock = get_node_or_null("/root/SimulationClock")
 	var render_time: float = clock.get_render_time() if clock != null else 0.0
@@ -944,17 +1076,21 @@ func _update_tracking() -> void:
 	_update_cooldown_slots(render_time)
 	if not _breaker_height_batch.is_valid() and not _query_batch.is_valid():
 		# ACTIVE already advanced above; DETECT simply waits for its source.
+		_finish_performance_diagnostic_tracking(timing_start_usec)
 		return
 	# A spectrum transition is a pending endpoint operation for breaker queries.
 	# Keep existing ribbons procedural and defer both crest re-sampling and DETECT
 	# until the new endpoint is installed; never put the 30 ms Reduced LONG path
 	# on the frame scheduler during a transition.
 	if _wave_transition_active:
+		_finish_performance_diagnostic_tracking(timing_start_usec)
 		return
 	if render_time < _next_detector_time:
+		_finish_performance_diagnostic_tracking(timing_start_usec)
 		return
 	_run_detector_tick(render_time)
 	_next_detector_time = render_time + DETECTOR_INTERVAL
+	_finish_performance_diagnostic_tracking(timing_start_usec)
 
 
 func _update_active_slots(render_time: float) -> void:
@@ -1195,6 +1331,7 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 
 
 func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
+	var timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_predicted_breaker_calls += 1
 	var spawn_time: float = float(entry.get("spawn_time", render_time))
@@ -1202,7 +1339,11 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	var predicted_position: Vector2 = Vector2(entry.get("spawn_xz", Vector2.ZERO))
 	if _propagation == null or not _propagation.is_valid() or age <= 0.0:
-		return predicted_position + Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized() * (phase_speed * age)
+		var fallback_position := predicted_position + Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized() * (phase_speed * age)
+		if _performance_diagnostic_timing_enabled:
+			_performance_diagnostic_predicted_usec += Time.get_ticks_usec() - timing_start_usec
+			_performance_diagnostic_predicted_timer_pairs += 1
+		return fallback_position
 	# Fixed-step midpoint integration makes the result independent of render FPS.
 	var steps := clampi(int(ceil(age / TRAJECTORY_STEP_S)), 1, TRAJECTORY_MAX_STEPS)
 	if _performance_diagnostics_enabled:
@@ -1213,25 +1354,46 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 		var midpoint := predicted_position + Vector2(velocity_0["direction"]) * float(velocity_0["speed"]) * dt * 0.5
 		var velocity_mid := _sample_velocity(midpoint, entry)
 		predicted_position += Vector2(velocity_mid["direction"]) * float(velocity_mid["speed"]) * dt
+	if _performance_diagnostic_timing_enabled:
+		_performance_diagnostic_predicted_usec += Time.get_ticks_usec() - timing_start_usec
+		_performance_diagnostic_predicted_timer_pairs += 1
 	return predicted_position
 
 
 func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
+	var timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_velocity_calls += 1
 	var fallback_direction := Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized()
 	var fallback_speed := maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	if _propagation == null or not _propagation.is_valid():
-		return {"direction": fallback_direction, "speed": fallback_speed}
+		var fallback := {"direction": fallback_direction, "speed": fallback_speed}
+		if _performance_diagnostic_timing_enabled:
+			_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
+			_performance_diagnostic_velocity_timer_pairs += 1
+		return fallback
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_velocity_propagation_samples += 1
+		_record_performance_diagnostic_velocity_cell(world_xz)
+	var coastal_timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
 	var sample = _propagation.sample_propagation(world_xz)
+	if _performance_diagnostic_timing_enabled:
+		_performance_diagnostic_velocity_coastal_usec += Time.get_ticks_usec() - coastal_timing_start_usec
+		_performance_diagnostic_velocity_coastal_timer_pairs += 1
 	if sample == null or not sample.valid or not sample.in_bounds:
-		return {"direction": fallback_direction, "speed": fallback_speed}
+		var invalid_fallback := {"direction": fallback_direction, "speed": fallback_speed}
+		if _performance_diagnostic_timing_enabled:
+			_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
+			_performance_diagnostic_velocity_timer_pairs += 1
+		return invalid_fallback
 	var direction: Vector2 = Vector2(sample.render_direction_xz).normalized()
 	if direction.length_squared() < 0.5:
 		direction = fallback_direction
-	return {"direction": direction, "speed": maxf(float(sample.phase_speed_mps), 0.1)}
+	var result := {"direction": direction, "speed": maxf(float(sample.phase_speed_mps), 0.1)}
+	if _performance_diagnostic_timing_enabled:
+		_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
+		_performance_diagnostic_velocity_timer_pairs += 1
+	return result
 
 
 func _sample_propagation(world_xz: Vector2) -> Dictionary:
@@ -1239,7 +1401,11 @@ func _sample_propagation(world_xz: Vector2) -> Dictionary:
 		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_host_propagation_samples += 1
+	var coastal_timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
 	var sample = _propagation.sample_propagation(world_xz)
+	if _performance_diagnostic_timing_enabled:
+		_performance_diagnostic_host_coastal_usec += Time.get_ticks_usec() - coastal_timing_start_usec
+		_performance_diagnostic_host_coastal_timer_pairs += 1
 	if sample == null:
 		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
 	var direction := Vector2(sample.render_direction_xz).normalized() if _propagation.has_render_direction() else Vector2(sample.local_direction_xz).normalized()
