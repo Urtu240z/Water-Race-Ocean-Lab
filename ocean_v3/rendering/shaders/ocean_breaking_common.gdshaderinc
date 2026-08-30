@@ -155,15 +155,18 @@ float breaking_reference_wavelength(float min_wavelength_m, float max_wavelength
 	return sqrt(max(min_wavelength_m, 0.05) * max(max_wavelength_m, min_wavelength_m));
 }
 
-// Returns crestness and the measured face slope of one actual FFT band. The
+// Returns crestness, the measured face slope and local crest elevation of one
+// actual FFT band. The crest elevation is eta_center minus the two-sided local
+// neighbourhood, so it is a local measured quantity rather than Hs.
 // signal is sampled along that band's configured propagation direction, not by
 // distance to shore or a procedural mask.
-vec2 open_band_crest_and_slope(vec2 world_xz, vec2 propagation, float wavelength,
+vec3 open_band_crest_and_slope(vec2 world_xz, vec2 propagation, float wavelength,
 		float amplitude, bool is_mid) {
 	vec2 direction = dot(propagation, propagation) > 0.25 ? normalize(propagation) : vec2(1.0, 0.0);
 	float height_center = is_mid ? mid_height_at(world_xz) : long_height_at(world_xz);
 	float crestness = 0.0;
 	float face_slope = 0.0;
+	float crest_elevation = 0.0;
 	for (int scale = 0; scale < 2; scale++) {
 		float spacing = wavelength * (scale == 0 ? 0.125 : 0.25);
 		spacing = clamp(spacing, is_mid ? 0.20 : 0.50, is_mid ? 3.0 : 8.0);
@@ -175,8 +178,9 @@ vec2 open_band_crest_and_slope(vec2 world_xz, vec2 propagation, float wavelength
 		float crest_curve = smoothstep(0.030 * amplitude, 0.20 * amplitude, curvature_down);
 		crestness = max(crestness, crest_rise * crest_curve);
 		face_slope = max(face_slope, abs(height_plus - height_minus) / max(2.0 * spacing, 0.001));
+		crest_elevation = max(crest_elevation, max(height_center - 0.5 * (height_minus + height_plus), 0.0));
 	}
-	return vec2(crestness, face_slope);
+	return vec3(crestness, face_slope, crest_elevation);
 }
 
 // Returns vec2(LONG contribution, MID contribution), each in [0,1]. It uses
@@ -187,8 +191,8 @@ vec2 open_break_components_at(vec2 world_xz) {
 	float mid_wavelength = breaking_reference_wavelength(breaking_mid_min_wavelength_m, breaking_mid_max_wavelength_m);
 	float long_amplitude = max(0.5 * breaking_long_hs_m, 0.01);
 	float mid_amplitude = max(0.5 * breaking_mid_hs_m, 0.01);
-	vec2 long_geometry = open_band_crest_and_slope(world_xz, breaking_long_direction_xz, long_wavelength, long_amplitude, false);
-	vec2 mid_geometry = open_band_crest_and_slope(world_xz, breaking_mid_direction_xz, mid_wavelength, mid_amplitude, true);
+	vec3 long_geometry = open_band_crest_and_slope(world_xz, breaking_long_direction_xz, long_wavelength, long_amplitude, false);
+	vec3 mid_geometry = open_band_crest_and_slope(world_xz, breaking_mid_direction_xz, mid_wavelength, mid_amplitude, true);
 	float long_k = TAU / max(long_wavelength, 0.05);
 	float mid_k = TAU / max(mid_wavelength, 0.05);
 	float long_steepness = max(long_geometry.y, long_k * long_amplitude);
@@ -198,6 +202,61 @@ vec2 open_break_components_at(vec2 world_xz) {
 	float long_signal = long_geometry.x * long_steepness_score;
 	float mid_signal = mid_geometry.x * mid_steepness_score;
 	return clamp(vec2(long_signal, mid_signal), vec2(0.0), vec2(1.0));
+}
+
+// Step 3 local parent descriptor. This deliberately describes the crest at the
+// current world position; it does not manufacture persistent parent-wave IDs.
+// LONG and MID each contribute by measured crest support. Outputs are metres,
+// except attribution and steepness. The final two outputs are conservative
+// parent-derived safety values for a future geometry phase only.
+void parent_crest_descriptor_at(vec2 world_xz,
+		out float crest_scale_m, out float effective_height_m, out float effective_wavelength_m,
+		out vec2 dominant_direction_xz, out vec2 attribution_long_mid,
+		out float effective_steepness, out float max_lip_height_m,
+		out float max_forward_projection_m) {
+	float long_wavelength = breaking_reference_wavelength(breaking_long_min_wavelength_m, breaking_long_max_wavelength_m);
+	float mid_wavelength = breaking_reference_wavelength(breaking_mid_min_wavelength_m, breaking_mid_max_wavelength_m);
+	float long_amplitude = max(0.5 * breaking_long_hs_m, 0.01);
+	float mid_amplitude = max(0.5 * breaking_mid_hs_m, 0.01);
+	vec3 long_geometry = open_band_crest_and_slope(world_xz, breaking_long_direction_xz, long_wavelength, long_amplitude, false);
+	vec3 mid_geometry = open_band_crest_and_slope(world_xz, breaking_mid_direction_xz, mid_wavelength, mid_amplitude, true);
+	float long_k = TAU / max(long_wavelength, 0.05);
+	float mid_k = TAU / max(mid_wavelength, 0.05);
+	float long_steepness = max(long_geometry.y, long_k * long_amplitude);
+	float mid_steepness = max(mid_geometry.y, mid_k * mid_amplitude);
+	// Crestness prevents a broad trough from becoming a parent; the local
+	// elevation retains the actual FFT scale once a crest has been found.
+	float long_support = long_geometry.x * max(long_geometry.z, 0.0001);
+	float mid_support = mid_geometry.x * max(mid_geometry.z, 0.0001);
+	float support_sum = long_support + mid_support;
+	if (support_sum > 0.0001) {
+		attribution_long_mid = vec2(long_support, mid_support) / support_sum;
+	} else {
+		attribution_long_mid = vec2(0.5);
+	}
+	crest_scale_m = attribution_long_mid.x * long_geometry.z + attribution_long_mid.y * mid_geometry.z;
+	effective_height_m = 2.0 * crest_scale_m;
+	effective_wavelength_m = attribution_long_mid.x * long_wavelength + attribution_long_mid.y * mid_wavelength;
+	vec2 long_direction = dot(breaking_long_direction_xz, breaking_long_direction_xz) > 0.25 ? normalize(breaking_long_direction_xz) : vec2(1.0, 0.0);
+	vec2 mid_direction = dot(breaking_mid_direction_xz, breaking_mid_direction_xz) > 0.25 ? normalize(breaking_mid_direction_xz) : long_direction;
+	vec2 combined_direction = attribution_long_mid.x * long_direction + attribution_long_mid.y * mid_direction;
+	dominant_direction_xz = dot(combined_direction, combined_direction) > 0.0001 ? normalize(combined_direction) : long_direction;
+	effective_steepness = attribution_long_mid.x * long_steepness + attribution_long_mid.y * mid_steepness;
+	max_lip_height_m = 0.75 * effective_height_m;
+	max_forward_projection_m = 0.20 * effective_wavelength_m;
+}
+
+// BREAK_STRENGTH is intentionally distinct from onset. Onset answers whether a
+// crest is eligible; this answer is its local parent-scale capacity. The
+// calibration ranges are artistic normalisation of physical metre inputs and
+// do not alter the spectrum or production geometry.
+float break_strength_from_parent(float onset, float effective_height_m,
+		float effective_wavelength_m, float effective_steepness) {
+	float height_capacity = smoothstep(0.10, 1.25, effective_height_m);
+	float wavelength_capacity = smoothstep(3.0, 32.0, effective_wavelength_m);
+	float steepness_capacity = smoothstep(0.08, 0.30, effective_steepness);
+	float parent_scale_capacity = sqrt(max(height_capacity * wavelength_capacity, 0.0));
+	return clamp(onset * parent_scale_capacity * mix(0.60, 1.0, steepness_capacity), 0.0, 1.0);
 }
 
 float open_break_at(vec2 world_xz) {
