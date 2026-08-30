@@ -170,11 +170,6 @@ uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
 uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
 // Deprecated compatibility uniform. Legacy only. No production effect.
 uniform float shallow_depth_range : hint_range(0.1, 20.0, 0.1) = 5.5;
-uniform float near_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.77;
-uniform float deep_water_alpha : hint_range(0.5, 1.0, 0.01) = 0.92;
-uniform float alpha_depth_fade_start_m : hint_range(0.0, 50.0, 0.1) = 0.5;
-uniform float alpha_depth_fade_end_m : hint_range(0.1, 100.0, 0.1) = 12.0;
-uniform float horizon_water_alpha : hint_range(0.8, 1.0, 0.01) = 0.98;
 uniform float opacity_distance_start : hint_range(0.0, 500.0, 1.0) = 80.0;
 uniform float opacity_distance_end : hint_range(1.0, 1000.0, 1.0) = 220.0;
 uniform float refraction_micro_normal_strength : hint_range(0.0, 0.5, 0.01) = 0.15;
@@ -216,7 +211,7 @@ uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
-// 10 ALPHA_DEPTH_FACTOR, 11 SHALLOW_SCATTERING_FACTOR,
+// 10 TRANSMISSION_OPTICAL_DEPTH, 11 SHALLOW_SCATTERING_FACTOR,
 // 12 SCATTERING_TINT_INFLUENCE, 13 SHALLOW_SCATTERING_FINAL,
 // 14 LOCAL_WATER_DEPTH, 15 VIEW_WATER_PATH, 16 SHALLOW_DEEP_AUTHORITY,
 // 17 RAW_BATHYMETRY_FRAGMENT, 18 BATHYMETRY_DOMAIN,
@@ -1776,6 +1771,7 @@ const float WATER_OPTICS_EPSILON = 0.0001;
 const float WATER_OPTICS_EDGE_FADE_UV = 0.02;
 const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
 const float WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR = 0.08;
+const float WATER_OPTICS_SHALLOW_PATH_MULTIPLIER = 1.5;
 
 
 vec2 water_optics_project_view_position(vec3 view_position, mat4 projection,
@@ -2845,7 +2841,7 @@ void fragment() {
 			float local_deep_fallback_m = max(
 				maximum_optical_depth,
 				max(
-					max(water_body_depth_end_m, alpha_depth_fade_end_m),
+					water_body_depth_end_m,
 					max(shallow_scattering_depth_end_m, 20.0)
 				) + 1.0
 			);
@@ -2853,6 +2849,27 @@ void fragment() {
 				local_deep_fallback_m,
 				coastal_local_depth_m,
 				local_depth_confidence
+			);
+			// Transmission uses bathymetric depth when a real seabed has authority,
+			// but keeps the camera-dependent path for open ocean. The shallow cap
+			// prevents a long grazing ray from turning shallow water into a falsely
+			// deep optical column.
+			float transmission_seabed_confidence = local_water_depth_valid
+				? clamp(optical_seabed_confidence, 0.0, 1.0)
+				: 0.0;
+			float shallow_transmission_path_m = min(
+				bounded_view_water_path_m,
+				max(local_water_depth_m, 0.0) * WATER_OPTICS_SHALLOW_PATH_MULTIPLIER
+			);
+			float transmission_optical_depth_m = mix(
+				bounded_view_water_path_m,
+				shallow_transmission_path_m,
+				transmission_seabed_confidence
+			);
+			transmission_optical_depth_m = clamp(
+				transmission_optical_depth_m,
+				0.0,
+				max(maximum_optical_depth, 0.0)
 			);
 			// BathymetryData is baked as sea_level_y - top_surface_y. Use that
 			// same sea-level convention, not the instantaneous FFT crest height.
@@ -2882,16 +2899,15 @@ void fragment() {
 				effective_seabed_match
 			);
 
-			// R1 Beer-Lambert uses the view-ray path without the old optical depth
-			// clamp, so 25-50 m continues to attenuate instead of plateauing.
+			// R1 Beer-Lambert remains RGB and monotonic, but uses the confidence-
+			// blended optical depth so shallow water stays readable at distance while
+			// open-ocean rays retain their view-path behavior.
 			vec3 transmittance_rgb = exp(
-				-max(absorption_coeff_rgb, vec3(0.0)) * view_water_path_m
+				-max(absorption_coeff_rgb, vec3(0.0)) * transmission_optical_depth_m
 				+ vec3(absorption_density + shallow_depth_range) * 0.0
 			);
-			// View-path saturation only: this is deliberately not a shallow/deep
-			// authority, even though it modulates the volume response.
-			float view_path_saturation_factor = clamp(
-				bounded_view_water_path_m / max(maximum_optical_depth, 0.001),
+			float transmission_path_saturation_factor = clamp(
+				transmission_optical_depth_m / max(maximum_optical_depth, 0.001),
 				0.0,
 				1.0
 			);
@@ -2924,19 +2940,19 @@ void fragment() {
 
 			// Reuse the transmitted screen sample at a depth-dependent mip level to
 			// suppress recognizable deep-bottom geometry while retaining broad color.
-			// The turbidity contribution is depth-gated so very shallow water stays at
-			// essentially LOD 0 even when the water is optically cloudy.
+			// The turbidity contribution is depth-gated by the same optical authority
+			// so very shallow water stays near LOD 0 at long viewing distances.
 			float transmission_detail_fade = smoothstep(
 				transmission_detail_fade_start_m,
 				max(transmission_detail_fade_end_m, transmission_detail_fade_start_m + 0.001),
-				view_water_path_m
+				transmission_optical_depth_m
 			);
 			float turbidity_factor = smoothstep(
 				0.0,
 				1.0,
 				clamp(water_turbidity * 0.75, 0.0, 1.0)
 			);
-			float turbidity_depth_gate = smoothstep(2.0, 10.0, view_water_path_m);
+			float turbidity_depth_gate = smoothstep(2.0, 10.0, transmission_optical_depth_m);
 			float turbidity_detail_fade = turbidity_factor * turbidity_depth_gate;
 			float transmission_blur_factor = clamp(
 				mix(
@@ -2977,10 +2993,10 @@ void fragment() {
 			// it is deliberately not derived from absorption_coeff_rgb.
 			float scattering_density_m = 0.22 * clamp(water_turbidity, 0.0, 2.0);
 			float scattering_depth_response = 1.0 - exp(
-				-max(scattering_density_m, 0.0) * max(view_water_path_m, 0.0)
+				-max(scattering_density_m, 0.0) * max(transmission_optical_depth_m, 0.0)
 			);
 			float scattering_response = clamp(
-				scattering_depth_response * mix(0.55, 1.0, view_path_saturation_factor),
+				scattering_depth_response * mix(0.55, 1.0, transmission_path_saturation_factor),
 				0.0,
 				1.0
 			);
@@ -3294,26 +3310,6 @@ void fragment() {
 			float surface_weight = 1.0 - (1.0 - fresnel) * (1.0 - distance_opacity);
 			vec3 final_color = mix(optical_scene, surface_color, surface_weight);
 
-			float alpha_depth_factor = smoothstep(
-				alpha_depth_fade_start_m,
-				max(alpha_depth_fade_end_m, alpha_depth_fade_start_m + 0.001),
-				local_water_depth_m
-			);
-			float local_alpha = mix(
-				near_water_alpha,
-				deep_water_alpha,
-				alpha_depth_factor
-			);
-			float final_alpha = clamp(
-				mix(
-					local_alpha,
-					horizon_water_alpha,
-					distance_opacity
-				),
-				0.55,
-				1.0
-			);
-
 			// Foam is composited after water optics, so Fresnel/reflection cannot be
 			// laid back on top of it when looking into a solar highlight.
 			vec3 water_body_final_color = final_color;
@@ -3346,7 +3342,8 @@ void fragment() {
 			} else if (water_optics_debug_mode == 9) {
 				final_color = vec3(body_depth_factor);
 			} else if (water_optics_debug_mode == 10) {
-				final_color = vec3(alpha_depth_factor);
+				// Confidence-blended optical depth; black is shallow, white is deep.
+				final_color = vec3(clamp(transmission_optical_depth_m / 20.0, 0.0, 1.0));
 			} else if (water_optics_debug_mode == 11) {
 				final_color = vec3(shallow_scattering_factor);
 			} else if (water_optics_debug_mode == 12) {
@@ -3454,7 +3451,10 @@ void fragment() {
 			SPECULAR = mix(SPECULAR, foam_fresh_specular, foam_fresh_mask);
 			METALLIC = 0.0;
 			RADIANCE = vec4(reflection_radiance, reflection_radiance_confidence);
-			ALPHA = clamp(final_alpha + (foam_fresh_mask + foam_residual_mask * 0.58 + surface_foam_mask * 0.35) * foam_alpha_boost, 0.0, 1.0);
+			// Screen/depth transmission is already composed into final_color. Keep the
+			// production water surface opaque so the original framebuffer cannot be
+			// blended behind it a second time by Godot's transparent pass.
+			ALPHA = 1.0;
 			if (water_optics_debug_mode > 0) {
 				ALBEDO = final_color;
 				EMISSION = final_color;

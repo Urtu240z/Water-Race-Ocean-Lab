@@ -370,31 +370,6 @@ var _performance_overlay_label: Label
 		shallow_depth_range = value
 		_request_visual_sync()
 
-@export_range(0.5, 1.0, 0.01) var near_water_alpha: float = 0.77:
-	set(value):
-		near_water_alpha = value
-		_request_visual_sync()
-
-@export_range(0.5, 1.0, 0.01) var deep_water_alpha: float = 0.92:
-	set(value):
-		deep_water_alpha = value
-		_request_visual_sync()
-
-@export_range(0.0, 50.0, 0.1) var alpha_depth_fade_start_m: float = 0.5:
-	set(value):
-		alpha_depth_fade_start_m = clampf(value, 0.0, 50.0)
-		_request_visual_sync()
-
-@export_range(0.1, 100.0, 0.1) var alpha_depth_fade_end_m: float = 12.0:
-	set(value):
-		alpha_depth_fade_end_m = clampf(value, 0.1, 100.0)
-		_request_visual_sync()
-
-@export_range(0.8, 1.0, 0.01) var horizon_water_alpha: float = 0.98:
-	set(value):
-		horizon_water_alpha = value
-		_request_visual_sync()
-
 @export_range(0.0, 500.0, 1.0) var opacity_distance_start: float = 80.0:
 	set(value):
 		opacity_distance_start = value
@@ -538,7 +513,7 @@ var _performance_overlay_label: Label
 		seabed_match_tolerance_end_m = clampf(value, 0.1, 50.0)
 		_request_visual_sync()
 
-@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "ALPHA_DEPTH_FACTOR", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
+@export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "TRANSMISSION_OPTICAL_DEPTH", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
 	set(value):
 		var next_mode := clampi(value, 0, 40)
 		if water_optics_debug_mode != next_mode:
@@ -2058,11 +2033,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_depth_range", shallow_depth_range)
 	material.set_shader_parameter(&"water_body_depth_start_m", water_body_depth_start_m)
 	material.set_shader_parameter(&"water_body_depth_end_m", water_body_depth_end_m)
-	material.set_shader_parameter(&"near_water_alpha", near_water_alpha)
-	material.set_shader_parameter(&"deep_water_alpha", deep_water_alpha)
-	material.set_shader_parameter(&"alpha_depth_fade_start_m", alpha_depth_fade_start_m)
-	material.set_shader_parameter(&"alpha_depth_fade_end_m", alpha_depth_fade_end_m)
-	material.set_shader_parameter(&"horizon_water_alpha", horizon_water_alpha)
 	material.set_shader_parameter(&"opacity_distance_start", opacity_distance_start)
 	material.set_shader_parameter(&"opacity_distance_end", opacity_distance_end)
 	material.set_shader_parameter(&"water_refraction_enabled", perf_enable_refraction)
