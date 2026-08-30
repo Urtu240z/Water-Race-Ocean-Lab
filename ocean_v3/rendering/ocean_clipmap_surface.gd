@@ -36,6 +36,9 @@ enum BreakingDebug {
 	STEEPNESS,
 	CRESTNESS,
 	PREBREAK,
+	OPEN_BREAK,
+	DEPTH_BREAK,
+	BREAK_ONSET,
 }
 
 ## Instrumentación temporal 3B.2B: selecciona contribuciones reales, no color.
@@ -415,8 +418,8 @@ func set_coastal_debug_field(field: int) -> void:
 
 
 func set_breaking_debug(mode: int) -> void:
-	## Activa la ruta de fetches extra sólo para el debug 4A / futuro takeover 4B.
-	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.PREBREAK)
+	## Las señales 5R.2 siguen siendo GPU/debug-only: no crean candidates CPU.
+	_breaking_debug = clampi(mode, BreakingDebug.OFF, BreakingDebug.BREAK_ONSET)
 	_set_all_materials_shader_parameter(&"breaking_debug_mode", _breaking_debug)
 
 
@@ -426,6 +429,25 @@ func set_breaking_energy_model(long_hs_m: float, coastal_energy_fraction: float)
 	for material in _all_materials():
 		material.set_shader_parameter(&"breaking_long_hs_m", maxf(long_hs_m, 0.0))
 		material.set_shader_parameter(&"breaking_coastal_energy_fraction", clampf(coastal_energy_fraction, 0.0, 1.0))
+
+
+func set_breaking_open_model(long_hs_m: float, mid_hs_m: float,
+		long_min_wavelength_m: float, long_max_wavelength_m: float,
+		mid_min_wavelength_m: float, mid_max_wavelength_m: float,
+		long_direction_xz: Vector2, mid_direction_xz: Vector2) -> void:
+	## Contrato de STEP 2 para OPEN_BREAK. Son parámetros espectrales ya existentes;
+	## no hay readback ni nueva textura. MID/LONG siguen siendo la única entrada.
+	var safe_long_direction := long_direction_xz.normalized() if long_direction_xz.length_squared() > 1.0e-8 else Vector2.RIGHT
+	var safe_mid_direction := mid_direction_xz.normalized() if mid_direction_xz.length_squared() > 1.0e-8 else safe_long_direction
+	for material in _all_materials():
+		material.set_shader_parameter(&"breaking_long_hs_m", maxf(long_hs_m, 0.0))
+		material.set_shader_parameter(&"breaking_mid_hs_m", maxf(mid_hs_m, 0.0))
+		material.set_shader_parameter(&"breaking_long_min_wavelength_m", maxf(long_min_wavelength_m, 0.05))
+		material.set_shader_parameter(&"breaking_long_max_wavelength_m", maxf(long_max_wavelength_m, long_min_wavelength_m))
+		material.set_shader_parameter(&"breaking_mid_min_wavelength_m", maxf(mid_min_wavelength_m, 0.05))
+		material.set_shader_parameter(&"breaking_mid_max_wavelength_m", maxf(mid_max_wavelength_m, mid_min_wavelength_m))
+		material.set_shader_parameter(&"breaking_long_direction_xz", safe_long_direction)
+		material.set_shader_parameter(&"breaking_mid_direction_xz", safe_mid_direction)
 
 
 func breaking_debug_name() -> String:
@@ -489,6 +511,13 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_cell_size_m", 1.0)
 		material.set_shader_parameter(&"breaking_debug_mode", BreakingDebug.OFF)
 		material.set_shader_parameter(&"breaking_long_hs_m", configs[0].target_hs_m)
+		material.set_shader_parameter(&"breaking_mid_hs_m", configs[2].target_hs_m)
+		material.set_shader_parameter(&"breaking_long_min_wavelength_m", configs[0].min_wavelength_m)
+		material.set_shader_parameter(&"breaking_long_max_wavelength_m", configs[0].max_wavelength_m)
+		material.set_shader_parameter(&"breaking_mid_min_wavelength_m", configs[2].min_wavelength_m)
+		material.set_shader_parameter(&"breaking_mid_max_wavelength_m", configs[2].max_wavelength_m)
+		material.set_shader_parameter(&"breaking_long_direction_xz", configs[0].wind_direction.normalized())
+		material.set_shader_parameter(&"breaking_mid_direction_xz", configs[2].wind_direction.normalized())
 		material.set_shader_parameter(&"breaking_coastal_energy_fraction", 0.5)
 		material.set_shader_parameter(&"coastal_warp_enabled", false)
 		material.set_shader_parameter(&"coastal_composition_debug", CoastalCompositionDebug.FULL)

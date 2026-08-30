@@ -31,10 +31,9 @@
 //          coastal_warp_enabled
 //   int    coastal_composition_debug
 //
-// La ruta de detección samplea SOLO la macroestructura LONG real:
-// LONG_COASTAL (warped/shoaled) + LONG_REMAINDER (open). MID/SHORT no entran
-// en el trigger. La integración visual del ribetón vive en el include específico
-// de breaker_lip.
+// Phase 5R.2: OPEN_BREAK evalúa LONG + MID en mar abierto; DEPTH_BREAK mantiene
+// el mecanismo costero LONG. SHORT no entra en ningún trigger geométrico. La
+// integración visual del ribetón vive en el include específico de breaker_lip.
 
 vec2 spectrum_uv(vec2 world_xz, float domain_size_m) {
 	return fract(world_xz / domain_size_m + vec2(0.5));
@@ -148,6 +147,66 @@ float long_height_at(vec2 world_xz) {
 	return (coastal_height + remainder_height) * local_long_amplitude;
 }
 
+float mid_height_at(vec2 world_xz) {
+	return textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).y;
+}
+
+float breaking_reference_wavelength(float min_wavelength_m, float max_wavelength_m) {
+	return sqrt(max(min_wavelength_m, 0.05) * max(max_wavelength_m, min_wavelength_m));
+}
+
+// Returns crestness and the measured face slope of one actual FFT band. The
+// signal is sampled along that band's configured propagation direction, not by
+// distance to shore or a procedural mask.
+vec2 open_band_crest_and_slope(vec2 world_xz, vec2 propagation, float wavelength,
+		float amplitude, bool is_mid) {
+	vec2 direction = dot(propagation, propagation) > 0.25 ? normalize(propagation) : vec2(1.0, 0.0);
+	float height_center = is_mid ? mid_height_at(world_xz) : long_height_at(world_xz);
+	float crestness = 0.0;
+	float face_slope = 0.0;
+	for (int scale = 0; scale < 2; scale++) {
+		float spacing = wavelength * (scale == 0 ? 0.125 : 0.25);
+		spacing = clamp(spacing, is_mid ? 0.20 : 0.50, is_mid ? 3.0 : 8.0);
+		float height_minus = is_mid ? mid_height_at(world_xz - direction * spacing) : long_height_at(world_xz - direction * spacing);
+		float height_plus = is_mid ? mid_height_at(world_xz + direction * spacing) : long_height_at(world_xz + direction * spacing);
+		float neighbor_rise = min(height_center - height_minus, height_center - height_plus);
+		float curvature_down = 2.0 * height_center - height_minus - height_plus;
+		float crest_rise = smoothstep(0.016 * amplitude, 0.10 * amplitude, neighbor_rise);
+		float crest_curve = smoothstep(0.030 * amplitude, 0.20 * amplitude, curvature_down);
+		crestness = max(crestness, crest_rise * crest_curve);
+		face_slope = max(face_slope, abs(height_plus - height_minus) / max(2.0 * spacing, 0.001));
+	}
+	return vec2(crestness, face_slope);
+}
+
+// Returns vec2(LONG contribution, MID contribution), each in [0,1]. It uses
+// actual FFT displacement/crest geometry. SHORT deliberately has no sample in
+// this function, so it cannot create a main geometric breaker candidate.
+vec2 open_break_components_at(vec2 world_xz) {
+	float long_wavelength = breaking_reference_wavelength(breaking_long_min_wavelength_m, breaking_long_max_wavelength_m);
+	float mid_wavelength = breaking_reference_wavelength(breaking_mid_min_wavelength_m, breaking_mid_max_wavelength_m);
+	float long_amplitude = max(0.5 * breaking_long_hs_m, 0.01);
+	float mid_amplitude = max(0.5 * breaking_mid_hs_m, 0.01);
+	vec2 long_geometry = open_band_crest_and_slope(world_xz, breaking_long_direction_xz, long_wavelength, long_amplitude, false);
+	vec2 mid_geometry = open_band_crest_and_slope(world_xz, breaking_mid_direction_xz, mid_wavelength, mid_amplitude, true);
+	float long_k = TAU / max(long_wavelength, 0.05);
+	float mid_k = TAU / max(mid_wavelength, 0.05);
+	float long_steepness = max(long_geometry.y, long_k * long_amplitude);
+	float mid_steepness = max(mid_geometry.y, mid_k * mid_amplitude);
+	float long_steepness_score = smoothstep(0.10, 0.30, long_steepness);
+	float mid_steepness_score = smoothstep(0.08, 0.24, mid_steepness);
+	float long_signal = long_geometry.x * long_steepness_score;
+	float mid_signal = mid_geometry.x * mid_steepness_score;
+	return clamp(vec2(long_signal, mid_signal), vec2(0.0), vec2(1.0));
+}
+
+float open_break_at(vec2 world_xz) {
+	vec2 components = open_break_components_at(world_xz);
+	// Probabilistic/smooth union: either band can qualify and reinforcement is
+	// monotonic, while the result remains in [0,1].
+	return components.x + components.y - components.x * components.y;
+}
+
 // 4B: estado escalar local del modelo de energía de 4A, sin muestras de cresta.
 // Devuelve vec4(amplitude_m, wavelength_m, local_k, local_hs).
 // Réplica CPU: BreakerRibbonPool.estimate_local_hs / depth pressure.
@@ -168,7 +227,7 @@ vec4 breaking_local_state_at(vec2 world_xz, vec2 coast_uv, vec4 field_data) {
 	return vec4(amplitude, wavelength, local_k, local_hs);
 }
 
-vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
+vec4 depth_break_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
 	// El alcance de 4A es rompiente costera: sin propagation/batimetría válida
 	// no existe una profundidad local que pueda inventar un trigger. Esto hace
 	// que Coastal OFF elimine por completo la influencia del banco.
@@ -223,4 +282,27 @@ vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 met
 	float prebreak = crestness * depth_pressure * mix(0.35, 1.0, steepness_pressure)
 		* breaking_zone_activity(world_xz);
 	return vec4(depth_pressure, steepness_pressure, crestness, prebreak);
+}
+
+float depth_break_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
+	return depth_break_indices_at(world_xz, coast_uv, field_data, metrics_data, phase_data).w;
+}
+
+// Legacy Phase 4A API retained for the existing PREBREAK debug and force-lip
+// diagnostics. Its fourth component is now explicitly DEPTH_BREAK.
+vec4 prebreak_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
+	return depth_break_indices_at(world_xz, coast_uv, field_data, metrics_data, phase_data);
+}
+
+// x = OPEN_BREAK, y = DEPTH_BREAK, z = BREAK_ONSET. DEPTH_BREAK is exactly
+// zero without valid Coastal data; OPEN_BREAK never samples that validity gate.
+vec3 breaking_onset_signals_at(vec2 world_xz) {
+	vec2 uv = coastal_uv(world_xz);
+	vec4 field_data = textureLod(coastal_field_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 metrics_data = textureLod(coastal_metrics_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec4 phase_data = textureLod(coastal_phase_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0);
+	float open_break = open_break_at(world_xz);
+	float depth_break = depth_break_at(world_xz, uv, field_data, metrics_data, phase_data);
+	float onset = open_break + depth_break - open_break * depth_break;
+	return clamp(vec3(open_break, depth_break, onset), vec3(0.0), vec3(1.0));
 }

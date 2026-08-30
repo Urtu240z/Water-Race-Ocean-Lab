@@ -70,13 +70,21 @@ uniform vec2 coastal_forced_warp_offset_xz = vec2(37.0, 23.0);
 uniform float coastal_debug_gain = 1.0;
 uniform bool coastal_delta_heatmap = false;
 uniform int coastal_debug_field = 0;
-// Phase 4A: detector GPU de pre-break. Apagado salvo instrumento debug / 4B.
-// 0 OFF, 1 DEPTH, 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK.
+// Phase 5R.2: instrumentación de elegibilidad. 0 OFF, 1 DEPTH,
+// 2 STEEPNESS, 3 CRESTNESS, 4 PREBREAK/legacy, 5 OPEN_BREAK,
+// 6 DEPTH_BREAK, 7 BREAK_ONSET.
 uniform int breaking_debug_mode = 0;
 // Hs de LONG completo en deep water y fracción de energía del split COASTAL.
 // Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
 uniform float breaking_long_hs_m = 0.50;
+uniform float breaking_mid_hs_m = 0.25;
 uniform float breaking_coastal_energy_fraction = 0.50;
+uniform float breaking_long_min_wavelength_m = 16.0;
+uniform float breaking_long_max_wavelength_m = 128.0;
+uniform float breaking_mid_min_wavelength_m = 4.0;
+uniform float breaking_mid_max_wavelength_m = 20.0;
+uniform vec2 breaking_long_direction_xz = vec2(1.0, 0.0);
+uniform vec2 breaking_mid_direction_xz = vec2(1.0, 0.0);
 uniform float breaking_depth_gamma = 0.78;
 uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
 uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
@@ -220,7 +228,7 @@ uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
 // 32 EFFECTIVE_SEABED_MATCH, 33 EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT,
 // 34 REAL_SEABED_COVERAGE_RAW, 35 OPTICAL_SEABED_CONFIDENCE,
 // 36 OPTICAL_LOCAL_WATER_DEPTH, 37 OPEN_OCEAN_NO_SEABED_MASK,
-// 38 REFRACTION_SLOPE, 39 REFRACTION_DEPTH_FACTOR.
+// 38 REFRACTION_SLOPE, 39 REFRACTION_DEPTH_FACTOR, 40 REFRACTION_BACKGROUND_ONLY.
 uniform int water_optics_debug_mode = 0;
 
 // Physical Reflection Phase 1. Godot's shaded spatial pipeline consumes the
@@ -1079,7 +1087,7 @@ void vertex() {
 
 	// Ruta estrictamente opt-in. No hay compute global, readback ni OceanQuery:
 	// sólo fetches adicionales en los vértices renderizados por el debug / futuro 4B.
-	if (perf_prebreak_enabled && breaking_debug_mode > 0 && !coastal_monochromatic_debug) {
+	if (perf_prebreak_enabled && breaking_debug_mode > 0 && breaking_debug_mode <= 4 && !coastal_monochromatic_debug) {
 		breaking_indices = prebreak_indices_at(world_xz, coast_uv, coastal_field, coastal_metrics, coastal_phase_data);
 	}
 
@@ -2489,6 +2497,14 @@ void fragment() {
 		if (breaking_debug_mode == 2) value = breaking_indices.y;
 		else if (breaking_debug_mode == 3) value = breaking_indices.z;
 		else if (breaking_debug_mode == 4) value = breaking_indices.w;
+		else if (breaking_debug_mode >= 5) {
+			// STEP 2 deliberately keeps this extra FFT evaluation debug-only. The
+			// production ribbon path remains the bounded legacy Coastal detector.
+			vec3 onset_signals = breaking_onset_signals_at(ocean_base_xz);
+			if (breaking_debug_mode == 5) value = onset_signals.x;
+			else if (breaking_debug_mode == 6) value = onset_signals.y;
+			else value = onset_signals.z;
+		}
 		// Azul (0) -> cian -> amarillo -> rojo (1), visible tanto desde top como grazing.
 		vec3 heat = mix(vec3(0.01, 0.03, 0.12), vec3(0.0, 0.80, 0.90), smoothstep(0.0, 0.45, value));
 		heat = mix(heat, vec3(1.0, 0.86, 0.08), smoothstep(0.35, 0.72, value));
@@ -2965,6 +2981,8 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
+			vec2 refraction_background_uv = SCREEN_UV;
+			vec3 refraction_background_only = vec3(0.0);
 			vec2 refraction_wave_slope = vec2(0.0);
 			float refraction_wave_depth_factor = 0.0;
 			float refraction_wave_grazing_factor = 0.0;
@@ -3009,6 +3027,7 @@ void fragment() {
 					+ surface_detail_offset_view
 					* surface_normal_strength
 					* refraction_micro_normal_strength
+					* (water_optics_debug_mode == 40 ? 0.0 : 1.0)
 				);
 				// V2 changes only the normal driving the established R2 ray. The
 				// projection, candidate depth sample, validity and pixel clamp below
@@ -3157,7 +3176,8 @@ void fragment() {
 								0.0,
 								1.0
 							);
-							refraction_final_offset_px = candidate_offset_px * refraction_validity;
+							float debug_offset_scale = water_optics_debug_mode == 40 ? 8.0 : 1.0;
+							refraction_final_offset_px = candidate_offset_px * refraction_validity * debug_offset_scale;
 						}
 					}
 				}
@@ -3166,6 +3186,16 @@ void fragment() {
 					vec2(0.001),
 					vec2(0.999)
 				);
+				refraction_background_uv = final_refracted_uv;
+				if (water_optics_debug_mode == 40) {
+					// Diagnostic only: prove the displaced coordinate reads the real
+					// pre-water screen color, at full resolution and without composition.
+					refraction_background_only = textureLod(
+						screen_texture,
+						refraction_background_uv,
+						0.0
+					).rgb;
+				}
 				vec3 refracted_scene = textureLod(
 					screen_texture,
 					final_refracted_uv,
@@ -3363,6 +3393,10 @@ void fragment() {
 				// Visible scene-depth modulation of the V2 wave contribution: white
 				// shallow, black once the configured depth end is reached.
 				final_color = vec3(refraction_wave_depth_factor);
+			} else if (water_optics_debug_mode == 40) {
+				// Full-resolution real screen color at the displaced UV. This bypasses
+				// absorption, scattering, foam, tint, reflection and water shading.
+				final_color = refraction_background_only;
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

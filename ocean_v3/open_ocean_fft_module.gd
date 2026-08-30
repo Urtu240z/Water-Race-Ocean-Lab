@@ -1604,7 +1604,19 @@ func breaking_debug_name() -> String:
 
 
 func _update_breaking_energy_model() -> void:
-	if configs.is_empty() or _coastal_energy_metrics.is_empty():
+	if configs.is_empty():
+		return
+	# STEP 2: OPEN_BREAK must receive the live LONG/MID band contract even when
+	# Coastal is unavailable. This is a uniform update only, not a detector run.
+	var effective_hs := _effective_long_hs_m()
+	surface.set_breaking_open_model(
+		effective_hs,
+		_effective_band_hs_m(2),
+		_effective_band_wavelength_m(0, false), _effective_band_wavelength_m(0, true),
+		_effective_band_wavelength_m(2, false), _effective_band_wavelength_m(2, true),
+		_effective_band_direction(0), _effective_band_direction(2)
+	)
+	if _coastal_energy_metrics.is_empty():
 		return
 	var metrics := _interpolated_energy_metrics(_coastal_energy_metrics, _wave_transition_target_energy_metrics, _wave_transition_alpha) if _wave_transition_active else _coastal_energy_metrics
 	var total_variance: float = float(metrics.get("total_reconstructed_variance", 0.0))
@@ -1612,7 +1624,6 @@ func _update_breaking_energy_model() -> void:
 	# Las dos partes del split pueden estar correlacionadas; para la proxy de
 	# energía local de 4A usamos la fracción positiva de varianza propia, acotada.
 	_breaking_coastal_fraction = clampf(coastal_variance / maxf(total_variance, 1.0e-8), 0.0, 1.0)
-	var effective_hs := _effective_long_hs_m()
 	surface.set_breaking_energy_model(effective_hs, _breaking_coastal_fraction)
 	# 4B: el pool recoloca sus anchors con el mismo modelo de energía (Hs + fracción).
 	if _breaker_pool != null:
@@ -1634,6 +1645,33 @@ func _effective_long_hs_m() -> float:
 	if _wave_transition_active and not _wave_transition_target_configs.is_empty():
 		return lerpf(configs[0].target_hs_m, _wave_transition_target_configs[0].target_hs_m, _wave_transition_alpha)
 	return configs[0].target_hs_m
+
+
+func _effective_band_hs_m(index: int) -> float:
+	if index < 0 or index >= configs.size():
+		return 0.0
+	if _wave_transition_active and index < _wave_transition_target_configs.size():
+		return lerpf(configs[index].target_hs_m, _wave_transition_target_configs[index].target_hs_m, _wave_transition_alpha)
+	return configs[index].target_hs_m
+
+
+func _effective_band_wavelength_m(index: int, maximum: bool) -> float:
+	if index < 0 or index >= configs.size():
+		return 1.0
+	var value: float = configs[index].max_wavelength_m if maximum else configs[index].min_wavelength_m
+	if _wave_transition_active and index < _wave_transition_target_configs.size():
+		var target: float = _wave_transition_target_configs[index].max_wavelength_m if maximum else _wave_transition_target_configs[index].min_wavelength_m
+		value = lerpf(value, target, _wave_transition_alpha)
+	return maxf(value, 0.05)
+
+
+func _effective_band_direction(index: int) -> Vector2:
+	if index < 0 or index >= configs.size():
+		return Vector2.RIGHT
+	var direction: Vector2 = configs[index].wind_direction
+	if _wave_transition_active and index < _wave_transition_target_configs.size():
+		direction = direction.lerp(_wave_transition_target_configs[index].wind_direction, _wave_transition_alpha)
+	return direction.normalized() if direction.length_squared() > 1.0e-8 else Vector2.RIGHT
 
 
 func is_fft_enabled() -> bool:
