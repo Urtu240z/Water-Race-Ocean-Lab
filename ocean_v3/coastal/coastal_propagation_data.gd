@@ -124,6 +124,44 @@ func sample_propagation(world_xz: Vector2, reuse = null):
 	return result
 
 
+## Exact narrow sampler for breaker RK2 trajectories.  The full sampler above
+## builds a CoastalPropagationSample and interpolates every field; trajectories
+## only consume render direction, phase speed, and the same validity gate.
+## Returns vec3(direction_x, direction_z, phase_speed_mps).
+func sample_breaker_velocity(world_xz: Vector2, fallback_direction: Vector2, fallback_speed: float) -> Vector3:
+	var safe_direction := fallback_direction.normalized()
+	if safe_direction.length_squared() < 0.5:
+		safe_direction = Vector2.RIGHT
+	var safe_speed := maxf(fallback_speed, 0.1)
+	if width < 2 or height < 2 or cell_size_m <= 0.0:
+		return Vector3(safe_direction.x, safe_direction.y, safe_speed)
+	var grid := (world_xz - world_origin_xz) / cell_size_m
+	if grid.x < 0.0 or grid.y < 0.0 or grid.x > float(width - 1) or grid.y > float(height - 1):
+		return Vector3(safe_direction.x, safe_direction.y, safe_speed)
+	grid.x = clampf(grid.x, 0.0, float(width - 1))
+	grid.y = clampf(grid.y, 0.0, float(height - 1))
+	var x0 := mini(int(floor(grid.x)), width - 2)
+	var z0 := mini(int(floor(grid.y)), height - 2)
+	var tx := grid.x - float(x0)
+	var tz := grid.y - float(z0)
+	var i00 := z0 * width + x0
+	var i10 := i00 + 1
+	var i01 := i00 + width
+	var i11 := i01 + 1
+	var nearest := clampi(int(round(grid.y)), 0, height - 1) * width + clampi(int(round(grid.x)), 0, width - 1)
+	if valid_mask[nearest] == 0 or reached_mask[nearest] == 0:
+		return Vector3(safe_direction.x, safe_direction.y, safe_speed)
+	var direction_x_values := render_direction_x if has_render_direction() else local_direction_x
+	var direction_z_values := render_direction_z if has_render_direction() else local_direction_z
+	var direction := Vector2(
+		_bilinear(direction_x_values, i00, i10, i01, i11, tx, tz),
+		_bilinear(direction_z_values, i00, i10, i01, i11, tx, tz)
+	).normalized()
+	if direction.length_squared() < 0.5:
+		direction = safe_direction
+	return Vector3(direction.x, direction.y, maxf(_bilinear(phase_speed_mps, i00, i10, i01, i11, tx, tz), 0.1))
+
+
 func build_gpu_textures() -> Dictionary:
 	if not is_valid():
 		return {}

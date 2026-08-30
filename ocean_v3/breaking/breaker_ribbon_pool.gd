@@ -1363,49 +1363,38 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 	var dt := age / float(steps)
 	for _step in steps:
 		var velocity_0 := _sample_velocity(predicted_position, entry)
-		var midpoint := predicted_position + Vector2(velocity_0["direction"]) * float(velocity_0["speed"]) * dt * 0.5
+		var midpoint := predicted_position + Vector2(velocity_0.x, velocity_0.y) * velocity_0.z * dt * 0.5
 		var velocity_mid := _sample_velocity(midpoint, entry)
-		predicted_position += Vector2(velocity_mid["direction"]) * float(velocity_mid["speed"]) * dt
+		predicted_position += Vector2(velocity_mid.x, velocity_mid.y) * velocity_mid.z * dt
 	if _performance_diagnostic_timing_enabled:
 		_performance_diagnostic_predicted_usec += Time.get_ticks_usec() - timing_start_usec
 		_performance_diagnostic_predicted_timer_pairs += 1
 	return predicted_position
 
 
-func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
+func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Vector3:
 	var timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_velocity_calls += 1
 	var fallback_direction := Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized()
 	var fallback_speed := maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	if _propagation == null or not _propagation.is_valid():
-		var fallback := {"direction": fallback_direction, "speed": fallback_speed}
 		if _performance_diagnostic_timing_enabled:
 			_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
 			_performance_diagnostic_velocity_timer_pairs += 1
-		return fallback
+		return Vector3(fallback_direction.x, fallback_direction.y, fallback_speed)
 	if _performance_diagnostics_enabled:
 		_performance_diagnostic_velocity_propagation_samples += 1
 		_record_performance_diagnostic_velocity_cell(world_xz)
 	var coastal_timing_start_usec := Time.get_ticks_usec() if _performance_diagnostic_timing_enabled else 0
-	var sample = _propagation.sample_propagation(world_xz)
+	var sample: Vector3 = _propagation.sample_breaker_velocity(world_xz, fallback_direction, fallback_speed)
 	if _performance_diagnostic_timing_enabled:
 		_performance_diagnostic_velocity_coastal_usec += Time.get_ticks_usec() - coastal_timing_start_usec
 		_performance_diagnostic_velocity_coastal_timer_pairs += 1
-	if sample == null or not sample.valid or not sample.in_bounds:
-		var invalid_fallback := {"direction": fallback_direction, "speed": fallback_speed}
-		if _performance_diagnostic_timing_enabled:
-			_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
-			_performance_diagnostic_velocity_timer_pairs += 1
-		return invalid_fallback
-	var direction: Vector2 = Vector2(sample.render_direction_xz).normalized()
-	if direction.length_squared() < 0.5:
-		direction = fallback_direction
-	var result := {"direction": direction, "speed": maxf(float(sample.phase_speed_mps), 0.1)}
 	if _performance_diagnostic_timing_enabled:
 		_performance_diagnostic_velocity_usec += Time.get_ticks_usec() - timing_start_usec
 		_performance_diagnostic_velocity_timer_pairs += 1
-	return result
+	return sample
 
 
 func _sample_propagation(world_xz: Vector2) -> Dictionary:
