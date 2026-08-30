@@ -135,7 +135,9 @@ static func _add_stitch_triangles(vertices: PackedVector3Array, indices: PackedI
 
 
 static func _vertex(vertices: PackedVector3Array, normals: PackedVector3Array, vertex_indices: Dictionary, position: Vector3) -> int:
-	var key := "%d:%d" % [roundi(position.x * 1000.0), roundi(position.z * 1000.0)]
+	# The grid is deterministic in millimetres.  Vector2i preserves the former
+	# key identity without allocating/formatting a String per lookup.
+	var key := Vector2i(roundi(position.x * 1000.0), roundi(position.z * 1000.0))
 	if vertex_indices.has(key):
 		return vertex_indices[key]
 	var index := vertices.size()
@@ -148,6 +150,10 @@ static func _vertex(vertices: PackedVector3Array, normals: PackedVector3Array, v
 static func _add_triangle(vertices: PackedVector3Array, indices: PackedInt32Array, a: int, b: int, c: int) -> void:
 	var signed_area: float = (vertices[b] - vertices[a]).cross(vertices[c] - vertices[a]).y
 	if signed_area > 0.0:
-		indices.append_array(PackedInt32Array([a, b, c]))
+		indices.append(a)
+		indices.append(b)
+		indices.append(c)
 	else:
-		indices.append_array(PackedInt32Array([a, c, b]))
+		indices.append(a)
+		indices.append(c)
+		indices.append(b)

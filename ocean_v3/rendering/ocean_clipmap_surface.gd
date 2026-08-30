@@ -68,6 +68,9 @@ enum CoastalWarpEffectDebug {
 @export var shore_stabilization_enabled := true
 @export var shore_vertical_depth_range_m := Vector2(0.25, 6.0)
 @export var shore_horizontal_depth_range_m := Vector2(0.75, 12.0)
+# Full triangle validation is retained for explicit development/test runs, but
+# not repeated during every deterministic production startup.
+@export var validate_mesh_geometry_on_build := false
 
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
@@ -609,6 +612,7 @@ func _prepare_editor_preview() -> void:
 	_apply_debug_mode()
 
 func _rebuild_levels() -> void:
+	var rebuild_started_usec := Time.get_ticks_usec()
 	for level in _levels:
 		level.queue_free()
 	_levels.clear()
@@ -619,12 +623,19 @@ func _rebuild_levels() -> void:
 		_ensure_lod_debug_materials()
 	_triangle_count = 0
 	for level_index in clipmap_config.level_count:
+		var generation_started_usec := Time.get_ticks_usec()
 		var geometry := MeshBuilder.build_level_geometry(clipmap_config, level_index)
-		var error := MeshBuilder.validate_geometry(geometry)
-		if not error.is_empty():
-			push_error("Clipmap L%d inválido: %s" % [level_index, error])
-			continue
+		var generation_finished_usec := Time.get_ticks_usec()
+		var validation_finished_usec := generation_finished_usec
+		if validate_mesh_geometry_on_build:
+			var error := MeshBuilder.validate_geometry(geometry)
+			validation_finished_usec = Time.get_ticks_usec()
+			if not error.is_empty():
+				push_error("Clipmap L%d inválido: %s" % [level_index, error])
+				continue
+		var mesh_creation_started_usec := Time.get_ticks_usec()
 		var level_mesh := MeshBuilder.create_mesh(geometry)
+		var mesh_creation_finished_usec := Time.get_ticks_usec()
 		var instance := MeshInstance3D.new()
 		instance.name = "Level%d" % level_index
 		instance.mesh = level_mesh
@@ -635,6 +646,18 @@ func _rebuild_levels() -> void:
 		instance.set_instance_shader_parameter(&"clipmap_level", float(level_index))
 		_levels.append(instance)
 		_triangle_count += int(float(geometry.indices.size()) / 3.0)
+		print("OCEAN STARTUP clipmap L%d: generate=%d ms validate=%d ms mesh=%d ms instance=%d ms vertices=%d indices=%d" % [
+			level_index,
+			(generation_finished_usec - generation_started_usec) / 1000,
+			(validation_finished_usec - generation_finished_usec) / 1000,
+			(mesh_creation_finished_usec - mesh_creation_started_usec) / 1000,
+			(Time.get_ticks_usec() - mesh_creation_finished_usec) / 1000,
+			geometry.vertices.size(), geometry.indices.size(),
+		])
+	print("OCEAN STARTUP clipmap total: levels=%d triangles=%d total=%d ms validation=%s" % [
+		_levels.size(), _triangle_count, (Time.get_ticks_usec() - rebuild_started_usec) / 1000,
+		"ON" if validate_mesh_geometry_on_build else "OFF",
+	])
 
 
 func _apply_debug_mode() -> void:
