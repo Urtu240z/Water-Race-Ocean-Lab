@@ -2243,7 +2243,9 @@ void fragment() {
 	vec2 refraction_short_slope = vec2(0.0);
 	vec2 refraction_filtered_slope = vec2(0.0);
 	bool refraction_wave_signal_valid = false;
-	vec3 shading_normal_world;
+	// V2's per-band slopes are refraction-only data. Keep the established
+	// vertex shading normal as the default in every branch.
+	vec3 shading_normal_world = normalize(derived_normal);
 	if (ocean_normal_fragment && perf_spectral_enabled) {
 		// This is the implementation behind pixel_ocean_normal(): retain its
 		// already evaluated band components so Refraction V2 can reuse them.
