@@ -417,7 +417,6 @@ varying float shore_pre_envelope_height;
 // Refraction V2 in VERTEX mode reuses these already calculated vertex slopes.
 // LONG/MID are packed together to stay within the varying-location budget.
 varying vec4 refraction_vertex_long_mid_slope;
-varying vec2 refraction_vertex_short_slope;
 
 // Detector GPU de pre-break (4A) y funciones compartidas con el takeover 4B:
 // spectrum_uv, distance_fade, slope_from_normal, coastal_uv, has_coastal_data,
@@ -947,7 +946,6 @@ void vertex() {
 	shore_horizontal_weight_varying = 1.0;
 	shore_pre_envelope_height = 0.0;
 	refraction_vertex_long_mid_slope = vec4(0.0);
-	refraction_vertex_short_slope = vec2(0.0);
 	coastal_field = vec4(0.0);
 	coastal_metrics = vec4(0.0);
 	coastal_phase_data = vec4(0.0);
@@ -1174,7 +1172,6 @@ void vertex() {
 		long_slope_component * shore_vertical_weight_varying,
 		mid_slope_component * shore_vertical_weight_varying
 	);
-	refraction_vertex_short_slope = short_slope_component * shore_vertical_weight_varying;
 	ocean_normal = !module_enabled ? vec3(0.0, 1.0, 0.0) : normalize(vec3(-shore_final_slope.x, 1.0, -shore_final_slope.y));
 	// Production handoff is deliberately after the shoreline envelope: the
 	// stabilized FFT remains the host, while only the tracked breaker footprint
@@ -2268,7 +2265,15 @@ void fragment() {
 		// vertex() from the same four FFT normal samples already used by geometry.
 		refraction_long_slope = refraction_vertex_long_mid_slope.xy;
 		refraction_mid_slope = refraction_vertex_long_mid_slope.zw;
-		refraction_short_slope = refraction_vertex_short_slope;
+		// The normalized vertex normal is already a varying. Recover its total
+		// heightfield slope and assign the residual to SHORT, preserving the
+		// exact aggregate vertex normal without adding another varying location.
+		vec2 refraction_vertex_total_slope = vec2(
+			-derived_normal.x / max(derived_normal.y, WATER_OPTICS_EPSILON),
+			-derived_normal.z / max(derived_normal.y, WATER_OPTICS_EPSILON)
+		);
+		refraction_short_slope = refraction_vertex_total_slope
+			- refraction_long_slope - refraction_mid_slope;
 		refraction_filtered_slope = refraction_long_slope
 			+ refraction_mid_slope + refraction_short_slope;
 		refraction_wave_signal_valid = true;
