@@ -81,6 +81,7 @@ light_energy = 3.611
 light_angular_distance = 0.5
 shadow_enabled = true
 shadow_normal_bias = 1.0
+shadow_blur = 2.5
 directional_shadow_split_1 = 0.05
 directional_shadow_split_2 = 0.15
 directional_shadow_split_3 = 0.4
@@ -116,6 +117,7 @@ script = ExtResource("4_metrics")
 wave_preset = ExtResource("7_ody2a")
 global_wind_speed_mps = 18.0
 coastal_bake_asset = ExtResource("8_35bca")
+perf_overlay_enabled = true
 long_target_hs_m = 2.5
 long_choppiness = 2.0
 long_wind_direction = Vector2(1, 0.1)
@@ -139,12 +141,17 @@ deep_water_color = Color(0.019474017, 0.0909042, 0.088472255, 1)
 horizon_water_color = Color(0.0075189536, 0.07750165, 0.04554274, 1)
 trough_tint = Color(0.005060052, 0.04589343, 0.02705579, 1)
 crest_tint = Color(0.022200117, 0.15144762, 0.1125462, 1)
-absorption_coeff_rgb = Vector3(0.35, 0.14, 0.1)
-water_body_depth_start_m = 0.0
-opacity_distance_start = 0.0
+water_body_depth_start_m = 0.7
+water_body_depth_end_m = 26.0
 opacity_distance_end = 1000.0
-shallow_scattering_strength = 2.0
-transmission_max_lod = 6.0
+refraction_depth_end_m = 38.0
+transmission_detail_fade_start_m = 7.0
+transmission_detail_fade_end_m = 46.5
+bottom_visibility_fade_start_m = 5.0
+bottom_visibility_fade_end_m = 41.1
+seabed_match_tolerance_start_m = 0.0
+seabed_match_tolerance_end_m = 22.85
+shallow_fresnel_depth_end_m = 48.6
 reflection_base_roughness = 0.08
 reflection_roughness_distance_m = Vector2(80, 300)
 reflection_sspr_resolution_scale = 0.4
@@ -190,6 +197,8 @@ clipmap_config = SubResource("Resource_ody2a")
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
+process_mode = 4
+visible = false
 script = ExtResource("5_hud")
 
 [node name="Margin" type="MarginContainer" parent="BenchmarkHUD" unique_id=968768225]
@@ -250,14 +259,7 @@ script = ExtResource("17_4qkou")
 coast_id = "paradise_island_phase_test"
 source_root = NodePath("../paradise_island/Terrain_Master_VIS")
 cell_size_m = 4.0
-optical_seabed_feather_m = null
 metadata/_custom_type_script = "uid://bgmu6kdgxmpru"
-
-[node name="ReflectionProbe" type="ReflectionProbe" parent="." unique_id=143455499]
-transform = Transform3D(0.8961741, 0, -0.44370276, 0, 1, 0, 0.44370276, 0, 0.8961741, 848.0116, 14.986359, -480.6932)
-size = Vector3(191.98941, 54.848404, 93.50536)
-interior = true
-enable_shadows = true
 
 [editable path="OceanV3Mount/OceanV3"]
 [editable path="paradise_island"]
