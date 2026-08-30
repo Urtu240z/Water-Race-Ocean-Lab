@@ -20,7 +20,7 @@ const ISOLATED_PRESETS := [
 	"NO_REFRACTION", "NO_PREBREAK", "NO_SURFACE_FOAM_SOLVER", "NO_SURFACE_FOAM_RENDER"
 ]
 const PAIRED_TESTS := [
-	"NO_FOAM", "NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"
+	"NO_SSPR", "NO_REFRACTION", "NO_FOAM", "NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"
 ]
 const GPU_TIMING_UNAVAILABLE := "unavailable"
 
@@ -204,6 +204,7 @@ func _start_suite() -> void:
 	_set_clean_benchmark_state()
 	_apply_current_configuration()
 	print("OCEAN V3 BENCHMARK: ready; seed=%d; viewport=%s" % [FIXED_SEED, _viewport_size()])
+	print("OCEAN V3 BENCHMARK RENDER CONFIG: %s" % _render_configuration_summary())
 
 
 func _set_clean_benchmark_state() -> void:
@@ -433,6 +434,7 @@ func _write_results() -> Dictionary:
 		csv.store_line("# requested_resolution=%dx%d actual_viewport=%dx%d seed=%d warmup_frames=%d measurement_frames=%d stabilization_frames=%d repetitions=%d" % [
 			BENCHMARK_RESOLUTION.x, BENCHMARK_RESOLUTION.y, viewport.x, viewport.y, FIXED_SEED, warmup_frames, measurement_frames, stabilization_frames, repetitions
 		])
+		csv.store_line("# render_configuration=%s" % _render_configuration_summary())
 		csv.store_line("repetition,preset,avg_ms,median_ms,p95_ms,p99_ms,min_ms,max_ms,avg_fps,process_ms,physics_ms,gpu_ms")
 		for row in _results:
 			csv.store_line(",".join([
@@ -477,6 +479,7 @@ func _build_summary() -> String:
 	])
 	lines.append("GPU timing: unavailable in current benchmark instrumentation")
 	lines.append("Frame time source: _process delta; CPU source: Godot Performance monitors")
+	lines.append("Render configuration: %s" % _render_configuration_summary())
 	lines.append("=".repeat(60))
 	for preset in _benchmark_presets():
 		var aggregate := _aggregate_for(String(preset))
@@ -499,7 +502,7 @@ func _build_summary() -> String:
 		lines.append("%-24s %8.4f ms | %8.2f%%" % [name, delta_ms, percent])
 	if _paired_mode:
 		lines.append("")
-		lines.append("PAIRED FOAM DECOMPOSITION")
+		lines.append("PAIRED DECOMPOSITION")
 		lines.append("Each TEST is immediately paired with a preceding FULL run after the same stabilization/warm-up protocol.")
 		for test in PAIRED_TESTS:
 			var pair_aggregate := _paired_delta_aggregate(test)
@@ -519,6 +522,35 @@ func _build_summary() -> String:
 	lines.append("Coastal bake is resident and included; no per-frame bake is performed by the benchmark.")
 	lines.append("=".repeat(60))
 	return "\n".join(lines)
+
+
+func _render_configuration_summary() -> String:
+	# Reporting only: do not mutate renderer, scaling, quality, or display state.
+	# Calls are dynamic so this benchmark remains compatible with Godot versions
+	# that do not expose an adapter-name API.
+	var viewport := get_viewport()
+	var physical := DisplayServer.window_get_size()
+	var visible := Vector2i(viewport.get_visible_rect().size)
+	var internal := visible
+	if viewport.has_method(&"get_render_target_size"):
+		internal = Vector2i(viewport.call(&"get_render_target_size"))
+	var render_scale := float(viewport.get("scaling_3d_scale"))
+	var scaling_mode := str(ProjectSettings.get_setting("rendering/scaling_3d/mode", "unknown"))
+	var renderer_method := _rendering_server_value(&"get_current_rendering_method")
+	var rendering_driver := _rendering_server_value(&"get_current_rendering_driver_name")
+	var adapter_name := _rendering_server_value(&"get_video_adapter_name")
+	var vsync := int(DisplayServer.window_get_vsync_mode())
+	return "renderer=%s driver=%s adapter=%s physical=%dx%d visible=%dx%d internal=%dx%d scale=%.3f scaling_mode=%s vsync=%d" % [
+		renderer_method, rendering_driver, adapter_name,
+		physical.x, physical.y, visible.x, visible.y, internal.x, internal.y,
+		render_scale, scaling_mode, vsync,
+	]
+
+
+func _rendering_server_value(method: StringName) -> String:
+	if not RenderingServer.has_method(method):
+		return "unavailable"
+	return str(RenderingServer.call(method))
 
 
 func _paired_delta_aggregate(test: String) -> Dictionary:
