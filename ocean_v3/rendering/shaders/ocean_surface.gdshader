@@ -166,7 +166,7 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 // Legacy absorption scalar retained for material/resource compatibility.
 // Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
-uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.12, 0.055);
+uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
 uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
 uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
@@ -202,10 +202,13 @@ uniform float transmission_detail_fade_end_m : hint_range(1.0, 150.0, 0.5) = 30.
 uniform float transmission_max_lod : hint_range(0.0, 8.0, 0.1) = 5.0;
 // Seabed transmission continuity: global bottom contribution fades by local
 // bathymetric depth only after the original scene sample matches that seabed.
-uniform float bottom_visibility_fade_start_m : hint_range(0.0, 50.0, 0.5) = 8.0;
-uniform float bottom_visibility_fade_end_m : hint_range(0.1, 100.0, 0.5) = 20.0;
+uniform float bottom_visibility_fade_start_m : hint_range(0.0, 50.0, 0.5) = 6.0;
+uniform float bottom_visibility_fade_end_m : hint_range(0.1, 100.0, 0.5) = 12.0;
 uniform float seabed_match_tolerance_start_m : hint_range(0.0, 20.0, 0.25) = 1.0;
 uniform float seabed_match_tolerance_end_m : hint_range(0.1, 50.0, 0.25) = 4.0;
+uniform float shallow_fresnel_relief : hint_range(0.0, 1.0, 0.01) = 0.58;
+uniform float shallow_fresnel_depth_start_m : hint_range(0.0, 50.0, 0.1) = 1.5;
+uniform float shallow_fresnel_depth_end_m : hint_range(0.1, 100.0, 0.1) = 6.0;
 uniform float coastal_bathymetry_sea_level_y = 0.0;
 uniform bool real_seabed_coverage_enabled = false;
 uniform vec2 real_seabed_coverage_origin_xz = vec2(0.0);
@@ -2861,17 +2864,18 @@ void fragment() {
 				max(coastal_cell_size_m * 2.0, 0.001),
 				local_depth_edge_distance_m
 			);
-			float local_depth_confidence = diagnostic_bathymetry_domain
-				* local_depth_edge_confidence
-				* optical_seabed_confidence;
 			bool local_depth_sample_valid = !isnan(raw_bathymetry_m)
 				&& !isinf(raw_bathymetry_m)
 				&& raw_bathymetry_m >= 0.0;
+			// The baked G channel is an interior feather for seabed classification;
+			// it must not turn a valid real-geometry hit into an open-ocean optical
+			// column. Use the binary real coverage for depth authority and retain G
+			// for the later seabed-match/bottom fade decisions.
+			float local_depth_authority = diagnostic_bathymetry_domain
+				* local_depth_edge_confidence
+				* real_seabed_coverage_raw;
 			bool local_water_depth_valid = local_depth_sample_valid
-				&& local_depth_confidence > 0.001;
-			if (!local_water_depth_valid) {
-				local_depth_confidence = 0.0;
-			}
+				&& local_depth_authority > 0.001;
 			float coastal_local_depth_m = max(raw_bathymetry_m, 0.0);
 			float local_deep_fallback_m = max(
 				maximum_optical_depth,
@@ -2883,14 +2887,14 @@ void fragment() {
 			float local_water_depth_m = mix(
 				local_deep_fallback_m,
 				coastal_local_depth_m,
-				local_depth_confidence
+				local_depth_authority
 			);
 			// Transmission uses bathymetric depth when a real seabed has authority,
 			// but keeps the camera-dependent path for open ocean. The shallow cap
 			// prevents a long grazing ray from turning shallow water into a falsely
 			// deep optical column.
 			float transmission_seabed_confidence = local_water_depth_valid
-				? clamp(optical_seabed_confidence, 0.0, 1.0)
+				? clamp(real_seabed_coverage_raw, 0.0, 1.0)
 				: 0.0;
 			float shallow_transmission_path_m = min(
 				bounded_view_water_path_m,
@@ -3342,7 +3346,21 @@ void fragment() {
 			// The existing physical Fresnel is the single optical balance between
 			// transmission and the surface/body response. The refraction offset above
 			// only uses (1 - fresnel) to control distortion magnitude.
-			float surface_weight = 1.0 - (1.0 - fresnel) * (1.0 - distance_opacity);
+			// Keep open-ocean Fresnel and distance opacity unchanged. In real shallow
+			// water, relief removes only the distance-driven surface authority so the
+			// already-composed seabed transmission is not hidden again.
+			float real_shallow_authority = transmission_seabed_confidence
+				* (1.0 - smoothstep(
+					shallow_fresnel_depth_start_m,
+					max(shallow_fresnel_depth_end_m, shallow_fresnel_depth_start_m + 0.001),
+					local_water_depth_m
+				));
+			float shallow_surface_relief = clamp(shallow_fresnel_relief, 0.0, 1.0)
+				* clamp(real_shallow_authority, 0.0, 1.0);
+			float relieved_distance_opacity = distance_opacity
+				* (1.0 - shallow_surface_relief);
+			float surface_weight = fresnel
+				+ (1.0 - fresnel) * relieved_distance_opacity;
 			vec3 final_color = mix(optical_scene, surface_color, surface_weight);
 
 			// Foam is composited after water optics, so Fresnel/reflection cannot be

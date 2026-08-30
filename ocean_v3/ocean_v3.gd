@@ -339,7 +339,7 @@ var _performance_overlay_label: Label
 		absorption_density = value
 		_request_visual_sync()
 
-@export var absorption_coeff_rgb: Vector3 = Vector3(0.35, 0.12, 0.055):
+@export var absorption_coeff_rgb: Vector3 = Vector3(0.35, 0.14, 0.10):
 	set(value):
 		absorption_coeff_rgb = Vector3(
 			maxf(value.x, 0.0),
@@ -493,12 +493,12 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Water Optics / Seabed Transmission")
-@export_range(0.0, 50.0, 0.5) var bottom_visibility_fade_start_m: float = 8.0:
+@export_range(0.0, 50.0, 0.5) var bottom_visibility_fade_start_m: float = 6.0:
 	set(value):
 		bottom_visibility_fade_start_m = clampf(value, 0.0, 50.0)
 		_request_visual_sync()
 
-@export_range(0.1, 100.0, 0.5) var bottom_visibility_fade_end_m: float = 20.0:
+@export_range(0.1, 100.0, 0.5) var bottom_visibility_fade_end_m: float = 12.0:
 	set(value):
 		bottom_visibility_fade_end_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
@@ -511,6 +511,22 @@ var _performance_overlay_label: Label
 @export_range(0.1, 50.0, 0.25) var seabed_match_tolerance_end_m: float = 4.0:
 	set(value):
 		seabed_match_tolerance_end_m = clampf(value, 0.1, 50.0)
+		_request_visual_sync()
+
+@export_group("Water Optics / Shallow Surface Relief")
+@export_range(0.0, 1.0, 0.01) var shallow_fresnel_relief: float = 0.58:
+	set(value):
+		shallow_fresnel_relief = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_range(0.0, 50.0, 0.1) var shallow_fresnel_depth_start_m: float = 1.5:
+	set(value):
+		shallow_fresnel_depth_start_m = clampf(value, 0.0, 50.0)
+		_request_visual_sync()
+
+@export_range(0.1, 100.0, 0.1) var shallow_fresnel_depth_end_m: float = 6.0:
+	set(value):
+		shallow_fresnel_depth_end_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
 
 @export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "TRANSMISSION_OPTICAL_DEPTH", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
@@ -2081,6 +2097,9 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"bottom_visibility_fade_end_m", bottom_visibility_fade_end_m)
 	material.set_shader_parameter(&"seabed_match_tolerance_start_m", seabed_match_tolerance_start_m)
 	material.set_shader_parameter(&"seabed_match_tolerance_end_m", seabed_match_tolerance_end_m)
+	material.set_shader_parameter(&"shallow_fresnel_relief", shallow_fresnel_relief)
+	material.set_shader_parameter(&"shallow_fresnel_depth_start_m", shallow_fresnel_depth_start_m)
+	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():
