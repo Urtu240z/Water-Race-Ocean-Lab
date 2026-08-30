@@ -119,11 +119,11 @@ func configure(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2
 	var levels_rebuilt_usec := Time.get_ticks_usec()
 	_apply_debug_mode()
 	print("OCEAN STARTUP surface: shader=%d ms materials=%d ms clipmap=%d ms lod_debug=%d total=%d ms" % [
-		(shader_assigned_usec - configure_started_usec) / 1000,
-		(materials_configured_usec - shader_assigned_usec) / 1000,
-		(levels_rebuilt_usec - materials_configured_usec) / 1000,
+		int(float(shader_assigned_usec - configure_started_usec) / 1000.0),
+		int(float(materials_configured_usec - shader_assigned_usec) / 1000.0),
+		int(float(levels_rebuilt_usec - materials_configured_usec) / 1000.0),
 		0 if _lod_debug_materials.is_empty() else 1,
-		(Time.get_ticks_usec() - configure_started_usec) / 1000,
+		int(float(Time.get_ticks_usec() - configure_started_usec) / 1000.0),
 	])
 
 
@@ -228,9 +228,9 @@ func _ensure_breaking_debug_material() -> void:
 	var shader_assignment_started_usec := Time.get_ticks_usec()
 	_breaking_debug_material.shader = _breaking_diagnostic_shader
 	print("OCEAN BREAKING DEBUG activation: resource_load=%d ms shader_assignment=%d ms total=%d ms" % [
-		shader_load_usec / 1000,
-		(Time.get_ticks_usec() - shader_assignment_started_usec) / 1000,
-		(Time.get_ticks_usec() - activation_started_usec) / 1000,
+		int(float(shader_load_usec) / 1000.0),
+		int(float(Time.get_ticks_usec() - shader_assignment_started_usec) / 1000.0),
+		int(float(Time.get_ticks_usec() - activation_started_usec) / 1000.0),
 	])
 
 
@@ -648,14 +648,14 @@ func _rebuild_levels() -> void:
 		_triangle_count += int(float(geometry.indices.size()) / 3.0)
 		print("OCEAN STARTUP clipmap L%d: generate=%d ms validate=%d ms mesh=%d ms instance=%d ms vertices=%d indices=%d" % [
 			level_index,
-			(generation_finished_usec - generation_started_usec) / 1000,
-			(validation_finished_usec - generation_finished_usec) / 1000,
-			(mesh_creation_finished_usec - mesh_creation_started_usec) / 1000,
-			(Time.get_ticks_usec() - mesh_creation_finished_usec) / 1000,
+			int(float(generation_finished_usec - generation_started_usec) / 1000.0),
+			int(float(validation_finished_usec - generation_finished_usec) / 1000.0),
+			int(float(mesh_creation_finished_usec - mesh_creation_started_usec) / 1000.0),
+			int(float(Time.get_ticks_usec() - mesh_creation_finished_usec) / 1000.0),
 			geometry.vertices.size(), geometry.indices.size(),
 		])
 	print("OCEAN STARTUP clipmap total: levels=%d triangles=%d total=%d ms validation=%s" % [
-		_levels.size(), _triangle_count, (Time.get_ticks_usec() - rebuild_started_usec) / 1000,
+		_levels.size(), _triangle_count, int(float(Time.get_ticks_usec() - rebuild_started_usec) / 1000.0),
 		"ON" if validate_mesh_geometry_on_build else "OFF",
 	])
 
