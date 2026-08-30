@@ -158,6 +158,37 @@ Headless mode is supported only for parser/runtime smoke validation. If GPU
 solver readiness is not reached within the timeout, the runner exits with an
 error instead of producing misleading timings.
 
+## PERF-P0 BreakerRibbonPool checkpoint
+
+`breaker_ribbon_perf_checkpoint.tscn` is a graphical-only CPU checkpoint for
+the ribbon pool. It holds the same rough coastal scene, fixed camera, 1920x1080
+window, seed `20260830`, and debug-off state for three cases:
+
+```text
+A  pool disabled (legacy PREBREAK remains enabled)
+B  pool enabled, only frames with zero ACTIVE breakers are retained
+C  pool enabled, only frames with one or more normal ACTIVE breakers are retained
+```
+
+The B/C windows are qualified from observed pool state; the runner never forces
+spawn, freezes lifecycle, or changes the detector cadence. It also enables
+pull-based pool counters only while measuring. Those counters report active and
+cooldown slot visits, RK2 trajectory steps, velocity samples, final host
+propagation samples, and detector batch points. They do not log per call and
+are disabled at the end of the run.
+
+Run it outside the editor profiler so instrumentation itself is not part of the
+measurement:
+
+```text
+Godot_v4.7.1-stable_win64_console.exe --path . --scene res://ocean_v3/tests/performance/breaker_ribbon_perf_checkpoint.tscn --resolution 1920x1080
+```
+
+It writes a JSON result under `user://ocean_v3_benchmarks/`. GPU timing remains
+unavailable by design: this checkpoint performs no GPU synchronization or
+readback. If a qualified B or C window cannot reach its requested frame count,
+the runner reports that failure and emits no partial case result.
+
 In the current project runtime, process shutdown may still print two invalid
 RID messages from the pre-existing `SurfaceFoamMidHistorySolver` teardown. No
 RID errors were observed while switching profiles or recording samples; the

@@ -1528,6 +1528,22 @@ func breaker_pool_summary() -> Dictionary:
 	return result
 
 
+func set_breaker_performance_diagnostics_enabled(enabled: bool) -> void:
+	if _breaker_pool != null:
+		_breaker_pool.set_performance_diagnostics_enabled(enabled)
+
+
+func reset_breaker_performance_diagnostics() -> void:
+	if _breaker_pool != null:
+		_breaker_pool.reset_performance_diagnostics()
+
+
+func breaker_performance_diagnostics_snapshot() -> Dictionary:
+	if _breaker_pool == null:
+		return {}
+	return _breaker_pool.performance_diagnostics_snapshot()
+
+
 func breaker_tracking_snapshot() -> Array:
 	## 4C-S4: crest_s/stage por slot para el HUD (función pura del render time).
 	if _breaker_pool == null:

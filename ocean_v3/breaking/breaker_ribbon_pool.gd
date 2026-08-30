@@ -205,6 +205,26 @@ var _diagnostic_visible := true
 var _corridor_evaluation_count := 0
 var _corridor_evaluation_usec := 0
 
+# PERF-P0: counters are opt-in and deliberately separate from the normal
+# scheduler.  When disabled, the hot path pays only the enclosing boolean
+# checks; snapshots are created only when a diagnostic runner requests one.
+var _performance_diagnostics_enabled := false
+var _performance_diagnostic_frames := 0
+var _performance_diagnostic_active_frames := 0
+var _performance_diagnostic_idle_frames := 0
+var _performance_diagnostic_active_slot_visits := 0
+var _performance_diagnostic_cooldown_slot_visits := 0
+var _performance_diagnostic_active_breaker_updates := 0
+var _performance_diagnostic_predicted_breaker_calls := 0
+var _performance_diagnostic_trajectory_steps := 0
+var _performance_diagnostic_velocity_calls := 0
+var _performance_diagnostic_velocity_propagation_samples := 0
+var _performance_diagnostic_host_propagation_samples := 0
+var _performance_diagnostic_detector_ticks := 0
+var _performance_diagnostic_detector_slots := 0
+var _performance_diagnostic_detector_height_points := 0
+var _performance_diagnostic_detector_slope_points := 0
+
 
 # --- Réplicas CPU de edge_fade/envelope para validación y HUD. ---
 static func edge_fade(u: float, v: float) -> float:
@@ -630,6 +650,71 @@ func track_time() -> float:
 	return _last_track_time
 
 
+func set_performance_diagnostics_enabled(enabled: bool) -> void:
+	## PERF-P0: profiling-only counters.  This never changes pool scheduling,
+	## queries, lifecycle, or visual state.
+	_performance_diagnostics_enabled = enabled
+	_reset_performance_diagnostics()
+
+
+func performance_diagnostics_enabled() -> bool:
+	return _performance_diagnostics_enabled
+
+
+func reset_performance_diagnostics() -> void:
+	_reset_performance_diagnostics()
+
+
+func performance_diagnostics_snapshot() -> Dictionary:
+	## Allocation is intentionally pull-based: normal runtime never builds this
+	## Dictionary.  Totals can be differenced by a benchmark between frames.
+	return {
+		"enabled": _performance_diagnostics_enabled,
+		"frames": _performance_diagnostic_frames,
+		"active_frames": _performance_diagnostic_active_frames,
+		"idle_frames": _performance_diagnostic_idle_frames,
+		"active_slot_visits": _performance_diagnostic_active_slot_visits,
+		"cooldown_slot_visits": _performance_diagnostic_cooldown_slot_visits,
+		"active_breaker_updates": _performance_diagnostic_active_breaker_updates,
+		"predicted_breaker_calls": _performance_diagnostic_predicted_breaker_calls,
+		"trajectory_steps": _performance_diagnostic_trajectory_steps,
+		"velocity_calls": _performance_diagnostic_velocity_calls,
+		"velocity_propagation_samples": _performance_diagnostic_velocity_propagation_samples,
+		"host_propagation_samples": _performance_diagnostic_host_propagation_samples,
+		"coastal_propagation_samples": _performance_diagnostic_velocity_propagation_samples + _performance_diagnostic_host_propagation_samples,
+		"detector_ticks": _performance_diagnostic_detector_ticks,
+		"detector_slots": _performance_diagnostic_detector_slots,
+		"detector_height_points": _performance_diagnostic_detector_height_points,
+		"detector_slope_points": _performance_diagnostic_detector_slope_points,
+	}
+
+
+func _reset_performance_diagnostics() -> void:
+	_performance_diagnostic_frames = 0
+	_performance_diagnostic_active_frames = 0
+	_performance_diagnostic_idle_frames = 0
+	_performance_diagnostic_active_slot_visits = 0
+	_performance_diagnostic_cooldown_slot_visits = 0
+	_performance_diagnostic_active_breaker_updates = 0
+	_performance_diagnostic_predicted_breaker_calls = 0
+	_performance_diagnostic_trajectory_steps = 0
+	_performance_diagnostic_velocity_calls = 0
+	_performance_diagnostic_velocity_propagation_samples = 0
+	_performance_diagnostic_host_propagation_samples = 0
+	_performance_diagnostic_detector_ticks = 0
+	_performance_diagnostic_detector_slots = 0
+	_performance_diagnostic_detector_height_points = 0
+	_performance_diagnostic_detector_slope_points = 0
+
+
+func _record_performance_diagnostic_frame() -> void:
+	_performance_diagnostic_frames += 1
+	if _has_active_breakers():
+		_performance_diagnostic_active_frames += 1
+	else:
+		_performance_diagnostic_idle_frames += 1
+
+
 func summary() -> Dictionary:
 	var active_count := 0
 	for entry in _tracking:
@@ -711,6 +796,8 @@ func _process(_delta: float) -> void:
 		return
 	_sync_uniforms()
 	_update_tracking()
+	if _performance_diagnostics_enabled:
+		_record_performance_diagnostic_frame()
 	_sync_production_takeover()
 	_prune_retired_transition_anchors()
 	if _structural_energy_update_pending and not _has_active_breakers():
@@ -873,8 +960,12 @@ func _update_tracking() -> void:
 func _update_active_slots(render_time: float) -> void:
 	## 5R.1F: todos los slots ACTIVE avanzan su lifecycle autónomo cada frame.
 	for index in _anchors.size():
+		if _performance_diagnostics_enabled:
+			_performance_diagnostic_active_slot_visits += 1
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 		if bool(entry.get("active", false)):
+			if _performance_diagnostics_enabled:
+				_performance_diagnostic_active_breaker_updates += 1
 			_update_active_breaker(index, entry, render_time)
 
 
@@ -882,6 +973,8 @@ func _update_cooldown_slots(render_time: float) -> void:
 	## 5R.1F: slots en COOLDOWN (active=false y render_time < next_spawn_time) no
 	## consultan OceanQuery; sólo se refresca/publica el countdown para el HUD.
 	for index in _anchors.size():
+		if _performance_diagnostics_enabled:
+			_performance_diagnostic_cooldown_slot_visits += 1
 		var entry: Dictionary = _tracking[index] if index < _tracking.size() else {}
 		if bool(entry.get("active", false)):
 			continue
@@ -914,6 +1007,8 @@ func _run_detector_tick(render_time: float) -> void:
 	## slots DETECT recorriendo circularmente desde _detector_cursor (ignora
 	## ACTIVE y COOLDOWN) y consulta TODOS en UNA única batch.
 	_detector_tick += 1
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_detector_ticks += 1
 	_detector_slope_queries_last_tick = 0
 	_detector_slope_points_last_tick = 0
 	_detector_query_elapsed_ms_last_tick = 0.0
@@ -949,6 +1044,9 @@ func _run_detector_tick(render_time: float) -> void:
 		for offset in CREST_SAMPLE_OFFSETS:
 			var xz: Vector2 = Vector2(anchor["xz"]) + travel_dir * (float(offset) * wavelength)
 			positions.append(Vector3(xz.x, _sea_level_y, xz.y))
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_detector_slots += selected.size()
+		_performance_diagnostic_detector_height_points += positions.size()
 	var query_start_usec := Time.get_ticks_usec()
 	var samples: Array = _call_breaker_heights(positions, render_time)
 	_detector_query_elapsed_ms_last_tick = float(Time.get_ticks_usec() - query_start_usec) * 0.001
@@ -1036,6 +1134,8 @@ func _update_slot(index: int, anchor: Dictionary, heights: PackedFloat32Array, v
 		var travel_dir := Vector2(anchor["direction"]).normalized()
 		var candidate_xz := Vector2(anchor["xz"]) + travel_dir * float(candidate["s"])
 		var slope_start_usec := Time.get_ticks_usec()
+		if _performance_diagnostics_enabled:
+			_performance_diagnostic_detector_slope_points += 1
 		var slope_samples := _call_breaker_slopes([Vector3(candidate_xz.x, _sea_level_y, candidate_xz.y)], render_time)
 		_detector_query_elapsed_ms_last_tick += float(Time.get_ticks_usec() - slope_start_usec) * 0.001
 		if slope_samples.size() == 1 and slope_samples[0] != null:
@@ -1095,6 +1195,8 @@ func _update_active_breaker(index: int, entry: Dictionary, render_time: float) -
 
 
 func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_predicted_breaker_calls += 1
 	var spawn_time: float = float(entry.get("spawn_time", render_time))
 	var age: float = maxf(0.0, render_time - spawn_time)
 	var phase_speed: float = maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
@@ -1103,6 +1205,8 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 		return predicted_position + Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized() * (phase_speed * age)
 	# Fixed-step midpoint integration makes the result independent of render FPS.
 	var steps := clampi(int(ceil(age / TRAJECTORY_STEP_S)), 1, TRAJECTORY_MAX_STEPS)
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_trajectory_steps += steps
 	var dt := age / float(steps)
 	for _step in steps:
 		var velocity_0 := _sample_velocity(predicted_position, entry)
@@ -1113,10 +1217,14 @@ func _predicted_breaker_xz(entry: Dictionary, render_time: float) -> Vector2:
 
 
 func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_velocity_calls += 1
 	var fallback_direction := Vector2(entry.get("spawn_direction", Vector2.RIGHT)).normalized()
 	var fallback_speed := maxf(float(entry.get("spawn_phase_speed", 0.1)), 0.1)
 	if _propagation == null or not _propagation.is_valid():
 		return {"direction": fallback_direction, "speed": fallback_speed}
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_velocity_propagation_samples += 1
 	var sample = _propagation.sample_propagation(world_xz)
 	if sample == null or not sample.valid or not sample.in_bounds:
 		return {"direction": fallback_direction, "speed": fallback_speed}
@@ -1129,6 +1237,8 @@ func _sample_velocity(world_xz: Vector2, entry: Dictionary) -> Dictionary:
 func _sample_propagation(world_xz: Vector2) -> Dictionary:
 	if _propagation == null or not _propagation.is_valid():
 		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
+	if _performance_diagnostics_enabled:
+		_performance_diagnostic_host_propagation_samples += 1
 	var sample = _propagation.sample_propagation(world_xz)
 	if sample == null:
 		return {"valid": false, "in_bounds": false, "depth_m": 0.0, "shoaling": 1.0, "direction": Vector2.RIGHT}
