@@ -279,7 +279,6 @@ func configure(propagation, warp, long_hs_m: float, coastal_fraction: float, sea
 	_sea_level_y = sea_level_y
 	_surface_material = surface_material
 	_ensure_material()
-	_ensure_detector_debug_visual()
 	set_energy_model(long_hs_m, coastal_fraction)
 	_sync_uniforms()
 	visible = _diagnostic_visible
@@ -917,7 +916,10 @@ func force_spawn_selected_slot() -> bool:
 func _process(_delta: float) -> void:
 	if _material == null or _surface_material == null:
 		return
-	_update_detector_debug_visual()
+	# ImmediateMesh diagnostics are a separate opt-in overlay.  The production
+	# breaker lip must never pay clear/begin/add/end work for it.
+	if _debug_overlay_requested():
+		_update_detector_debug_visual()
 	# SimulationClock is the sole temporal authority. Camera movement while
 	# paused may change visibility/fade uniforms, but never breaker world state.
 	var clock = get_node_or_null("/root/SimulationClock")
@@ -955,12 +957,22 @@ func _ensure_detector_debug_visual() -> void:
 	add_child(_detector_debug_instance)
 
 
+func _debug_overlay_requested() -> bool:
+	return _diagnostic_visible and visible and (_debug_mode == DebugMode.DETECTOR \
+		or _debug_mode == DebugMode.REGION or _debug_mode == DebugMode.FORCE_LIP)
+
+
 func _update_detector_debug_visual() -> void:
+	if not _debug_overlay_requested():
+		if _detector_debug_instance != null:
+			_detector_debug_instance.visible = false
+		return
+	_ensure_detector_debug_visual()
 	if _detector_debug_instance == null or _detector_debug_mesh == null:
 		return
 	var detector_enabled := _debug_mode == DebugMode.DETECTOR and _diagnostic_visible and visible and not _anchors.is_empty()
 	var has_active_marker := false
-	if _debug_mode != DebugMode.OFF and _diagnostic_visible and visible and not _anchors.is_empty():
+	if _debug_overlay_requested() and not _anchors.is_empty():
 		for index in _anchors.size():
 			if _debug_slot >= 0 and index != _debug_slot:
 				continue
