@@ -5,7 +5,7 @@ extends Node3D
 
 const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
 const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
-const BreakingDiagnosticShader := preload("res://ocean_v3/rendering/shaders/ocean_surface_debug.gdshader")
+const BREAKING_DIAGNOSTIC_SHADER_PATH := "res://ocean_v3/rendering/shaders/ocean_surface_debug.gdshader"
 
 enum DebugMode {
 	FULL_DISPLACEMENT,
@@ -72,6 +72,7 @@ enum CoastalWarpEffectDebug {
 var _surface_material := ShaderMaterial.new()
 var _wireframe_material := ShaderMaterial.new()
 var _breaking_debug_material: ShaderMaterial
+var _breaking_diagnostic_shader: Shader
 # LOD colours are a diagnostic view.  Keeping this cache empty in production is
 # intentional: each entry is a complete ShaderMaterial with all ocean uniforms.
 var _lod_debug_materials: Array[ShaderMaterial] = []
@@ -208,11 +209,26 @@ func _breaking_diagnostic_active() -> bool:
 func _ensure_breaking_debug_material() -> void:
 	if _breaking_debug_material != null:
 		return
+	var activation_started_usec := Time.get_ticks_usec()
+	var shader_load_usec := 0
+	if _breaking_diagnostic_shader == null:
+		var resource_load_started_usec := Time.get_ticks_usec()
+		_breaking_diagnostic_shader = load(BREAKING_DIAGNOSTIC_SHADER_PATH) as Shader
+		shader_load_usec = Time.get_ticks_usec() - resource_load_started_usec
+	if _breaking_diagnostic_shader == null:
+		push_error("No se pudo cargar el shader de diagnóstico de breaking.")
+		return
 	_breaking_debug_material = _surface_material.duplicate() as ShaderMaterial
 	if _breaking_debug_material == null:
 		push_error("No se pudo duplicar el material de diagnóstico de breaking.")
 		return
-	_breaking_debug_material.shader = BreakingDiagnosticShader
+	var shader_assignment_started_usec := Time.get_ticks_usec()
+	_breaking_debug_material.shader = _breaking_diagnostic_shader
+	print("OCEAN BREAKING DEBUG activation: resource_load=%d ms shader_assignment=%d ms total=%d ms" % [
+		shader_load_usec / 1000,
+		(Time.get_ticks_usec() - shader_assignment_started_usec) / 1000,
+		(Time.get_ticks_usec() - activation_started_usec) / 1000,
+	])
 
 
 func set_surface_foam_spectrum(surface_foam: Texture2DRD, field_domain_m: float) -> void:
