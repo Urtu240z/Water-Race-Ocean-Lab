@@ -95,14 +95,14 @@ claim until a successful graphical run is recorded.
 
 ### Recorded focusing run
 
-On 2026-08-31, the focusing implementation completed the paired test at
-1920x1080, Forward+, D3D12, render scale 0.70, on the RTX 4070 Laptop GPU.
-Seven `FULL` / `NO_CAUSTICS` pairs measured a mean CPU-frame delta of
-`-0.0091 ms`, with `0.0766 ms` standard deviation and range
-`-0.1107..0.0973 ms`. `FULL` averaged `4.3220 ms` (P95 `5.7876 ms`) and
-`NO_CAUSTICS` averaged `4.3311 ms` (P95 `5.7954 ms`). This is no measurable
-CPU-frame regression in that run; it is not a GPU-time claim because the
-benchmark intentionally performs no GPU synchronization or readback.
+On 2026-08-31, after successful creation of the caustics compute shader, the
+paired test completed at 1920x1080, Forward+, D3D12, render scale 0.70, on the
+RTX 4070 Laptop GPU. Seven `FULL` / `NO_CAUSTICS` pairs measured a mean
+CPU-frame delta of `+0.0304 ms`, with `0.0703 ms` standard deviation and range
+`-0.0856..+0.1197 ms`. `FULL` averaged `4.3806 ms` (P95 `5.8509 ms`) and
+`NO_CAUSTICS` averaged `4.3502 ms` (P95 `5.8417 ms`). This is below the
+`+0.20 ms` CPU-frame target for that configuration; it is not a GPU-time claim
+because the benchmark intentionally performs no GPU synchronization or readback.
 
 ## Current limitations and next checks
 

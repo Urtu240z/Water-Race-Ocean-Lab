@@ -34,12 +34,12 @@ vec3 normal_at(vec2 world_xz) {
 	vec3 long_coastal = textureLod(normal_long_coastal, spectrum_uv(world_xz, params.domains.x), 0.0).rgb;
 	vec3 long_remainder = textureLod(normal_long_remainder, spectrum_uv(world_xz, params.domains.y), 0.0).rgb;
 	vec3 mid = textureLod(normal_mid, spectrum_uv(world_xz, params.domains.z), 0.0).rgb;
-	vec3 short = textureLod(normal_short, spectrum_uv(world_xz, params.domains.w), 0.0).rgb;
+	vec3 short_normal = textureLod(normal_short, spectrum_uv(world_xz, params.domains.w), 0.0).rgb;
 	// Combine recovered slopes, never independent art noise or a second wave set.
 	vec2 slope = slope_from_normal(long_coastal) * params.weights.x
 		+ slope_from_normal(long_remainder) * params.weights.y
 		+ slope_from_normal(mid) * params.weights.z
-		+ slope_from_normal(short) * params.weights.w;
+		+ slope_from_normal(short_normal) * params.weights.w;
 	return normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
