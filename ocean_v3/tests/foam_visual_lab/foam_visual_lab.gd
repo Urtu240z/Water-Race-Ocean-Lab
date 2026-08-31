@@ -216,16 +216,10 @@ func _make_candidate_container(index: int) -> SubViewportContainer:
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	viewport.handle_input_locally = false
 	viewport.transparent_bg = false
-	var world := World3D.new()
-	var source_environment := ($WorldEnvironment as WorldEnvironment).environment
-	world.environment = source_environment.duplicate() as Environment
-	viewport.world_3d = world
-	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-42.0, -28.0, 0.0)
-	light.light_color = Color(1.0, 0.94, 0.84, 1.0)
-	light.light_energy = 1.2
-	light.shadow_enabled = false
-	viewport.add_child(light)
+	_configure_candidate_world(viewport)
+	var light := _duplicate_reference_light()
+	if light != null:
+		viewport.add_child(light)
 	var camera := Camera3D.new()
 	camera.name = "Camera"
 	camera.position = Vector3(0.0, 6.5, 18.0)
@@ -245,6 +239,29 @@ func _make_candidate_container(index: int) -> SubViewportContainer:
 	container.add_child(viewport)
 	_candidate_viewports.append(viewport)
 	return container
+
+
+func _configure_candidate_world(viewport: SubViewport) -> void:
+	var source_we := $WorldEnvironment as WorldEnvironment
+	var world := World3D.new()
+	if source_we.environment != null:
+		world.environment = source_we.environment.duplicate(true) as Environment
+	if source_we.camera_attributes != null:
+		world.camera_attributes = source_we.camera_attributes.duplicate(true) as CameraAttributes
+	viewport.world_3d = world
+
+
+func _duplicate_reference_light() -> DirectionalLight3D:
+	var source_light := $LabLight as DirectionalLight3D
+	if source_light == null:
+		push_error("Foam Visual Lab requires a DirectionalLight3D named LabLight")
+		return null
+	var light := source_light.duplicate() as DirectionalLight3D
+	if light != null:
+		# The candidate light is a direct child of the viewport, so the scene
+		# light's world transform is also its local transform there.
+		light.transform = source_light.global_transform
+	return light
 
 
 func _sync_candidate_materials() -> void:

@@ -29,6 +29,10 @@ Los cuatro SubViewports usan la misma geometría generada determinísticamente (
 
 La medición disponible en PERF es el tiempo de frame/FPS y los monitores CPU de Godot. No se inventa un GPU time: el proyecto marca explícitamente esa métrica como no disponible cuando el renderer no expone una lectura fiable.
 
+## Autoridad de iluminación y exposición
+
+La autoridad visual es la escena `foam_visual_lab.tscn`: `WorldEnvironment` aporta el `Environment` y los `CameraAttributes`, y `LabLight` aporta la `DirectionalLight3D`. Cada SubViewport crea su propio `World3D`, clona esos recursos y duplica esa luz con sus propiedades y transform, sin valores de iluminación codificados en el script. Así, los cuatro candidatos comparten exactamente la iluminación y la exposición definidas en la escena.
+
 ## Qué no usar para benchmarking
 
 No medir rendimiento en VISUAL GRID: cuatro SubViewports renderizan simultáneamente y sirven para inspección visual. Usar exclusivamente `P`/PERF MODE, con un candidato activo cada vez, y registrar el renderer/dispositivo utilizado.
