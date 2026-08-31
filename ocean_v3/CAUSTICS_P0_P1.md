@@ -98,9 +98,9 @@ claim until a successful graphical run is recorded.
 On 2026-08-31, after successful creation of the caustics compute shader, the
 paired test completed at 1920x1080, Forward+, D3D12, render scale 0.70, on the
 RTX 4070 Laptop GPU. Seven `FULL` / `NO_CAUSTICS` pairs measured a mean
-CPU-frame delta of `+0.0304 ms`, with `0.0703 ms` standard deviation and range
-`-0.0856..+0.1197 ms`. `FULL` averaged `4.3806 ms` (P95 `5.8509 ms`) and
-`NO_CAUSTICS` averaged `4.3502 ms` (P95 `5.8417 ms`). This is below the
+CPU-frame delta of `+0.0389 ms`, with `0.0787 ms` standard deviation and range
+`-0.1167..+0.1055 ms`. `FULL` averaged `4.3901 ms` (P95 `5.8416 ms`) and
+`NO_CAUSTICS` averaged `4.3512 ms` (P95 `5.8337 ms`). This is below the
 `+0.20 ms` CPU-frame target for that configuration; it is not a GPU-time claim
 because the benchmark intentionally performs no GPU synchronization or readback.
 

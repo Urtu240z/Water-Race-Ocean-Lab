@@ -94,7 +94,7 @@ func advance(delta_s: float, camera_world_xz: Vector2, sun_direction_world: Vect
 		0.18, 0.18, 1.0, 0.65,
 		_domains_m[0], _domains_m[1], _domains_m[2], _domains_m[3],
 	])
-	_rd.compute_list_set_push_constant(list, push.to_byte_array(), 96)
+	_rd.compute_list_set_push_constant(list, push.to_byte_array(), 80)
 	var groups := ceili(float(_resolution) / 8.0)
 	_rd.compute_list_dispatch(list, groups, groups, 1)
 	_rd.compute_list_end()
