@@ -5,7 +5,8 @@ extends Node3D
 ## material is duplicated four times, so all candidates consume the same
 ## Texture2DRD resources, uniforms, seed and SimulationClock state.
 
-const INTERNAL_VIEWPORT_SIZE := Vector2i(640, 360)
+const GRID_VIEWPORT_SIZE := Vector2i(640, 360)
+const FULLSCREEN_VIEWPORT_SIZE := Vector2i(1920, 1080)
 const CANDIDATE_NAMES := [&"BASELINE", &"OPTION A", &"OPTION B", &"OPTION C"]
 const CANDIDATE_SHADER_PATHS := [
 	"res://ocean_v3/tests/foam_visual_lab/shaders/ocean_surface_baseline.gdshader",
@@ -100,10 +101,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 func _select_candidate(index: int) -> void:
+	var candidate_changed := _selected_candidate != index
 	_selected_candidate = clampi(index, 1, 3)
 	if _mode == &"PERF":
 		_show_fullscreen(true)
 	elif _mode == &"FULLSCREEN":
+		_configure_fullscreen_ab_viewports()
+		if candidate_changed:
+			_begin_visual_resync()
 		_refresh_fullscreen_texture()
 	_update_fullscreen_text()
 
@@ -154,6 +159,7 @@ func _wait_for_shared_ocean() -> void:
 		return
 	_build_candidate_materials()
 	_build_candidate_viewports()
+	_apply_current_mode_viewport_configuration()
 	_refresh_fullscreen_texture()
 	_lab_ready = true
 	_initializing = false
@@ -207,14 +213,16 @@ func _build_candidate_viewports() -> void:
 func _make_candidate_container(index: int) -> SubViewportContainer:
 	var container := SubViewportContainer.new()
 	container.name = "Viewport_%s" % CANDIDATE_NAMES[index].to_pascal_case()
-	container.custom_minimum_size = Vector2(INTERNAL_VIEWPORT_SIZE)
+	container.custom_minimum_size = Vector2(GRID_VIEWPORT_SIZE)
 	container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	container.stretch = true
+	# Fullscreen uses the ViewportTexture directly. Keeping this false makes the
+	# viewport's explicit GRID/FULLSCREEN render size authoritative.
+	container.stretch = false
 	container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var viewport := SubViewport.new()
 	viewport.name = "RenderViewport"
-	viewport.size = INTERNAL_VIEWPORT_SIZE
+	viewport.size = GRID_VIEWPORT_SIZE
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	viewport.handle_input_locally = false
 	viewport.transparent_bg = false
@@ -283,42 +291,80 @@ func _sync_candidate_materials() -> void:
 
 
 func _show_grid() -> void:
-	var leaving_perf := _mode == &"PERF"
+	var returning_to_grid := _mode != &"GRID"
 	_mode = &"GRID"
 	_fullscreen_host.visible = false
 	_grid.visible = true
-	_set_all_viewports_update_mode(SubViewport.UPDATE_ALWAYS)
-	if leaving_perf:
+	_configure_grid_viewports()
+	if returning_to_grid:
 		_begin_visual_resync()
 	_update_fullscreen_text()
 	_update_hud()
 
 
 func _show_fullscreen(perf_mode: bool) -> void:
-	var leaving_perf := _mode == &"PERF"
+	var entering_visual_fullscreen := not perf_mode and _mode != &"FULLSCREEN"
+	if not perf_mode and _selected_candidate == 0:
+		# FULLSCREEN A/B always has a baseline and one option selected.
+		_selected_candidate = 1
 	_mode = &"PERF" if perf_mode else &"FULLSCREEN"
 	_grid.visible = false
 	_fullscreen_host.visible = true
 	if perf_mode:
 		_visual_resync_frames_remaining = 0
-		_set_performance_viewport(_selected_candidate)
+		_configure_performance_viewport(_selected_candidate)
 	else:
-		_set_all_viewports_update_mode(SubViewport.UPDATE_ALWAYS)
-		if leaving_perf:
+		_configure_fullscreen_ab_viewports()
+		if entering_visual_fullscreen:
 			_begin_visual_resync()
 	_refresh_fullscreen_texture()
 	_update_fullscreen_text()
 	_update_hud()
 
 
-func _set_all_viewports_update_mode(update_mode: SubViewport.UpdateMode) -> void:
+func _apply_current_mode_viewport_configuration() -> void:
+	if _mode == &"GRID":
+		_configure_grid_viewports()
+	elif _mode == &"PERF":
+		_configure_performance_viewport(_selected_candidate)
+	else:
+		_configure_fullscreen_ab_viewports()
+
+
+func _configure_grid_viewports() -> void:
 	for viewport in _candidate_viewports:
-		viewport.render_target_update_mode = update_mode
+		viewport.size = GRID_VIEWPORT_SIZE
+		viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_print_viewport_sizes("GRID")
 
 
-func _set_performance_viewport(active_index: int) -> void:
+func _configure_fullscreen_ab_viewports() -> void:
 	for index in _candidate_viewports.size():
-		_candidate_viewports[index].render_target_update_mode = SubViewport.UPDATE_ALWAYS if index == active_index else SubViewport.UPDATE_DISABLED
+		var viewport := _candidate_viewports[index]
+		var active_ab_viewport := index == 0 or index == _selected_candidate
+		viewport.size = FULLSCREEN_VIEWPORT_SIZE if active_ab_viewport else GRID_VIEWPORT_SIZE
+		viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active_ab_viewport else SubViewport.UPDATE_DISABLED
+	_print_viewport_sizes("FULLSCREEN A/B")
+
+
+func _configure_performance_viewport(active_index: int) -> void:
+	for index in _candidate_viewports.size():
+		var viewport := _candidate_viewports[index]
+		var active_viewport := index == active_index
+		viewport.size = FULLSCREEN_VIEWPORT_SIZE if active_viewport else GRID_VIEWPORT_SIZE
+		viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active_viewport else SubViewport.UPDATE_DISABLED
+	_print_viewport_sizes("PERF")
+
+
+func _print_viewport_sizes(mode_name: String) -> void:
+	if _candidate_viewports.is_empty():
+		return
+	var details: PackedStringArray = []
+	for index in _candidate_viewports.size():
+		var viewport := _candidate_viewports[index]
+		var update_state := "UPDATE_ALWAYS" if viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS else "UPDATE_DISABLED"
+		details.append("%s=%dx%d %s" % [CANDIDATE_NAMES[index], viewport.size.x, viewport.size.y, update_state])
+	print("FOAM VISUAL LAB: %s viewport sizes | %s" % [mode_name, " | ".join(details)])
 
 
 func _visible_candidate_index() -> int:
@@ -340,6 +386,7 @@ func _begin_visual_resync() -> void:
 func _advance_visual_resync() -> void:
 	if _mode != &"PERF" and _visual_resync_frames_remaining > 0:
 		_visual_resync_frames_remaining -= 1
+		_update_fullscreen_text()
 
 
 func _update_fullscreen_text() -> void:
@@ -347,11 +394,14 @@ func _update_fullscreen_text() -> void:
 		_fullscreen_label.text = ""
 		return
 	if _mode == &"PERF":
-		_fullscreen_label.text = "PERF MODE — %s only | 0 BASELINE | 1/2/3 candidate | G grid" % CANDIDATE_NAMES[_selected_candidate]
+		var perf_size := _candidate_viewports[_selected_candidate].size if _selected_candidate < _candidate_viewports.size() else FULLSCREEN_VIEWPORT_SIZE
+		_fullscreen_label.text = "PERF — %s %dx%d ONLY | 0 BASELINE | 1/2/3 candidate | G grid" % [CANDIDATE_NAMES[_selected_candidate], perf_size.x, perf_size.y]
 	else:
 		var shown := "BASELINE" if _fullscreen_baseline else String(CANDIDATE_NAMES[_selected_candidate])
 		var visual_state := "A/B READY" if _visual_resync_frames_remaining == 0 else "A/B RESYNC (%d)" % _visual_resync_frames_remaining
-		_fullscreen_label.text = "FULLSCREEN A/B — 4 VIEWPORTS ACTIVE — %s — %s | SPACE baseline/candidate | 1/2/3 select | P perf | G grid" % [visual_state, shown]
+		var baseline_size := _candidate_viewports[0].size if not _candidate_viewports.is_empty() else FULLSCREEN_VIEWPORT_SIZE
+		var candidate_size := _candidate_viewports[_selected_candidate].size if _selected_candidate < _candidate_viewports.size() else FULLSCREEN_VIEWPORT_SIZE
+		_fullscreen_label.text = "FULLSCREEN A/B — BASELINE %dx%d / %s %dx%d — %s — %s | SPACE baseline/candidate | 1/2/3 select | P perf | G grid" % [baseline_size.x, baseline_size.y, CANDIDATE_NAMES[_selected_candidate], candidate_size.x, candidate_size.y, visual_state, shown]
 
 
 func _update_hud() -> void:
@@ -359,15 +409,19 @@ func _update_hud() -> void:
 	var frozen: bool = _clock != null and _clock.is_paused()
 	var mode_text := "FOAM VISUAL LAB"
 	if _mode == &"GRID":
-		mode_text += "  |  GRID — 4 VIEWPORTS ACTIVE"
+		var visual_state := "A/B READY" if _visual_resync_frames_remaining == 0 else "A/B RESYNC (%d)" % _visual_resync_frames_remaining
+		mode_text += "  |  GRID — 4 x %dx%d — %s" % [GRID_VIEWPORT_SIZE.x, GRID_VIEWPORT_SIZE.y, visual_state]
 	elif _mode == &"FULLSCREEN":
 		var visual_state := "A/B READY" if _visual_resync_frames_remaining == 0 else "A/B RESYNC (%d)" % _visual_resync_frames_remaining
-		mode_text += "  |  FULLSCREEN A/B — 4 VIEWPORTS ACTIVE — VISUAL ONLY — %s" % visual_state
+		var baseline_size := _candidate_viewports[0].size if not _candidate_viewports.is_empty() else FULLSCREEN_VIEWPORT_SIZE
+		var candidate_size := _candidate_viewports[_selected_candidate].size if _selected_candidate < _candidate_viewports.size() else FULLSCREEN_VIEWPORT_SIZE
+		mode_text += "  |  FULLSCREEN A/B — BASELINE %dx%d / %s %dx%d — %s" % [baseline_size.x, baseline_size.y, CANDIDATE_NAMES[_selected_candidate], candidate_size.x, candidate_size.y, visual_state]
 	if _mode == &"PERF":
 		var fps := Engine.get_frames_per_second()
 		var frame_ms := 1000.0 / float(fps) if fps > 0 else 0.0
 		var cpu_process_ms := float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
-		mode_text += "  |  PERF — %s ONLY  |  FPS: %d  |  FRAME: %.2f ms  |  CPU: %.2f ms  |  GPU TIMING: unavailable" % [CANDIDATE_NAMES[_selected_candidate], fps, frame_ms, cpu_process_ms]
+		var perf_size := _candidate_viewports[_selected_candidate].size if _selected_candidate < _candidate_viewports.size() else FULLSCREEN_VIEWPORT_SIZE
+		mode_text += "  |  PERF — %s %dx%d ONLY  |  FPS: %d  |  FRAME: %.2f ms  |  CPU: %.2f ms  |  GPU TIMING: unavailable" % [CANDIDATE_NAMES[_selected_candidate], perf_size.x, perf_size.y, fps, frame_ms, cpu_process_ms]
 	_mode_label.text = mode_text
 	_time_label.text = "TIME: %.3f s   %s" % [time_value, "FROZEN" if frozen else "PLAY"]
 	_help_label.text = "F5 freeze/play   F fullscreen A/B   SPACE toggle baseline/candidate   P perf   G grid   1/2/3 candidate   0 baseline perf"
