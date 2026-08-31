@@ -45,15 +45,18 @@ uniform float reflection_distance_roughness : hint_range(0.0, 1.0) = 0.18;
 uniform float reflection_slope_roughness_gain : hint_range(0.0, 1.0) = 0.16;
 uniform vec2 reflection_distance_range_m = vec2(90.0, 650.0);
 uniform vec2 reflection_slope_range = vec2(0.08, 0.55);
-// Direct Crest Foam Phase 1: no new texture, history or simulation state.
-// 0 OFF, 1 trigger only, 2 ON, 3 raw debug, 4 final debug.
+// Direct Crest Foam Phase 1B: no new texture, history or simulation state.
+// 0 OFF, 1 LONG raw, 2 ON, 3 LONG+MID raw, 4 final mask.
 uniform int crest_foam_mode = 2;
 uniform vec2 crest_foam_height_range_m = vec2(0.10, 0.65);
 uniform vec2 crest_foam_slope_range = vec2(0.05, 0.30);
 uniform vec2 crest_foam_mid_detail_range = vec2(0.02, 0.18);
 uniform vec2 crest_foam_distance_fade_range_m = vec2(110.0, 380.0);
-uniform float crest_foam_mid_fragmentation : hint_range(0.0, 1.0) = 0.42;
-uniform float crest_foam_strength : hint_range(0.0, 1.0) = 0.90;
+uniform vec2 crest_foam_edge_range = vec2(0.08, 0.32);
+uniform vec2 crest_foam_core_range = vec2(0.28, 0.62);
+uniform float crest_foam_mid_density_floor : hint_range(0.0, 1.0) = 0.72;
+uniform float crest_foam_mid_modulation_strength : hint_range(0.0, 1.0) = 0.28;
+uniform float crest_foam_strength : hint_range(0.0, 1.0) = 0.76;
 uniform vec3 crest_foam_color : source_color = vec3(0.84, 0.89, 0.88);
 uniform float crest_foam_roughness : hint_range(0.0, 1.0) = 0.78;
 uniform float crest_foam_specular : hint_range(0.0, 1.0) = 0.12;
@@ -71,7 +74,7 @@ uniform int debug_band = 0;
 
 varying float reflection_distance_to_camera;
 varying float reflection_slope_magnitude;
-varying float crest_foam_raw_trigger;
+varying float crest_foam_long_trigger;
 varying float crest_foam_mid_detail;
 varying float optics_coastal_depth_m;
 varying float optics_coastal_confidence;
@@ -212,17 +215,19 @@ void vertex() {
 	NORMAL = normalize(vec3(-slope.x, 1.0, -slope.y));
 	reflection_distance_to_camera = distance_to_camera;
 	reflection_slope_magnitude = length(slope);
-	// Height selects the upper wave body; LONG+MID slope selects compression-like
-	// crest support. SHORT is deliberately excluded from the trigger.
-	crest_foam_raw_trigger = smoothstep(
+	// Height and LONG slope select crest support. SHORT never contributes to
+	// coverage; MID is passed separately as a density modulation in fragment.
+	float crest_height_trigger = smoothstep(
 		crest_foam_height_range_m.x,
 		max(crest_foam_height_range_m.y, crest_foam_height_range_m.x + 0.001),
 		max(displacement.y, 0.0)
-	) * smoothstep(
+	);
+	float crest_long_slope_trigger = smoothstep(
 		crest_foam_slope_range.x,
 		max(crest_foam_slope_range.y, crest_foam_slope_range.x + 0.001),
-		length(long_slope + mid_slope)
+		length(long_slope)
 	);
+	crest_foam_long_trigger = crest_height_trigger * crest_long_slope_trigger;
 	crest_foam_mid_detail = smoothstep(
 		crest_foam_mid_detail_range.x,
 		max(crest_foam_mid_detail_range.y, crest_foam_mid_detail_range.x + 0.001),
@@ -261,9 +266,26 @@ void fragment() {
 		max(crest_foam_distance_fade_range_m.y, crest_foam_distance_fade_range_m.x + 0.001),
 		reflection_distance_to_camera
 	);
-	float crest_foam = crest_foam_raw_trigger
-		* mix(1.0, crest_foam_mid_detail, crest_foam_mid_fragmentation)
-		* crest_distance_fade * crest_foam_strength;
+	// fwidth gives the interpolated scalar a screen-space transition band. It
+	// prevents a one-vertex crest peak from becoming a binary white bead.
+	float crest_aa = max(fwidth(crest_foam_long_trigger) * 1.5, 0.015);
+	float crest_edge = smoothstep(
+		crest_foam_edge_range.x - crest_aa,
+		max(crest_foam_edge_range.y + crest_aa, crest_foam_edge_range.x + crest_aa * 2.0),
+		crest_foam_long_trigger
+	);
+	float crest_core = smoothstep(
+		crest_foam_core_range.x - crest_aa,
+		max(crest_foam_core_range.y + crest_aa, crest_foam_core_range.x + crest_aa * 2.0),
+		crest_foam_long_trigger
+	);
+	float crest_shaped = crest_edge * mix(0.58, 1.0, crest_core);
+	float mid_density = mix(
+		1.0,
+		mix(crest_foam_mid_density_floor, 1.0, crest_foam_mid_detail),
+		crest_foam_mid_modulation_strength
+	);
+	float crest_foam = crest_shaped * mid_density * crest_distance_fade * crest_foam_strength;
 	if (optics_phase_1_mode > 0) {
 		float optical_depth = mix(
 			max(optics_max_depth_m, 0.001),
@@ -295,8 +317,12 @@ void fragment() {
 		ALBEDO = mix(ALBEDO, crest_foam_color, crest_foam);
 		ROUGHNESS = mix(ROUGHNESS, crest_foam_roughness, crest_foam);
 		SPECULAR = mix(SPECULAR, crest_foam_specular, crest_foam);
+	} else if (crest_foam_mode == 1) {
+		ALBEDO = vec3(crest_foam_long_trigger);
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
 	} else if (crest_foam_mode == 3) {
-		ALBEDO = vec3(crest_foam_raw_trigger);
+		ALBEDO = vec3(crest_foam_long_trigger * crest_foam_mid_detail);
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
 	} else if (crest_foam_mode == 4) {
