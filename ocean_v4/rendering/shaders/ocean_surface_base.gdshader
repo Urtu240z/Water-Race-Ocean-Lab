@@ -35,7 +35,20 @@ uniform vec2 shore_horizontal_depth_range_m = vec2(0.75, 12.0);
 uniform vec3 base_color : source_color = vec3(0.015, 0.07, 0.10);
 uniform float base_roughness : hint_range(0.0, 1.0) = 0.12;
 uniform float base_specular : hint_range(0.0, 1.0) = 0.75;
+// Godot maps dielectric SPECULAR to F0 as 0.16 * SPECULAR^2. 0.356835 is
+// water's approximately 0.0204 normal-incidence reflectance (IOR 1.333).
+uniform bool reflection_phase_1_enabled = true;
+uniform float reflection_water_specular : hint_range(0.0, 1.0) = 0.356835;
+uniform float reflection_min_roughness : hint_range(0.0, 1.0) = 0.045;
+uniform float reflection_base_roughness : hint_range(0.0, 1.0) = 0.055;
+uniform float reflection_distance_roughness : hint_range(0.0, 1.0) = 0.18;
+uniform float reflection_slope_roughness_gain : hint_range(0.0, 1.0) = 0.16;
+uniform vec2 reflection_distance_range_m = vec2(90.0, 650.0);
+uniform vec2 reflection_slope_range = vec2(0.08, 0.55);
 uniform int debug_band = 0;
+
+varying float reflection_distance_to_camera;
+varying float reflection_slope_magnitude;
 
 vec3 sample_displacement(sampler2D map, float domain_m, vec2 world_xz) {
 	return texture(map, fract(world_xz / domain_m + vec2(0.5))).xyz;
@@ -147,11 +160,33 @@ void vertex() {
 	slope = slope * vertical_weight + pre_envelope_height * shoreline_vertical_gradient(xz);
 	VERTEX += displacement;
 	NORMAL = normalize(vec3(-slope.x, 1.0, -slope.y));
+	reflection_distance_to_camera = distance_to_camera;
+	reflection_slope_magnitude = length(slope);
 }
 
 void fragment() {
 	ALBEDO = base_color;
-	ROUGHNESS = base_roughness;
-	SPECULAR = base_specular;
+	if (reflection_phase_1_enabled) {
+		float distance_weight = smoothstep(
+			reflection_distance_range_m.x,
+			max(reflection_distance_range_m.y, reflection_distance_range_m.x + 0.001),
+			reflection_distance_to_camera
+		);
+		float slope_weight = smoothstep(
+			reflection_slope_range.x,
+			max(reflection_slope_range.y, reflection_slope_range.x + 0.001),
+			reflection_slope_magnitude
+		);
+		ROUGHNESS = clamp(
+			mix(reflection_base_roughness, reflection_distance_roughness, distance_weight)
+			+ slope_weight * reflection_slope_roughness_gain,
+			reflection_min_roughness,
+			1.0
+		);
+		SPECULAR = reflection_water_specular;
+	} else {
+		ROUGHNESS = base_roughness;
+		SPECULAR = base_specular;
+	}
 	ALPHA = 1.0;
 }

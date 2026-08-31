@@ -5,12 +5,14 @@ extends Node3D
 const Config := preload("res://ocean_v4/rendering/ocean_clipmap_config_v4.gd")
 const MeshBuilder := preload("res://ocean_v4/rendering/ocean_clipmap_mesh_builder_v4.gd")
 const BASE_SHADER := preload("res://ocean_v4/rendering/shaders/ocean_surface_base.gdshader")
+const ReflectionConfig := preload("res://ocean_v4/reflections/reflection_phase_1_config_v4.gd")
 
 @export var clipmap_config: OceanClipmapConfigV4 = Config.new()
 @export var base_color := Color(0.015, 0.07, 0.10)
 @export_range(0.0, 1.0, 0.01) var roughness := 0.12
 @export_range(0.0, 1.0, 0.01) var specular := 0.75
 @export_enum("FULL", "LONG", "MID", "SHORT") var debug_band := 0
+@export var reflection_phase_1 = ReflectionConfig.new()
 
 var _material := ShaderMaterial.new()
 var _levels: Array[MeshInstance3D] = []
@@ -27,6 +29,7 @@ func configure(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Textur
 	_material.set_shader_parameter(&"base_color", base_color)
 	_material.set_shader_parameter(&"base_roughness", roughness)
 	_material.set_shader_parameter(&"base_specular", specular)
+	_bind_reflection_phase_1()
 	_material.set_shader_parameter(&"short_fade_range_m", clipmap_config.short_fade_range_m)
 	_material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
 	_material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
@@ -77,6 +80,28 @@ func set_tracking_camera(camera: Camera3D) -> void:
 func set_debug_band(value: int) -> void:
 	debug_band = clampi(value, 0, 3)
 	_material.set_shader_parameter(&"debug_band", debug_band)
+
+
+func set_reflection_phase_1_enabled(enabled: bool) -> void:
+	if reflection_phase_1 == null:
+		push_error("OceanV4 Reflection Phase 1 configuration is missing.")
+		return
+	reflection_phase_1.enabled = enabled
+	_bind_reflection_phase_1()
+
+
+func _bind_reflection_phase_1() -> void:
+	if reflection_phase_1 == null or not reflection_phase_1.is_valid():
+		push_error("OceanV4 Reflection Phase 1 configuration is invalid.")
+		return
+	_material.set_shader_parameter(&"reflection_phase_1_enabled", reflection_phase_1.enabled)
+	_material.set_shader_parameter(&"reflection_water_specular", reflection_phase_1.water_specular)
+	_material.set_shader_parameter(&"reflection_min_roughness", reflection_phase_1.min_roughness)
+	_material.set_shader_parameter(&"reflection_base_roughness", reflection_phase_1.base_roughness)
+	_material.set_shader_parameter(&"reflection_distance_roughness", reflection_phase_1.distance_roughness)
+	_material.set_shader_parameter(&"reflection_slope_roughness_gain", reflection_phase_1.slope_roughness_gain)
+	_material.set_shader_parameter(&"reflection_distance_range_m", reflection_phase_1.distance_range_m)
+	_material.set_shader_parameter(&"reflection_slope_range", reflection_phase_1.slope_range)
 
 
 func _process(_delta: float) -> void:
