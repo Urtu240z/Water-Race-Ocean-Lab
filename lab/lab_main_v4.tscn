@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://jre4048uwaa7"]
 
-[ext_resource type="Script" path="res://lab/lab_main_v4.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://6j57avyd6edh" path="res://lab/lab_main_v4.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
 [ext_resource type="Texture2D" uid="uid://b1uckk3vaafyx" path="res://kloofendal_48d_partly_cloudy_puresky_4k.hdr" id="2_ody2a"]
 [ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
@@ -62,8 +62,8 @@ auto_exposure_min_exposure_value = -3.0
 
 [sub_resource type="Resource" id="Resource_ody2a"]
 script = ExtResource("9_kst5p")
-cells_per_side = 126
 short_fade_range_m = Vector2(0, 55)
+mid_fade_range_m = Vector2(96, 200)
 
 [node name="LabMainV4" type="Node3D" unique_id=1698941175]
 script = ExtResource("1_main")
@@ -114,13 +114,11 @@ script = ExtResource("4_metrics")
 [node name="OceanV4" parent="OceanV4Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
 coastal_bake_asset = ExtResource("14_coastal")
 
-[node name="OceanClipmapSurface" parent="OceanV4Mount/OceanV4" index="1"]
+[node name="OceanClipmapSurface" parent="OceanV4Mount/OceanV4" index="2"]
 clipmap_config = SubResource("Resource_ody2a")
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
-process_mode = 4
-visible = false
 script = ExtResource("5_hud")
 
 [node name="Margin" type="MarginContainer" parent="BenchmarkHUD" unique_id=968768225]

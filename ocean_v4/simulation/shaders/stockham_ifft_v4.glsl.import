@@ -11,3 +11,4 @@ source_file="res://ocean_v4/simulation/shaders/stockham_ifft_v4.glsl"
 dest_files=["res://.godot/imported/stockham_ifft_v4.glsl-c093945f0778b4647d28cf80740b04f7.res"]
 
 [params]
+

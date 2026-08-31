@@ -27,7 +27,6 @@ window/size/viewport_width=1920
 window/size/viewport_height=1080
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/vsync/vsync_mode=0
 
 [editor_plugins]
 
@@ -42,3 +41,6 @@ common/physics_interpolation=true
 
 rendering_device/driver.windows="d3d12"
 lights_and_shadows/use_physical_light_units=true
+scaling_3d/mode=2
+scaling_3d/scale=0.7
+scaling_3d/fsr_sharpness=0.5
