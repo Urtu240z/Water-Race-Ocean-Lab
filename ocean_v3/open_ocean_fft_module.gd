@@ -9,6 +9,7 @@ const SurfaceFoamConfigScript := preload("res://ocean_v3/core/surface_foam_refer
 const SurfaceFoamSpectrumScript := preload("res://ocean_v3/core/surface_foam_reference_spectrum.gd")
 const SurfaceFoamSolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_spectrum_solver.gd")
 const SurfaceFoamMidHistorySolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_mid_history_solver.gd")
+const ShallowCausticsSolverScript := preload("res://ocean_v3/rendering/caustics/shallow_caustics_solver.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
 const SeaStateZoneMathScript := preload("res://ocean_v3/core/sea_state_zone_math.gd")
@@ -276,6 +277,16 @@ var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_jacobian_texture := Texture2DRD.new()
 var _surface_foam_topology_texture := Texture2DRD.new()
 var _surface_foam_mid_fold_history_texture := Texture2DRD.new()
+var _shallow_caustics_solver = null
+var _shallow_caustics_texture := Texture2DRD.new()
+var _shallow_caustics_enabled := false
+var _shallow_caustics_resolution := 256
+var _shallow_caustics_update_hz := 30.0
+var _shallow_caustics_extent_m := 128.0
+var _shallow_caustics_focus_gain := 3.0
+var _shallow_caustics_focus_clamp := 1.5
+var _shallow_caustics_sun_direction := Vector3(0.0, 1.0, 0.0)
+var _shallow_caustics_rebuild_requested := false
 var _surface_foam_mid_history_solver = null
 var _performance_spectral_enabled := true
 var _performance_crest_foam_solver_enabled := true
@@ -459,6 +470,10 @@ func _exit_tree() -> void:
 	_surface_foam_jacobian_texture.texture_rd_rid = RID()
 	_surface_foam_topology_texture.texture_rd_rid = RID()
 	_surface_foam_mid_fold_history_texture.texture_rd_rid = RID()
+	_shallow_caustics_texture.texture_rd_rid = RID()
+	if _shallow_caustics_solver != null:
+		RenderingServer.call_on_render_thread(_shallow_caustics_solver.free_resources)
+	_shallow_caustics_solver = null
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
 	if _surface_foam_mid_history_solver != null:
@@ -471,6 +486,7 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	_publish_ready_textures()
 	surface.set_coastal_time(SimulationClock.get_render_time())
+	_advance_shallow_caustics(delta)
 	_poll_wave_transition_preparation()
 	if not _enabled:
 		return
@@ -1885,6 +1901,73 @@ func _textures_for(key: StringName) -> Array[Texture2DRD]:
 	for cascade in _cascades:
 		textures.append(cascade[key])
 	return textures
+
+
+## P0/P1 shallow caustics: root owns authoring and sun selection; this module
+## owns the render-thread field alongside the FFT normal resources it samples.
+func set_shallow_caustics_settings(enabled: bool, resolution: int, update_hz: float,
+		extent_m: float, focus_gain: float, focus_clamp: float, sun_direction: Vector3) -> void:
+	var validated_resolution := 128 if resolution <= 128 else 256 if resolution <= 256 else 512
+	var resolution_changed := validated_resolution != _shallow_caustics_resolution
+	_shallow_caustics_enabled = enabled
+	_shallow_caustics_resolution = validated_resolution
+	_shallow_caustics_update_hz = clampf(update_hz, 1.0, 60.0)
+	_shallow_caustics_extent_m = maxf(extent_m, 8.0)
+	_shallow_caustics_focus_gain = maxf(focus_gain, 0.0)
+	_shallow_caustics_focus_clamp = maxf(focus_clamp, 0.01)
+	_shallow_caustics_sun_direction = sun_direction
+	if resolution_changed:
+		_shallow_caustics_rebuild_requested = true
+	if not enabled:
+		surface.set_shallow_caustics(null, false, Vector2.ZERO, _shallow_caustics_extent_m)
+
+
+func _advance_shallow_caustics(delta: float) -> void:
+	if not _shallow_caustics_enabled:
+		return
+	if _shallow_caustics_rebuild_requested and _shallow_caustics_solver != null:
+		_shallow_caustics_texture.texture_rd_rid = RID()
+		RenderingServer.call_on_render_thread(_shallow_caustics_solver.free_resources)
+		_shallow_caustics_solver = null
+		_shallow_caustics_rebuild_requested = false
+	if _shallow_caustics_solver == null:
+		if _cascades.size() != 4:
+			return
+		var normal_rids: Array[RID] = []
+		var domains := PackedFloat32Array()
+		for cascade in _cascades:
+			if not cascade.solver.ready or not cascade.solver.normal_rid.is_valid():
+				return
+			normal_rids.append(cascade.solver.normal_rid)
+			domains.append(float(cascade.config.domain_size_m))
+		_shallow_caustics_solver = ShallowCausticsSolverScript.new()
+		RenderingServer.call_on_render_thread(_shallow_caustics_solver.initialize.bind(
+			normal_rids, domains, _shallow_caustics_resolution, "Ocean.Caustics"
+		))
+		return
+	if not _shallow_caustics_solver.ready:
+		return
+	if not _shallow_caustics_texture.texture_rd_rid.is_valid():
+		_shallow_caustics_texture.texture_rd_rid = _shallow_caustics_solver.caustics_rid
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return
+	RenderingServer.call_on_render_thread(_shallow_caustics_solver.advance.bind(
+		delta,
+		Vector2(camera.global_position.x, camera.global_position.z),
+		_shallow_caustics_sun_direction,
+		true,
+		_shallow_caustics_update_hz,
+		_shallow_caustics_extent_m,
+		_shallow_caustics_focus_gain,
+		_shallow_caustics_focus_clamp
+	))
+	surface.set_shallow_caustics(
+		_shallow_caustics_texture,
+		true,
+		_shallow_caustics_solver.field_origin_xz,
+		_shallow_caustics_solver.field_extent_m
+	)
 
 
 func _publish_ready_textures() -> void:

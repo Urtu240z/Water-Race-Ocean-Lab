@@ -221,6 +221,18 @@ uniform float coastal_bathymetry_sea_level_y = 0.0;
 uniform bool real_seabed_coverage_enabled = false;
 uniform vec2 real_seabed_coverage_origin_xz = vec2(0.0);
 uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
+// P0/P1 shallow caustics field. RGB stores final/source/refraction diagnostics;
+// it is generated from existing FFT normal maps, never from an art texture.
+uniform sampler2D caustics_field : repeat_disable, filter_linear;
+uniform bool caustics_enabled = false;
+uniform vec2 caustics_field_origin_xz = vec2(0.0);
+uniform vec2 caustics_field_extent_m = vec2(1.0);
+uniform float caustics_strength = 0.65;
+uniform float caustics_fade_start_depth = 4.0;
+uniform float caustics_max_depth = 6.0;
+// 0 OFF, 1 CAUSTICS_ON, 2 SHALLOW_MASK, 3 SOURCE, 4 REFRACTION,
+// 5 FOCUS, 6 FINAL. Debug only changes final presentation, never the field.
+uniform int caustics_debug_mode = 0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
@@ -3352,6 +3364,26 @@ void fragment() {
 			vec3 shallow_scattering_component = scattering_tint * shallow_scattering_share;
 			optical_scene += shallow_scattering_component;
 
+			// P1 receiver: light is applied only to the already validated seabed
+			// contribution. No scene-depth fetch is added: this scope has already
+			// reconstructed and classified the same seabed sample for water optics.
+			vec2 caustics_uv = (original_scene_world_position.xz - caustics_field_origin_xz)
+				/ max(caustics_field_extent_m, vec2(0.001));
+			float caustics_domain = step(0.0, caustics_uv.x) * step(caustics_uv.x, 1.0)
+				* step(0.0, caustics_uv.y) * step(caustics_uv.y, 1.0);
+			vec4 caustics_sample = caustics_enabled && original_scene_world_position_valid
+				? textureLod(caustics_field, clamp(caustics_uv, vec2(0.0), vec2(1.0)), 0.0)
+				: vec4(0.0);
+			float caustics_shallow_mask = local_water_depth_valid
+				? 1.0 - smoothstep(caustics_fade_start_depth,
+					max(caustics_max_depth, caustics_fade_start_depth + 0.001), local_water_depth_m)
+				: 0.0;
+			caustics_shallow_mask *= real_seabed_coverage_raw * optical_seabed_confidence
+				* effective_seabed_match * caustics_domain;
+			float caustics_final = caustics_sample.r * caustics_shallow_mask
+				* max(caustics_strength, 0.0);
+			optical_scene += vec3(caustics_final);
+
 			// The existing physical Fresnel is the single optical balance between
 			// transmission and the surface/body response. The refraction offset above
 			// only uses (1 - fresnel) to control distortion magnitude.
@@ -3502,6 +3534,19 @@ void fragment() {
 				// Full-resolution real screen color at the displaced UV. This bypasses
 				// absorption, scattering, foam, tint, reflection and water shading.
 				final_color = refraction_background_only;
+			}
+			if (water_optics_debug_mode == 0) {
+				if (caustics_debug_mode == 2) {
+					final_color = vec3(caustics_shallow_mask);
+				} else if (caustics_debug_mode == 3) {
+					final_color = vec3(caustics_sample.g);
+				} else if (caustics_debug_mode == 4) {
+					final_color = vec3(caustics_sample.b);
+				} else if (caustics_debug_mode == 5) {
+					final_color = vec3(caustics_sample.r);
+				} else if (caustics_debug_mode == 6) {
+					final_color = vec3(caustics_final);
+				}
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);

@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b7tjdsjdsskyx"
+path="res://.godot/imported/generate_shallow_caustics.glsl-10425a37e9f7151a2d768aee76c1e1c6.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/caustics/shaders/generate_shallow_caustics.glsl"
+dest_files=["res://.godot/imported/generate_shallow_caustics.glsl-10425a37e9f7151a2d768aee76c1e1c6.res"]
+
+[params]

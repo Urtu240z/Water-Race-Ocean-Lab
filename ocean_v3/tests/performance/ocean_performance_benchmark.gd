@@ -20,7 +20,7 @@ const ISOLATED_PRESETS := [
 	"NO_REFRACTION", "NO_PREBREAK", "NO_SURFACE_FOAM_SOLVER", "NO_SURFACE_FOAM_RENDER"
 ]
 const PAIRED_TESTS := [
-	"NO_SSPR", "NO_REFRACTION", "NO_FOAM", "NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER"
+	"NO_SSPR", "NO_REFRACTION", "NO_FOAM", "NO_CREST_FOAM", "NO_SURFACE_FOAM_SOLVER", "NO_MID_FOLD_HISTORY", "NO_SURFACE_FOAM_RENDER", "NO_CAUSTICS"
 ]
 const BASE_PAIRED_TESTS := [
 	"NO_BASE_OPTICS", "NO_BASE_NEAR_SSR", "NO_BASE_CREST_SHAPE",
@@ -71,6 +71,7 @@ var _paired_repetition_index := 0
 var _paired_test_index := 0
 var _paired_full_statistics: Dictionary = {}
 var _paired_deltas: Array[Dictionary] = []
+var _caustics_paired := false
 
 
 func _ready() -> void:
@@ -158,6 +159,10 @@ func _read_command_line_overrides() -> void:
 			repetitions = clampi(int(argument.get_slice("=", 1)), 1, 10)
 		elif argument == "--ocean-benchmark-paired":
 			run_mode = "PAIRED"
+		elif argument == "--ocean-benchmark-caustics-paired":
+			run_mode = "PAIRED"
+			_caustics_paired = true
+			_paired_test_filter = PackedStringArray(["NO_CAUSTICS"])
 		elif argument == "--ocean-benchmark-base-paired":
 			run_mode = "PAIRED"
 			_paired_baseline_preset = "BASE"
@@ -233,6 +238,10 @@ func _set_clean_benchmark_state() -> void:
 		_clock.reset_simulation(true)
 	_ocean.perf_overlay_enabled = false
 	_ocean.foam_debug_mode = 0
+	# Opt-in P0/P1 workload. Existing benchmark suites preserve their historical
+	# visual baseline unless this explicit paired mode is requested.
+	_ocean.caustics_enabled = _caustics_paired
+	_ocean.caustics_debug_mode = 0
 	var module := _ocean.get_node_or_null(^"OpenOceanFFT")
 	if module != null and module.has_method(&"set_breaking_debug"):
 		module.set_breaking_debug(0)
@@ -245,6 +254,7 @@ func _apply_current_configuration() -> void:
 		var presets := _benchmark_presets()
 		_current_preset = String(presets[_preset_index])
 	_ocean.set_benchmark_diagnostic_gates({})
+	_ocean.caustics_enabled = _caustics_paired and _current_preset != "NO_CAUSTICS"
 	if CORE_PRESETS.has(_current_preset):
 		if not _ocean.apply_performance_preset(StringName(_current_preset)):
 			push_error("PERF-1B: failed to apply preset %s" % _current_preset)
@@ -279,6 +289,7 @@ func _isolated_profile(name: String) -> Dictionary:
 		"NO_CREST_FOAM": profile["crest_foam_solver"] = false
 		"NO_MID_FOLD_HISTORY": profile["mid_fold_history"] = false
 		"NO_SURFACE_FOAM_RENDER": profile["surface_foam_render"] = false
+		"NO_CAUSTICS": pass # handled by the root opt-in field above.
 		_: push_error("PERF-1B: unsupported isolated profile %s" % name)
 	return profile
 

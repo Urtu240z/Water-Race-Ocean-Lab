@@ -532,6 +532,57 @@ var _performance_overlay_label: Label
 		shallow_fresnel_depth_end_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
 
+@export_group("Caustics P0/P1")
+@export var caustics_enabled := false:
+	set(value):
+		caustics_enabled = value
+		_request_visual_sync()
+
+@export_range(0.0, 8.0, 0.01) var caustics_strength := 0.65:
+	set(value):
+		caustics_strength = clampf(value, 0.0, 8.0)
+		_request_visual_sync()
+
+@export_range(0.0, 20.0, 0.1) var caustics_fade_start_depth := 4.0:
+	set(value):
+		caustics_fade_start_depth = clampf(value, 0.0, 20.0)
+		_request_visual_sync()
+
+@export_range(0.1, 30.0, 0.1) var caustics_max_depth := 6.0:
+	set(value):
+		caustics_max_depth = clampf(value, 0.1, 30.0)
+		_request_visual_sync()
+
+@export_enum("128:128", "256:256", "512:512") var caustics_resolution := 256:
+	set(value):
+		caustics_resolution = 128 if value <= 128 else 256 if value <= 256 else 512
+		_request_visual_sync()
+
+@export_range(1.0, 60.0, 1.0, "suffix: Hz") var caustics_update_rate := 30.0:
+	set(value):
+		caustics_update_rate = clampf(value, 1.0, 60.0)
+		_request_visual_sync()
+
+@export_range(16.0, 512.0, 1.0, "suffix: m") var caustics_field_extent_m := 128.0:
+	set(value):
+		caustics_field_extent_m = clampf(value, 16.0, 512.0)
+		_request_visual_sync()
+
+@export_range(0.0, 12.0, 0.01) var caustics_focus_gain := 3.0:
+	set(value):
+		caustics_focus_gain = clampf(value, 0.0, 12.0)
+		_request_visual_sync()
+
+@export_range(0.01, 8.0, 0.01) var caustics_focus_clamp := 1.5:
+	set(value):
+		caustics_focus_clamp = clampf(value, 0.01, 8.0)
+		_request_visual_sync()
+
+@export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_SHALLOW_MASK", "DEBUG_CAUSTICS_SOURCE", "DEBUG_CAUSTICS_REFRACTION", "DEBUG_CAUSTICS_FOCUS", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
+	set(value):
+		caustics_debug_mode = clampi(value, 0, 6)
+		_request_visual_sync()
+
 @export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "TRANSMISSION_OPTICAL_DEPTH", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
 	set(value):
 		var next_mode := clampi(value, 0, 40)
@@ -1671,6 +1722,16 @@ func _process(_delta: float) -> void:
 	# the root setter ran while the scene was loading.
 	if _visual_sync_pending:
 		_sync_water_visual_parameters()
+	# Sun direction can animate independently from inspector properties. Keep the
+	# caustics input current without re-running the full visual material sync.
+	if caustics_enabled and not Engine.is_editor_hint():
+		_sync_sun_direction()
+		var caustics_fft := get_node_or_null(^"OpenOceanFFT")
+		if caustics_fft != null and caustics_fft.has_method(&"set_shallow_caustics_settings"):
+			caustics_fft.set_shallow_caustics_settings(
+				true, caustics_resolution, caustics_update_rate, caustics_field_extent_m,
+				caustics_focus_gain, caustics_focus_clamp, _sun_direction_world
+			)
 	if not _startup_reported and not _visual_sync_pending:
 		# Three rendered process frames avoid calling a deferred setup frame
 		# "stable" while retaining zero recurring instrumentation cost.
@@ -2110,6 +2171,21 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_fresnel_relief", shallow_fresnel_relief)
 	material.set_shader_parameter(&"shallow_fresnel_depth_start_m", shallow_fresnel_depth_start_m)
 	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
+	material.set_shader_parameter(&"caustics_strength", caustics_strength)
+	material.set_shader_parameter(&"caustics_fade_start_depth", caustics_fade_start_depth)
+	material.set_shader_parameter(&"caustics_max_depth", maxf(caustics_max_depth, caustics_fade_start_depth + 0.01))
+	material.set_shader_parameter(&"caustics_debug_mode", caustics_debug_mode)
+	var caustics_fft := get_node_or_null(^"OpenOceanFFT")
+	if not Engine.is_editor_hint() and caustics_fft != null and caustics_fft.has_method(&"set_shallow_caustics_settings"):
+		caustics_fft.set_shallow_caustics_settings(
+			caustics_enabled,
+			caustics_resolution,
+			caustics_update_rate,
+			caustics_field_extent_m,
+			caustics_focus_gain,
+			caustics_focus_clamp,
+			_sun_direction_world
+		)
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():
