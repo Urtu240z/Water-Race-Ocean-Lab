@@ -548,9 +548,9 @@ var _performance_overlay_label: Label
 		caustics_fade_start_depth = clampf(value, 0.0, 20.0)
 		_request_visual_sync()
 
-@export_range(0.1, 6.0, 0.1) var caustics_max_depth := 6.0:
+@export_range(0.1, 50.0, 0.1, "suffix: m") var caustics_max_depth := 6.0:
 	set(value):
-		caustics_max_depth = clampf(value, 0.1, 6.0)
+		caustics_max_depth = clampf(value, 0.1, 50.0)
 		_request_visual_sync()
 
 @export_enum("128:128", "256:256", "512:512") var caustics_resolution := 256:

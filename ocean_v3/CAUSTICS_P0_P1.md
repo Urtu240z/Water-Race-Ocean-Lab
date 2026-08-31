@@ -56,7 +56,8 @@ caustic = field.r * shallow * real_seabed_coverage * seabed_confidence
 The sample uses the reconstructed seabed world position, so it is a light
 contribution on the visible bottom rather than a camera-space overlay. Missing
 or invalid bathymetry produces zero. Defaults start the fade at 4 m and remove
-the effect at 6 m. The finite activity field is only a soft modulation window;
+the effect at 6 m; `caustics_max_depth` remains configurable up to 50 m for
+wider experimental fades. The finite activity field is only a soft modulation window;
 the filament texture itself is world-anchored and tileable, so no rectangle is
 visible and camera recentering does not move the pattern.
 
