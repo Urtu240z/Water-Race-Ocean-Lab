@@ -59,16 +59,43 @@ The chief hot spots remain the optional filtered pixel normal/roughness paths, s
 
 ## F. Visual result
 
-The Lab was started successfully with fixed seed `20260820`; OPTION A compiled and the shared simulation reached ready state. A visual fullscreen A/B capture was attempted in frozen and play states, but this local Lab session rendered an all-white target with no visible Foam geometry. It cannot therefore establish the requested foam-silhouette equivalence. No visual equivalence claim is made pending a valid Foam-visible capture.
+Validation run: Godot 4.7.1 graphical Lab, fixed seed `20260820`.
 
-## G. Benchmark
+- **Freeze/grid:** at `TIME 13.983 s`, BASELINE and OPTION A showed the same wave geometry, crest locations, choppiness, whitecap distribution and foam streaks. No localized difference in Surface Foam, Crest Foam, filigree, normal, roughness, reflection or refraction was observed. Classification: **perceptually identical in the simultaneous grid comparison**.
+- **Freeze/fullscreen:** the first BASELINE/OPTION A toggles exhibited a whole-frame exposure mismatch, not a foam-localized difference. The Lab creates deep `Environment` and `CameraAttributes` duplicates for each `World3D`; fullscreen disables updates for inactive SubViewports. Any temporal auto-exposure state can therefore diverge between worlds. This is not evidence of an OPTION A shader regression and prevents a pixel-identical fullscreen claim from these captures.
+- **Play:** the simultaneous four-panel grid remained coherent while running. A1 is scalar reuse and A3 reads an already-published texture, so neither has temporal side effects. No foam-cell transition, shimmer or history regression was attributable to OPTION A in the observed run.
 
-No GPU timing was exposed by the Lab (its HUD explicitly reports GPU as unavailable). The all-white interactive session also makes an FPS comparison non-representative. Consequently, no BASELINE/OPTION A pairs, mean, median, or range are recorded, and no performance win is claimed. A valid session needs a Foam-visible scene, thermally stable controls, and the requested adjacent `BASELINE → OPTION A` pairs.
+The optional image-difference capture was not performed: fullscreen captures with divergent exposure state would produce a misleading RGB metric. No temporary images were retained.
 
-## H. Next opportunities (not implemented)
+## G. A1 validation
+
+In BASELINE, `pixel_ocean_crest_foam(world_xz)` evaluates `sea_state_zone_state(world_xz, ...)` and derives `zone_foam_activity`. In OPTION A, `fragment()` performs the same state evaluation at `ocean_base_xz` and passes that scalar into `pixel_ocean_crest_foam(ocean_base_xz, zone_foam_activity)`. The coordinates, uniforms and arithmetic of `sea_state_zone_foam_activity()` are identical; only evaluation order changed. **Decision: KEEP.**
+
+## H. A3 validation
+
+`pixel_ocean_surface_foam_field_unweighted()` is a pure texture-read helper: it selects the stochastic three-read field path or periodic one-read path from `surface_foam_short`. It does not update history, dispatch compute, publish resources, mutate state, or drive solver scheduling.
+
+Its complete in-shader consumers are:
+
+1. `surface_foam_macro_from_topology(surface_foam_raw_topology, field.x)`.
+2. `surface_foam_macro_from_topology(crest_filigree_raw_topology, field.x)`.
+3. `foam_debug_mode == 2`.
+
+Consumers 1 and 2 are active exactly under `foam_enabled && perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled && (surface_foam_enabled || crest_filigree_enabled)`. A3 includes that condition and separately retains debug mode 2. MID-fold history is sampled later and independently; it is not controlled by this helper. **Decision: KEEP** as dead-presentation-work elimination, with no claimed gain for the normal FULL configuration where the field remains required.
+
+## I. Benchmark
+
+The existing graphical performance runner was audited before measurement. `ocean_performance_benchmark.gd` samples `_process` delta and CPU monitors, and records `gpu_ms` as unavailable. Its README explicitly says not to infer GPU cost from FPS/frame delta. It cannot compare BASELINE versus OPTION A, which are Lab shader variants rather than runner profiles.
+
+Therefore no `BASELINE -> OPTION A` timing pairs, mean, median, range, standard deviation, percentage, A1-only, or A3-only result is recorded. This is **inconclusive for GPU performance**, not a claim of no benefit. No new benchmark/profiler was introduced and no further shader optimization was made.
+
+## J. Known teardown warning
+
+`surface_foam_mid_history_solver.gd:95` may report two `Attempted to free invalid ID` messages only during scene shutdown. This is a known pre-existing teardown warning, is outside PERF-A, and was not changed.
+
+## K. Next opportunities (not implemented)
 
 - Conservative: look for other exact same-coordinate scalar context reuse only after validating the active visual configuration.
 - Architectural: Wave Feature Map and Foam Presentation Map.
 - Presentation: tileable visual foam.
 - Simulation-quality tradeoffs: Hz/resolution/tap reductions (outside PERF-A).
-
