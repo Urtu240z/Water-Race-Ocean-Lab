@@ -221,22 +221,6 @@ uniform float coastal_bathymetry_sea_level_y = 0.0;
 uniform bool real_seabed_coverage_enabled = false;
 uniform vec2 real_seabed_coverage_origin_xz = vec2(0.0);
 uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
-// P0/P1 shallow caustics field. RGB stores a low-frequency FFT modulation;
-// the filament structure comes from the explicit tile below.
-uniform sampler2D caustics_field : repeat_disable, filter_linear;
-uniform sampler2D caustics_texture : repeat_enable, filter_linear_mipmap;
-uniform bool caustics_enabled = false;
-uniform vec2 caustics_field_origin_xz = vec2(0.0);
-uniform vec2 caustics_field_extent_m = vec2(1.0);
-uniform float caustics_strength = 0.65;
-uniform float caustics_fade_start_depth = 4.0;
-uniform float caustics_max_depth = 6.0;
-uniform float caustics_texture_scale = 0.105;
-uniform float caustics_fft_warp_strength = 0.32;
-uniform float caustics_animation_speed = 0.12;
-// 0 OFF, 1 CAUSTICS_ON, 2 TEXTURE, 3 FFT_WARP, 4 SHALLOW_MASK, 5 FINAL.
-// Diagnostic field generation is isolated to debug modes.
-uniform int caustics_debug_mode = 0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
 // 7 WATER_BODY_FINAL, 8 TRANSMISSION_DETAIL_FADE, 9 BODY_DEPTH_FACTOR,
@@ -470,45 +454,6 @@ float periodic_grid(vec2 world_xz, float domain_size_m) {
 
 float shore_data_inside(vec2 uv) {
 	return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
-}
-
-vec2 caustics_projected_uv(vec2 world_xz) {
-	vec3 sun = normalize(reflection_sun_direction_world);
-	vec2 sun_axis = vec2(sun.x, sun.z);
-	if (dot(sun_axis, sun_axis) < 0.000001) sun_axis = vec2(0.0, 1.0);
-	sun_axis = normalize(sun_axis);
-	vec2 sun_tangent = vec2(-sun_axis.y, sun_axis.x);
-	vec2 projected = vec2(dot(world_xz, sun_tangent), dot(world_xz, sun_axis));
-	return projected * max(caustics_texture_scale, 0.001);
-}
-
-vec2 caustics_fft_warp(vec2 world_xz) {
-	vec2 long_slope = slope_from_normal(normalize(textureLod(
-		normal_long_coastal, spectrum_uv(world_xz, domain_long_coastal_m), 0.0).rgb));
-	vec2 mid_slope = slope_from_normal(normalize(textureLod(
-		normal_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rgb));
-	// LONG supplies broad drift; MID breaks regularity. SHORT is deliberately
-	// excluded to avoid sparkle and temporal shimmer.
-	return long_slope * 0.70 + mid_slope * 0.30;
-}
-
-float caustics_base_texture_value(vec2 world_xz) {
-	vec2 uv = fract(caustics_projected_uv(world_xz));
-	return textureLod(caustics_texture, uv, 0.0).r;
-}
-
-float caustics_filament_value(vec2 world_xz, vec2 fft_warp) {
-	vec2 projected = caustics_projected_uv(world_xz);
-	vec2 warp = fft_warp * caustics_fft_warp_strength;
-	float t = TIME * caustics_animation_speed;
-	vec2 uv_a = fract(projected + warp + vec2(t * 0.030, -t * 0.018));
-	vec2 uv_b = fract(projected * vec2(1.07, 0.93) - warp * 0.72 + vec2(-t * 0.021, t * 0.026));
-	float sample_a = textureLod(caustics_texture, uv_a, 0.0).r;
-	float sample_b = textureLod(caustics_texture, uv_b, 0.0).r;
-	// The reference's min() keeps the two animated layers narrow and avoids
-	// additive white noise; the source tile supplies the connected filaments.
-	float combined = min(sample_a, sample_b);
-	return smoothstep(0.34, 0.88, pow(max(combined, 0.0), 1.15));
 }
 
 void shore_weights_from_depth(float depth_m, out float vertical_weight, out float horizontal_weight) {
@@ -3407,46 +3352,6 @@ void fragment() {
 			vec3 shallow_scattering_component = scattering_tint * shallow_scattering_share;
 			optical_scene += shallow_scattering_component;
 
-			// P1 receiver: the texture is projected in world space and deformed by
-			// the existing LONG/MID normal maps. The low-frequency GPU field only
-			// supplies an optional FFT activity modulation; it is not the art pattern.
-			vec2 caustics_world_xz = original_scene_world_position_valid
-				? original_scene_world_position.xz
-				: ocean_base_xz;
-			vec2 caustics_uv = (caustics_world_xz - caustics_field_origin_xz)
-				/ max(caustics_field_extent_m, vec2(0.001));
-			vec2 caustics_centered_uv = caustics_uv * 2.0 - 1.0;
-			// Keep the finite GPU activity field softly feathered. The base texture
-			// itself is world anchored and tileable, so no rectangle is visible.
-			float caustics_region = 1.0 - smoothstep(
-				0.68, 0.98, length(caustics_centered_uv));
-			vec4 caustics_field_sample = caustics_enabled
-				? textureLod(caustics_field, clamp(caustics_uv, vec2(0.0), vec2(1.0)), 0.0)
-				: vec4(0.0);
-			// Keep CAUSTICS_OFF on the exact baseline path: do not fetch FFT normals
-			// when the receiver is disabled.
-			vec2 caustics_warp = caustics_enabled
-				? caustics_fft_warp(caustics_world_xz)
-				: vec2(0.0);
-			float caustics_texture_value = caustics_enabled
-				? caustics_filament_value(caustics_world_xz, caustics_warp)
-				: 0.0;
-			float caustics_fft_activity = caustics_enabled
-				? mix(0.72, 1.18, clamp(caustics_field_sample.r, 0.0, 1.0))
-				: 0.0;
-			float caustics_sun_factor = caustics_enabled
-				? smoothstep(0.04, 0.45, normalize(reflection_sun_direction_world).y)
-				: 0.0;
-			float caustics_shallow_mask = local_water_depth_valid
-				? 1.0 - smoothstep(caustics_fade_start_depth,
-					max(caustics_max_depth, caustics_fade_start_depth + 0.001), local_water_depth_m)
-				: 0.0;
-			caustics_shallow_mask *= real_seabed_coverage_raw * optical_seabed_confidence
-				* effective_seabed_match * caustics_region;
-			float caustics_final = caustics_texture_value * caustics_fft_activity
-				* caustics_sun_factor * caustics_shallow_mask * max(caustics_strength, 0.0);
-			optical_scene += vec3(caustics_final);
-
 			// The existing physical Fresnel is the single optical balance between
 			// transmission and the surface/body response. The refraction offset above
 			// only uses (1 - fresnel) to control distortion magnitude.
@@ -3598,20 +3503,6 @@ void fragment() {
 				// absorption, scattering, foam, tint, reflection and water shading.
 				final_color = refraction_background_only;
 			}
-			if (water_optics_debug_mode == 0) {
-				if (caustics_debug_mode == 2) {
-					final_color = vec3(caustics_base_texture_value(caustics_world_xz));
-				} else if (caustics_debug_mode == 3) {
-					// Show the same two-layer filament texture after the real LONG/MID
-					// deformation. This makes the warp diagnostic judgeable as a pattern,
-					// rather than only exposing an abstract slope magnitude.
-					final_color = vec3(caustics_texture_value);
-				} else if (caustics_debug_mode == 4) {
-					final_color = vec3(caustics_shallow_mask);
-				} else if (caustics_debug_mode == 5) {
-					final_color = vec3(caustics_final);
-				}
-			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
 			// Water response is established first; foam remains the final authority.
@@ -3626,16 +3517,6 @@ void fragment() {
 			// production water surface opaque so the original framebuffer cannot be
 			// blended behind it a second time by Godot's transparent pass.
 			ALPHA = 1.0;
-			if (water_optics_debug_mode == 0 && caustics_debug_mode >= 2) {
-				// Pure caustics diagnostics: no lighting, reflection or foam can
-				// disguise a weak or quantized pattern.
-				ALBEDO = vec3(0.0);
-				EMISSION = final_color;
-				ROUGHNESS = 1.0;
-				SPECULAR = 0.0;
-				RADIANCE = vec4(0.0);
-				ALPHA = 1.0;
-			}
 			if (water_optics_debug_mode > 0) {
 				ALBEDO = final_color;
 				EMISSION = final_color;

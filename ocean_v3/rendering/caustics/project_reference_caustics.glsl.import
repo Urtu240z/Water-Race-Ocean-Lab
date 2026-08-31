@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://y0d6y5wrlt7f"
+path="res://.godot/imported/project_reference_caustics.glsl-b234a82114576e2160b19a96b52fc398.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/caustics/project_reference_caustics.glsl"
+dest_files=["res://.godot/imported/project_reference_caustics.glsl-b234a82114576e2160b19a96b52fc398.res"]
+
+[params]

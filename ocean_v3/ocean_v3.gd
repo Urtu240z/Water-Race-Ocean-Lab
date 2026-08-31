@@ -11,6 +11,7 @@ const BASE_WAVE_PRESET_PATHS := [
 	"res://ocean_v3/presets/waves/rough.tres",
 ]
 const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
+const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocean_caustics_manager.gd")
 const PERF_PRESET_FULL := &"FULL"
 const PERF_PRESET_BASE := &"BASE"
 const PERF_PRESET_NO_SSPR := &"NO_SSPR"
@@ -579,9 +580,9 @@ const DEFAULT_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/causti
 		caustics_texture_scale = clampf(value, 0.01, 1.0)
 		_request_visual_sync()
 
-@export_range(0.0, 2.0, 0.01) var caustics_fft_warp_strength := 0.32:
+@export_range(0.25, 4.0, 0.01) var caustics_power := 1.0:
 	set(value):
-		caustics_fft_warp_strength = clampf(value, 0.0, 2.0)
+		caustics_power = clampf(value, 0.25, 4.0)
 		_request_visual_sync()
 
 @export_range(0.0, 1.0, 0.01) var caustics_animation_speed := 0.12:
@@ -589,9 +590,9 @@ const DEFAULT_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/causti
 		caustics_animation_speed = clampf(value, 0.0, 1.0)
 		_request_visual_sync()
 
-@export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_TEXTURE", "DEBUG_CAUSTICS_FFT_WARP", "DEBUG_CAUSTICS_SHALLOW_MASK", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
+@export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
 	set(value):
-		caustics_debug_mode = clampi(value, 0, 5)
+		caustics_debug_mode = clampi(value, 0, 2)
 		_request_visual_sync()
 
 @export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "TRANSMISSION_OPTICAL_DEPTH", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
@@ -1213,6 +1214,7 @@ var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
 var _reflection_sspr_manager: Node
+var _caustics_manager: Node
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
 var _startup_stable_frames := 0
@@ -1236,6 +1238,13 @@ func _ready() -> void:
 		_reflection_sspr_manager.name = &"OceanSSPRManager"
 		add_child(_reflection_sspr_manager)
 		_reflection_sspr_manager.configure(self, _surface_sea_level(), reflection_sspr_enabled)
+		_caustics_manager = CAUSTICS_MANAGER_SCRIPT.new()
+		_caustics_manager.name = &"OceanCausticsManager"
+		add_child(_caustics_manager)
+		_caustics_manager.configure(self, _surface_sea_level(), caustics_enabled,
+			_active_caustics_texture(), caustics_texture_scale, caustics_strength,
+			caustics_power, caustics_fade_start_depth, caustics_max_depth,
+			_sun_direction_world, caustics_debug_mode)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -1735,14 +1744,9 @@ func _process(_delta: float) -> void:
 		_sync_water_visual_parameters()
 	# Sun direction can animate independently from inspector properties. Keep the
 	# caustics input current without re-running the full visual material sync.
-	if caustics_enabled and not Engine.is_editor_hint():
+	if not Engine.is_editor_hint():
 		_sync_sun_direction()
-		var caustics_fft := get_node_or_null(^"OpenOceanFFT")
-		if caustics_fft != null and caustics_fft.has_method(&"set_shallow_caustics_settings"):
-			caustics_fft.set_shallow_caustics_settings(
-				true, caustics_resolution, caustics_update_rate, caustics_field_extent_m,
-				caustics_debug_mode, _sun_direction_world
-			)
+		_sync_caustics_manager()
 	if not _startup_reported and not _visual_sync_pending:
 		# Three rendered process frames avoid calling a deferred setup frame
 		# "stable" while retaining zero recurring instrumentation cost.
@@ -2082,6 +2086,30 @@ func _flush_visual_sync() -> void:
 	_sync_water_visual_parameters()
 
 
+func _active_caustics_texture() -> Texture2D:
+	if caustics_texture != null:
+		return caustics_texture
+	return load(DEFAULT_CAUSTICS_TEXTURE_PATH) as Texture2D
+
+
+func _sync_caustics_manager() -> void:
+	if _caustics_manager == null or not is_instance_valid(_caustics_manager):
+		return
+	_caustics_manager.set_settings(
+		caustics_enabled,
+		_surface_sea_level(),
+		_active_caustics_texture(),
+		caustics_texture_scale,
+		caustics_strength,
+		caustics_power,
+		caustics_fade_start_depth,
+		caustics_max_depth,
+		_sun_direction_world,
+		caustics_debug_mode
+	)
+	_caustics_manager.set_time(SimulationClock.get_render_time() * caustics_animation_speed)
+
+
 func _sync_water_visual_parameters() -> void:
 	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 	if surface == null or not is_instance_valid(surface):
@@ -2182,27 +2210,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_fresnel_relief", shallow_fresnel_relief)
 	material.set_shader_parameter(&"shallow_fresnel_depth_start_m", shallow_fresnel_depth_start_m)
 	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
-	material.set_shader_parameter(&"caustics_strength", caustics_strength)
-	material.set_shader_parameter(&"caustics_fade_start_depth", caustics_fade_start_depth)
-	material.set_shader_parameter(&"caustics_max_depth", maxf(caustics_max_depth, caustics_fade_start_depth + 0.01))
-	var active_caustics_texture: Texture2D = caustics_texture
-	if active_caustics_texture == null:
-		active_caustics_texture = load(DEFAULT_CAUSTICS_TEXTURE_PATH) as Texture2D
-	material.set_shader_parameter(&"caustics_texture", active_caustics_texture)
-	material.set_shader_parameter(&"caustics_texture_scale", caustics_texture_scale)
-	material.set_shader_parameter(&"caustics_fft_warp_strength", caustics_fft_warp_strength)
-	material.set_shader_parameter(&"caustics_animation_speed", caustics_animation_speed)
-	material.set_shader_parameter(&"caustics_debug_mode", caustics_debug_mode)
-	var caustics_fft := get_node_or_null(^"OpenOceanFFT")
-	if not Engine.is_editor_hint() and caustics_fft != null and caustics_fft.has_method(&"set_shallow_caustics_settings"):
-		caustics_fft.set_shallow_caustics_settings(
-			caustics_enabled,
-			caustics_resolution,
-			caustics_update_rate,
-			caustics_field_extent_m,
-			caustics_debug_mode,
-			_sun_direction_world
-		)
+	_sync_caustics_manager()
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():

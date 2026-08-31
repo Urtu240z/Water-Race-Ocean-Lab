@@ -253,15 +253,6 @@ func set_surface_foam_mid_fold_history(history: Texture2DRD) -> void:
 	_set_surface_material_shader_parameter(&"surface_foam_mid_fold_history", history)
 
 
-func set_shallow_caustics(field: Texture2DRD, enabled: bool, origin_xz: Vector2, extent_m: float) -> void:
-	_set_surface_material_shader_parameter(&"caustics_enabled", enabled and field != null)
-	if not enabled or field == null:
-		return
-	_set_surface_material_shader_parameter(&"caustics_field", field)
-	_set_surface_material_shader_parameter(&"caustics_field_origin_xz", origin_xz)
-	_set_surface_material_shader_parameter(&"caustics_field_extent_m", Vector2.ONE * maxf(extent_m, 0.001))
-
-
 ## 3B.2B: reaplica los rangos de fade (la demo ajusta long_fade para ver el
 ## warp sobre el banco local). No altera el campo FFT.
 func apply_fade_ranges(config) -> void:
@@ -598,9 +589,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_forced_warp_offset_xz", Vector2(37.0, 23.0))
 		material.set_shader_parameter(&"coastal_debug_gain", 1.0)
 		material.set_shader_parameter(&"coastal_delta_heatmap", false)
-		material.set_shader_parameter(&"caustics_enabled", false)
-		material.set_shader_parameter(&"caustics_field_origin_xz", Vector2.ZERO)
-		material.set_shader_parameter(&"caustics_field_extent_m", Vector2.ONE)
 		for index in 4:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])
