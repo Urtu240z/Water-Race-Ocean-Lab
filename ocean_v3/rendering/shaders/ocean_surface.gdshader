@@ -221,8 +221,8 @@ uniform float coastal_bathymetry_sea_level_y = 0.0;
 uniform bool real_seabed_coverage_enabled = false;
 uniform vec2 real_seabed_coverage_origin_xz = vec2(0.0);
 uniform vec2 real_seabed_coverage_extent_m = vec2(1.0);
-// P0/P1 shallow caustics field. RGB stores final/source/refraction diagnostics;
-// it is generated from existing FFT normal maps, never from an art texture.
+// P0/P1 shallow caustics field. RGB stores the final result or an active
+// diagnostic view; it is generated from existing FFT normal maps, never art noise.
 uniform sampler2D caustics_field : repeat_disable, filter_linear;
 uniform bool caustics_enabled = false;
 uniform vec2 caustics_field_origin_xz = vec2(0.0);
@@ -230,8 +230,8 @@ uniform vec2 caustics_field_extent_m = vec2(1.0);
 uniform float caustics_strength = 0.65;
 uniform float caustics_fade_start_depth = 4.0;
 uniform float caustics_max_depth = 6.0;
-// 0 OFF, 1 CAUSTICS_ON, 2 SHALLOW_MASK, 3 SOURCE, 4 REFRACTION,
-// 5 FOCUS, 6 FINAL. Debug only changes final presentation, never the field.
+// 0 OFF, 1 CAUSTICS_ON, 2 SHALLOW_MASK, 3 RAY_DIR, 4 LANDING,
+// 5 FOCUS, 6 FINAL. Diagnostic field generation is isolated to debug modes.
 uniform int caustics_debug_mode = 0;
 // 0 OFF, 1 WATER_THICKNESS, 2 TRANSMITTANCE_RGB, 3 WATER_BODY_COLOR,
 // 4 REFRACTION_OFFSET, 5 REFRACTION_VALIDITY, 6 SCATTERING,
@@ -3539,11 +3539,11 @@ void fragment() {
 				if (caustics_debug_mode == 2) {
 					final_color = vec3(caustics_shallow_mask);
 				} else if (caustics_debug_mode == 3) {
-					final_color = vec3(caustics_sample.g);
+					final_color = caustics_sample.rgb;
 				} else if (caustics_debug_mode == 4) {
-					final_color = vec3(caustics_sample.b);
+					final_color = caustics_sample.rgb;
 				} else if (caustics_debug_mode == 5) {
-					final_color = vec3(caustics_sample.r);
+					final_color = caustics_sample.rgb;
 				} else if (caustics_debug_mode == 6) {
 					final_color = vec3(caustics_final);
 				}

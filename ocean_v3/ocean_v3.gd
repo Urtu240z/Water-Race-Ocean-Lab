@@ -563,7 +563,7 @@ var _performance_overlay_label: Label
 		caustics_update_rate = clampf(value, 1.0, 60.0)
 		_request_visual_sync()
 
-@export_range(16.0, 512.0, 1.0, "suffix: m") var caustics_field_extent_m := 128.0:
+@export_range(16.0, 512.0, 1.0, "suffix: m") var caustics_field_extent_m := 96.0:
 	set(value):
 		caustics_field_extent_m = clampf(value, 16.0, 512.0)
 		_request_visual_sync()
@@ -578,7 +578,22 @@ var _performance_overlay_label: Label
 		caustics_focus_clamp = clampf(value, 0.01, 8.0)
 		_request_visual_sync()
 
-@export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_SHALLOW_MASK", "DEBUG_CAUSTICS_SOURCE", "DEBUG_CAUSTICS_REFRACTION", "DEBUG_CAUSTICS_FOCUS", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
+@export_range(0.1, 12.0, 0.1, "suffix: m") var caustics_projection_depth_m := 3.0:
+	set(value):
+		caustics_projection_depth_m = clampf(value, 0.1, 12.0)
+		_request_visual_sync()
+
+@export_range(0.0, 4.0, 0.01) var caustics_focus_threshold := 0.15:
+	set(value):
+		caustics_focus_threshold = maxf(value, 0.0)
+		_request_visual_sync()
+
+@export_range(0.25, 6.0, 0.05) var caustics_focus_power := 1.65:
+	set(value):
+		caustics_focus_power = clampf(value, 0.25, 6.0)
+		_request_visual_sync()
+
+@export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_SHALLOW_MASK", "DEBUG_CAUSTICS_RAY_DIR", "DEBUG_CAUSTICS_LANDING", "DEBUG_CAUSTICS_FOCUS", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
 	set(value):
 		caustics_debug_mode = clampi(value, 0, 6)
 		_request_visual_sync()
@@ -1730,7 +1745,8 @@ func _process(_delta: float) -> void:
 		if caustics_fft != null and caustics_fft.has_method(&"set_shallow_caustics_settings"):
 			caustics_fft.set_shallow_caustics_settings(
 				true, caustics_resolution, caustics_update_rate, caustics_field_extent_m,
-				caustics_focus_gain, caustics_focus_clamp, _sun_direction_world
+				caustics_focus_gain, caustics_focus_clamp, caustics_projection_depth_m,
+				caustics_focus_threshold, caustics_focus_power, caustics_debug_mode, _sun_direction_world
 			)
 	if not _startup_reported and not _visual_sync_pending:
 		# Three rendered process frames avoid calling a deferred setup frame
@@ -2184,6 +2200,10 @@ func _sync_water_visual_parameters() -> void:
 			caustics_field_extent_m,
 			caustics_focus_gain,
 			caustics_focus_clamp,
+			caustics_projection_depth_m,
+			caustics_focus_threshold,
+			caustics_focus_power,
+			caustics_debug_mode,
 			_sun_direction_world
 		)
 	var bathymetry_sea_level_y := _surface_sea_level()

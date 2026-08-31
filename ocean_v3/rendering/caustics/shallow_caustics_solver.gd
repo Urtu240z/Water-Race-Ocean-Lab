@@ -9,7 +9,7 @@ var ready := false
 var last_error := ""
 var caustics_rid := RID()
 var field_origin_xz := Vector2.ZERO
-var field_extent_m := 128.0
+var field_extent_m := 96.0
 
 var _rd: RenderingDevice
 var _shader := RID()
@@ -60,7 +60,8 @@ func initialize(normal_rids: Array[RID], domains_m: PackedFloat32Array, resoluti
 
 func advance(delta_s: float, camera_world_xz: Vector2, sun_direction_world: Vector3,
 		enabled: bool, update_hz: float, extent_m: float, focus_gain: float,
-		focus_clamp: float) -> bool:
+		focus_clamp: float, projection_depth_m: float, focus_threshold: float,
+		focus_power: float, debug_mode: int) -> bool:
 	if not ready or not enabled:
 		return false
 	field_extent_m = maxf(extent_m, 8.0)
@@ -87,12 +88,13 @@ func advance(delta_s: float, camera_world_xz: Vector2, sun_direction_world: Vect
 	_rd.compute_list_bind_compute_pipeline(list, _pipeline)
 	_rd.compute_list_bind_uniform_set(list, _set, 0)
 	var push := PackedFloat32Array([
-		field_origin_xz.x, field_origin_xz.y, field_extent_m, maxf(focus_gain, 0.0),
+		field_origin_xz.x, field_origin_xz.y, field_extent_m, clampf(projection_depth_m, 0.1, 12.0),
 		light.x, light.y, light.z, maxf(focus_clamp, 0.01),
-		0.65, 1.0, 0.35, 0.0,
+		maxf(focus_gain, 0.0), maxf(focus_threshold, 0.0), clampf(focus_power, 0.25, 6.0), float(clampi(debug_mode, 0, 6)),
+		0.18, 0.18, 1.0, 0.65,
 		_domains_m[0], _domains_m[1], _domains_m[2], _domains_m[3],
 	])
-	_rd.compute_list_set_push_constant(list, push.to_byte_array(), 64)
+	_rd.compute_list_set_push_constant(list, push.to_byte_array(), 96)
 	var groups := ceili(float(_resolution) / 8.0)
 	_rd.compute_list_dispatch(list, groups, groups, 1)
 	_rd.compute_list_end()

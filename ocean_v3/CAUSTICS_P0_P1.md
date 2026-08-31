@@ -21,27 +21,33 @@ valid real seabed coverage.
 
 ## Field generation
 
-The P0 field is a 256 by 256 `RGBA16F` compute texture. R is the final
-convergence value; G and B retain source-slope and refraction/convergence views
-for diagnostics. At this resolution the persistent allocation is 512 KiB.
+The P0 field is a 256 by 256 `RGBA16F` compute texture. In normal operation
+RGB contains the final focused-light value; during a diagnostic mode it contains
+the selected diagnostic visualization. At this resolution the persistent
+allocation is 512 KiB.
 
 For each field texel, the compute shader combines slopes recovered from the
 already assembled normal maps, refracts the sun ray with a fixed air/water IOR
-approximation, and estimates the divergence of the refracted horizontal ray
-with two neighbouring samples. Negative divergence is light compression:
+approximation, and projects the ray to a configurable shallow receiver plane.
+It then forms the local Jacobian of that surface-to-landing map using two
+neighbouring samples. Compression is the inverse local landing area:
 
 ```text
-focus = clamp(max(-divergence * focus_gain, 0), 0, focus_clamp)
+compression = 1 / abs(det(d landing / d surface))
+focus = clamp(max(compression - (1 + threshold), 0) * focus_gain, 0, focus_clamp)
 ```
 
-This is a cheap focusing approximation, not photon mapping or a physically
-complete optical solution. LONG is given a conservative warp weight, MID holds
-the main structure and SHORT contributes limited detail.
+This replaces the original direction-divergence approximation, which could
+produce broad moving blobs because it did not measure where neighbouring rays
+actually landed. It remains a cheap focusing approximation, not photon mapping
+or a physically complete optical solution. LONG is conservative, MID holds the
+main structure and SHORT contributes limited detail.
 
-The field follows a camera-centred 128 m square by default. Its origin is
-snapped to one field texel in world coordinates, which prevents camera-relative
-swimming and keeps the field compatible with Ocean V3 world recentering. It is
-scheduled at 30 Hz by default and can be tested at full rate (60 Hz).
+The field follows a camera-centred 96 m square by default (0.375 m per texel at
+256). Its origin is snapped to one field texel in world coordinates, which
+prevents camera-relative swimming and keeps the field compatible with Ocean V3
+world recentering. It is scheduled at 30 Hz by default and can be tested at
+full rate (60 Hz).
 
 ## P1 receiver and shallow gate
 
@@ -63,11 +69,12 @@ the effect at 6 m.
 ## Controls and diagnostics
 
 All controls live under `OceanV3 > Caustics P0/P1`: enable, strength, fade
-depths, 128/256/512 resolution, 1--60 Hz update rate, field extent, focus gain,
-focus clamp and the following debug views:
+depths, 128/256/512 resolution, 1--60 Hz update rate, field extent, projection
+depth, focus gain, threshold, response power, focus clamp and the following
+debug views:
 
 `CAUSTICS_OFF`, `CAUSTICS_ON`, `DEBUG_CAUSTICS_SHALLOW_MASK`,
-`DEBUG_CAUSTICS_SOURCE`, `DEBUG_CAUSTICS_REFRACTION`,
+`DEBUG_CAUSTICS_RAY_DIR`, `DEBUG_CAUSTICS_LANDING`,
 `DEBUG_CAUSTICS_FOCUS`, `DEBUG_CAUSTICS_FINAL`.
 
 The default is disabled, preserving the previous Ocean V3 visual baseline.
@@ -85,6 +92,17 @@ warm-up, stabilization, average, P95 and P99 reporting. It does not synchronize
 the GPU or read textures back, so GPU milliseconds remain unavailable by
 design. The target is an observed cost near or below +0.20 ms; it is not a
 claim until a successful graphical run is recorded.
+
+### Recorded focusing run
+
+On 2026-08-31, the focusing implementation completed the paired test at
+1920x1080, Forward+, D3D12, render scale 0.70, on the RTX 4070 Laptop GPU.
+Seven `FULL` / `NO_CAUSTICS` pairs measured a mean CPU-frame delta of
+`-0.0091 ms`, with `0.0766 ms` standard deviation and range
+`-0.1107..0.0973 ms`. `FULL` averaged `4.3220 ms` (P95 `5.7876 ms`) and
+`NO_CAUSTICS` averaged `4.3311 ms` (P95 `5.7954 ms`). This is no measurable
+CPU-frame regression in that run; it is not a GPU-time claim because the
+benchmark intentionally performs no GPU synchronization or readback.
 
 ## Current limitations and next checks
 

@@ -282,9 +282,13 @@ var _shallow_caustics_texture := Texture2DRD.new()
 var _shallow_caustics_enabled := false
 var _shallow_caustics_resolution := 256
 var _shallow_caustics_update_hz := 30.0
-var _shallow_caustics_extent_m := 128.0
+var _shallow_caustics_extent_m := 96.0
 var _shallow_caustics_focus_gain := 3.0
 var _shallow_caustics_focus_clamp := 1.5
+var _shallow_caustics_projection_depth_m := 3.0
+var _shallow_caustics_focus_threshold := 0.15
+var _shallow_caustics_focus_power := 1.65
+var _shallow_caustics_debug_mode := 0
 var _shallow_caustics_sun_direction := Vector3(0.0, 1.0, 0.0)
 var _shallow_caustics_rebuild_requested := false
 var _surface_foam_mid_history_solver = null
@@ -1906,7 +1910,8 @@ func _textures_for(key: StringName) -> Array[Texture2DRD]:
 ## P0/P1 shallow caustics: root owns authoring and sun selection; this module
 ## owns the render-thread field alongside the FFT normal resources it samples.
 func set_shallow_caustics_settings(enabled: bool, resolution: int, update_hz: float,
-		extent_m: float, focus_gain: float, focus_clamp: float, sun_direction: Vector3) -> void:
+		extent_m: float, focus_gain: float, focus_clamp: float, projection_depth_m: float,
+		focus_threshold: float, focus_power: float, debug_mode: int, sun_direction: Vector3) -> void:
 	var validated_resolution := 128 if resolution <= 128 else 256 if resolution <= 256 else 512
 	var resolution_changed := validated_resolution != _shallow_caustics_resolution
 	_shallow_caustics_enabled = enabled
@@ -1915,6 +1920,10 @@ func set_shallow_caustics_settings(enabled: bool, resolution: int, update_hz: fl
 	_shallow_caustics_extent_m = maxf(extent_m, 8.0)
 	_shallow_caustics_focus_gain = maxf(focus_gain, 0.0)
 	_shallow_caustics_focus_clamp = maxf(focus_clamp, 0.01)
+	_shallow_caustics_projection_depth_m = clampf(projection_depth_m, 0.1, 12.0)
+	_shallow_caustics_focus_threshold = maxf(focus_threshold, 0.0)
+	_shallow_caustics_focus_power = clampf(focus_power, 0.25, 6.0)
+	_shallow_caustics_debug_mode = clampi(debug_mode, 0, 6)
 	_shallow_caustics_sun_direction = sun_direction
 	if resolution_changed:
 		_shallow_caustics_rebuild_requested = true
@@ -1960,7 +1969,11 @@ func _advance_shallow_caustics(delta: float) -> void:
 		_shallow_caustics_update_hz,
 		_shallow_caustics_extent_m,
 		_shallow_caustics_focus_gain,
-		_shallow_caustics_focus_clamp
+		_shallow_caustics_focus_clamp,
+		_shallow_caustics_projection_depth_m,
+		_shallow_caustics_focus_threshold,
+		_shallow_caustics_focus_power,
+		_shallow_caustics_debug_mode
 	))
 	surface.set_shallow_caustics(
 		_shallow_caustics_texture,
