@@ -1,0 +1,26 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://ocean_v4/ocean_v4.tscn" id="1_ocean"]
+
+[sub_resource type="Environment" id="Environment_base"]
+background_mode = 1
+background_color = Color(0.03, 0.06, 0.10, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.4, 0.5, 0.6, 1)
+ambient_light_energy = 0.6
+
+[node name="OceanV4BaseLab" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_base")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-38, -28, 0)
+light_energy = 2.0
+
+[node name="Camera" type="Camera3D" parent="." groups=["lab_camera"]]
+transform = Transform3D(1, 0, 0, 0, 0.94, 0.342, 0, -0.342, 0.94, 0, 12, 25)
+current = true
+far = 7000.0
+
+[node name="OceanV4" parent="." instance=ExtResource("1_ocean")]

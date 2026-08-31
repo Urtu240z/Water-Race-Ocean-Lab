@@ -1,0 +1,165 @@
+[gd_scene format=3 uid="uid://jre4048uwaa7"]
+
+[ext_resource type="Script" path="res://lab/lab_main_v4.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://damf7nhujahjq" path="res://lab/scenes/free_camera.gd" id="2_free_camera"]
+[ext_resource type="Texture2D" uid="uid://b1uckk3vaafyx" path="res://kloofendal_48d_partly_cloudy_puresky_4k.hdr" id="2_ody2a"]
+[ext_resource type="Script" uid="uid://mn10xcm0ur7k" path="res://lab/scenes/race_reference_camera.gd" id="3_race_camera"]
+[ext_resource type="Script" uid="uid://bflbd6o27fgtu" path="res://lab/scenes/metric_references.gd" id="4_metrics"]
+[ext_resource type="Script" uid="uid://8phvhwlj8w40" path="res://lab/benchmark/benchmark_hud.gd" id="5_hud"]
+[ext_resource type="PackedScene" path="res://ocean_v4/ocean_v4.tscn" id="6_ocean"]
+[ext_resource type="PackedScene" uid="uid://dlw1u582rk7g3" path="res://boat_02.glb" id="7_nwk5u"]
+[ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
+[ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
+[ext_resource type="Script" uid="uid://r686lc4ul5rf" path="res://ocean_v4/rendering/ocean_clipmap_config_v4.gd" id="9_kst5p"]
+[ext_resource type="Material" uid="uid://dmj6dyip8ab0w" path="res://terrain/materials/sand_02.res" id="13_ody2a"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_qvnwd"]
+panorama = ExtResource("2_ody2a")
+energy_multiplier = 3.0
+
+[sub_resource type="Sky" id="Sky_lab"]
+sky_material = SubResource("PanoramaSkyMaterial_qvnwd")
+radiance_size = 4
+
+[sub_resource type="Environment" id="Environment_lab"]
+background_mode = 2
+sky = SubResource("Sky_lab")
+ambient_light_source = 3
+ambient_light_sky_contribution = 0.15
+reflected_light_source = 2
+tonemap_mode = 4
+tonemap_exposure = 0.5
+tonemap_agx_white = 2.0
+tonemap_agx_contrast = 1.12
+ssao_enabled = true
+ssao_intensity = 4.0
+ssao_light_affect = 1.0
+ssil_enabled = true
+ssil_intensity = 3.5
+glow_enabled = true
+fog_enabled = true
+fog_mode = 1
+fog_light_color = Color(1, 1, 1, 1)
+fog_light_energy = 0.0
+fog_sun_scatter = 0.13
+fog_density = 1.0
+fog_aerial_perspective = 0.692
+fog_sky_affect = 0.464
+fog_depth_curve = 1.071768
+fog_depth_begin = 306.3
+fog_depth_end = 1945.9
+adjustment_enabled = true
+adjustment_contrast = 1.1
+adjustment_saturation = 0.8
+
+[sub_resource type="CameraAttributesPhysical" id="CameraAttributesPhysical_ody2a"]
+auto_exposure_enabled = true
+auto_exposure_scale = 0.69
+exposure_aperture = 9.0
+exposure_shutter_speed = 500.0
+auto_exposure_min_exposure_value = -3.0
+
+[sub_resource type="Resource" id="Resource_ody2a"]
+script = ExtResource("9_kst5p")
+cells_per_side = 126
+short_fade_range_m = Vector2(0, 55)
+
+[node name="LabMainV4" type="Node3D" unique_id=1698941175]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=467834431]
+environment = SubResource("Environment_lab")
+camera_attributes = SubResource("CameraAttributesPhysical_ody2a")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
+transform = Transform3D(0.9063077, 0.22395353, -0.35840052, 0, 0.848048, 0.52991915, 0.42261824, -0.48026988, 0.76859236, 0, 0, 0)
+light_temperature = 5800.0
+light_energy = 3.611
+light_angular_distance = 0.5
+shadow_enabled = true
+shadow_normal_bias = 1.0
+shadow_blur = 2.5
+directional_shadow_split_1 = 0.05
+directional_shadow_split_2 = 0.15
+directional_shadow_split_3 = 0.4
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 300.0
+
+[node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -60)
+
+[node name="Cameras" type="Node3D" parent="." unique_id=1853314533]
+
+[node name="FreeCamera" type="Camera3D" parent="Cameras" unique_id=301081113 groups=["lab_camera"]]
+unique_name_in_owner = true
+transform = Transform3D(0.9261474, 0.12899683, -0.35441616, 0, 0.93969274, 0.34201992, 0.37716177, -0.31676087, 0.870294, 398.43634, 12, 107.41211)
+fov = 59.1
+far = 7000.0
+script = ExtResource("2_free_camera")
+
+[node name="RaceReferenceCamera" type="Camera3D" parent="Cameras" unique_id=428314263 groups=["lab_camera"]]
+unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 7.5)
+fov = 78.0
+far = 7000.0
+script = ExtResource("3_race_camera")
+target_path = NodePath("../../RaceReferenceTarget")
+
+[node name="MetricReferences" type="Node3D" parent="." unique_id=1425463389]
+script = ExtResource("4_metrics")
+
+[node name="OceanV4Mount" type="Node3D" parent="." unique_id=426342056]
+
+[node name="OceanV4" parent="OceanV4Mount" unique_id=1474607840 instance=ExtResource("6_ocean")]
+
+[node name="OceanClipmapSurface" parent="OceanV4Mount/OceanV4" index="1"]
+clipmap_config = SubResource("Resource_ody2a")
+
+[node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
+unique_name_in_owner = true
+process_mode = 4
+visible = false
+script = ExtResource("5_hud")
+
+[node name="Margin" type="MarginContainer" parent="BenchmarkHUD" unique_id=968768225]
+offset_right = 475.0
+offset_bottom = 285.0
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Panel" type="PanelContainer" parent="BenchmarkHUD/Margin" unique_id=567551109]
+layout_mode = 2
+
+[node name="Metrics" type="Label" parent="BenchmarkHUD/Margin/Panel" unique_id=891588710]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.95, 1, 1)
+theme_override_font_sizes/font_size = 15
+
+[node name="Controls" type="Label" parent="BenchmarkHUD" unique_id=58845568]
+unique_name_in_owner = true
+offset_left = 1051.0
+offset_top = 32.0
+offset_right = 1700.0
+offset_bottom = 138.0
+theme_override_colors/font_color = Color(0.82, 0.9, 0.95, 1)
+theme_override_font_sizes/font_size = 14
+
+[node name="boat_02" parent="." unique_id=936208299 instance=ExtResource("7_nwk5u")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 591.20557, -6.093811, -741.18176)
+
+[node name="boat_03" parent="." unique_id=810739 instance=ExtResource("8_mi5lw")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 527.7775, 1.2421999, -593.01697)
+
+[node name="paradise_island" parent="." unique_id=2062542373 instance=ExtResource("9_73jaq")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, 5.30381, -506.55515)
+
+[node name="Terrain_Master_VIS" parent="paradise_island" index="0" unique_id=2078926670]
+surface_material_override/0 = ExtResource("13_ody2a")
+
+[node name="Cabana_4_COL" parent="paradise_island" index="19" unique_id=1115929881]
+transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0, 1.3555894, 214.78558, -7.2204156, 331.6032)
+
+[editable path="OceanV4Mount/OceanV4"]
+[editable path="paradise_island"]
