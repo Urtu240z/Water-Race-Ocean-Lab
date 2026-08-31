@@ -17,12 +17,13 @@ var _levels: Array[MeshInstance3D] = []
 var _tracking_camera: Camera3D
 
 
-func configure(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
-	if configs.size() != 3 or displacements.size() != 3 or normals.size() != 3:
-		push_error("OceanV4 needs LONG, MID and SHORT maps.")
+func configure(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], coastal_state: Dictionary = {}) -> void:
+	if configs.size() != 3 or displacements.size() != 4 or normals.size() != 4:
+		push_error("OceanV4 needs LONG_COASTAL, LONG_REMAINDER, MID and SHORT maps.")
 		return
 	_material.shader = BASE_SHADER
 	bind_fft_textures(configs, displacements, normals)
+	bind_coastal_geometry(coastal_state)
 	_material.set_shader_parameter(&"base_color", base_color)
 	_material.set_shader_parameter(&"base_roughness", roughness)
 	_material.set_shader_parameter(&"base_specular", specular)
@@ -34,18 +35,39 @@ func configure(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Textur
 
 
 func bind_fft_textures(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Texture2DRD], normals: Array[Texture2DRD]) -> void:
-	if configs.size() != 3 or displacements.size() != 3 or normals.size() != 3:
-		push_error("OceanV4 needs LONG, MID and SHORT maps.")
+	if configs.size() != 3 or displacements.size() != 4 or normals.size() != 4:
+		push_error("OceanV4 needs LONG_COASTAL, LONG_REMAINDER, MID and SHORT maps.")
 		return
-	_material.set_shader_parameter(&"displacement_long", displacements[0])
-	_material.set_shader_parameter(&"displacement_mid", displacements[1])
-	_material.set_shader_parameter(&"displacement_short", displacements[2])
-	_material.set_shader_parameter(&"normal_long", normals[0])
-	_material.set_shader_parameter(&"normal_mid", normals[1])
-	_material.set_shader_parameter(&"normal_short", normals[2])
-	_material.set_shader_parameter(&"domain_long_m", configs[0].domain_size_m)
+	_material.set_shader_parameter(&"displacement_long_coastal", displacements[0])
+	_material.set_shader_parameter(&"displacement_long_remainder", displacements[1])
+	_material.set_shader_parameter(&"displacement_mid", displacements[2])
+	_material.set_shader_parameter(&"displacement_short", displacements[3])
+	_material.set_shader_parameter(&"normal_long_coastal", normals[0])
+	_material.set_shader_parameter(&"normal_long_remainder", normals[1])
+	_material.set_shader_parameter(&"normal_mid", normals[2])
+	_material.set_shader_parameter(&"normal_short", normals[3])
+	_material.set_shader_parameter(&"domain_long_coastal_m", configs[0].domain_size_m)
+	_material.set_shader_parameter(&"domain_long_remainder_m", configs[0].domain_size_m)
 	_material.set_shader_parameter(&"domain_mid_m", configs[1].domain_size_m)
 	_material.set_shader_parameter(&"domain_short_m", configs[2].domain_size_m)
+
+
+func bind_coastal_geometry(state: Dictionary) -> void:
+	var enabled := not state.is_empty()
+	_material.set_shader_parameter(&"coastal_geometry_enabled", enabled)
+	if not enabled:
+		return
+	_material.set_shader_parameter(&"coastal_field_texture", state.field)
+	_material.set_shader_parameter(&"coastal_metrics_texture", state.metrics)
+	_material.set_shader_parameter(&"coastal_warp_texture", state.warp)
+	_material.set_shader_parameter(&"coastal_warp_jacobian_texture", state.jacobian)
+	_material.set_shader_parameter(&"coastal_origin_xz", state.origin_xz)
+	_material.set_shader_parameter(&"coastal_extent_m", state.extent_m)
+	_material.set_shader_parameter(&"coastal_warp_origin_xz", state.warp_origin_xz)
+	_material.set_shader_parameter(&"coastal_warp_extent_m", state.warp_extent_m)
+	_material.set_shader_parameter(&"coastal_warp_detj_safe", state.warp_detj_safe)
+	_material.set_shader_parameter(&"coastal_min_valid_depth_m", state.min_valid_depth_m)
+	_material.set_shader_parameter(&"coastal_cell_size_m", state.cell_size_m)
 
 
 func set_tracking_camera(camera: Camera3D) -> void:

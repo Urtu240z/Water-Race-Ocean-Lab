@@ -11,6 +11,9 @@ const FFT := preload("res://ocean_v4/simulation/open_ocean_fft_v4.gd")
 @export var advance_time := true
 @export_enum("FULL", "LONG", "MID", "SHORT") var debug_band := 0
 
+@export_category("Coastal geometry")
+@export var coastal_bake_asset: Resource
+
 @export_category("LONG")
 @export var long_target_hs_m := 2.5
 @export var long_choppiness := 2.0
@@ -30,6 +33,7 @@ const FFT := preload("res://ocean_v4/simulation/open_ocean_fft_v4.gd")
 @export var short_spread := 3.0
 
 @onready var open_ocean_fft: OpenOceanFFTV4 = $OpenOceanFFT
+@onready var ocean_coastal = $OceanCoastal
 @onready var clipmap_surface: OceanClipmapSurfaceV4 = $OceanClipmapSurface
 
 var _physics_frames := 0
@@ -39,7 +43,8 @@ func _ready() -> void:
 	open_ocean_fft.configure(_bands(), simulation_seed)
 	open_ocean_fft.publish_textures()
 	clipmap_surface.debug_band = debug_band
-	clipmap_surface.configure(open_ocean_fft.configs, open_ocean_fft.displacement_textures(), open_ocean_fft.normal_textures())
+	ocean_coastal.configure(coastal_bake_asset)
+	clipmap_surface.configure(open_ocean_fft.configs, open_ocean_fft.displacement_textures(), open_ocean_fft.normal_textures(), ocean_coastal.shader_state())
 	clipmap_surface.set_tracking_camera(_find_lab_camera())
 	print("OceanV4 simulation time startup: %.3f s" % simulation_time_s)
 
@@ -65,7 +70,8 @@ func reset_simulation(next_seed := simulation_seed) -> void:
 	open_ocean_fft.configure(_bands(), simulation_seed)
 	open_ocean_fft.publish_textures()
 	clipmap_surface.debug_band = debug_band
-	clipmap_surface.configure(open_ocean_fft.configs, open_ocean_fft.displacement_textures(), open_ocean_fft.normal_textures())
+	ocean_coastal.configure(coastal_bake_asset)
+	clipmap_surface.configure(open_ocean_fft.configs, open_ocean_fft.displacement_textures(), open_ocean_fft.normal_textures(), ocean_coastal.shader_state())
 
 
 func cycle_debug_band() -> void:

@@ -4,6 +4,7 @@
 [ext_resource type="Script" path="res://ocean_v4/simulation/open_ocean_fft_v4.gd" id="2_fft"]
 [ext_resource type="Script" path="res://ocean_v4/rendering/ocean_clipmap_surface_v4.gd" id="3_surface"]
 [ext_resource type="Script" path="res://ocean_v4/rendering/ocean_clipmap_config_v4.gd" id="4_config"]
+[ext_resource type="Script" path="res://ocean_v4/coastal/ocean_coastal_v4.gd" id="5_coastal"]
 
 [sub_resource type="Resource" id="ClipmapConfig"]
 script = ExtResource("4_config")
@@ -13,6 +14,9 @@ script = ExtResource("1_root")
 
 [node name="OpenOceanFFT" type="Node3D" parent="."]
 script = ExtResource("2_fft")
+
+[node name="OceanCoastal" type="Node" parent="."]
+script = ExtResource("5_coastal")
 
 [node name="OceanClipmapSurface" type="Node3D" parent="."]
 script = ExtResource("3_surface")

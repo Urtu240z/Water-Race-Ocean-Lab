@@ -1,6 +1,6 @@
 class_name OpenOceanFFTV4
 extends Node3D
-## Owns exactly three physical V4 cascades and publishes their render textures.
+## Owns three physical V4 bands. LONG is rendered as coastal + remainder.
 
 const Config := preload("res://ocean_v4/simulation/open_ocean_fft_config_v4.gd")
 const Spectrum := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
@@ -14,14 +14,13 @@ var _textures_published := false
 func configure(bands: Array[Dictionary], simulation_seed: int) -> void:
 	_release()
 	configs = _make_configs(bands)
-	for config in configs:
-		var h0 := Spectrum.build_h0_rgba32f(config, Spectrum.derive_cascade_seed(simulation_seed, config.id))
-		_print_h0_diagnostic(config.id, h0)
-		var solver := Solver.new()
-		var displacement := Texture2DRD.new()
-		var normal := Texture2DRD.new()
-		RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0, "OceanV4.%s" % config.id))
-		_cascades.append({"solver": solver, "displacement": displacement, "normal": normal})
+	var long_h0 := Spectrum.build_h0_rgba32f(configs[0], Spectrum.derive_cascade_seed(simulation_seed, configs[0].id))
+	var split: Dictionary = Spectrum.split_h0_rgba32f(configs[0], long_h0, 20.0, 35.0)
+	_append_cascade(configs[0], split["coastal"], "LONG_COASTAL")
+	_append_cascade(configs[0], split["remainder"], "LONG_REMAINDER")
+	for index in range(1, configs.size()):
+		var config := configs[index]
+		_append_cascade(config, Spectrum.build_h0_rgba32f(config, Spectrum.derive_cascade_seed(simulation_seed, config.id)), config.id)
 
 
 func publish_textures() -> bool:
@@ -35,7 +34,7 @@ func publish_textures() -> bool:
 		cascade.normal.texture_rd_rid = solver.normal_rid
 	if all_ready and not _textures_published:
 		_textures_published = true
-		print("OceanV4 FFT textures published: LONG/MID/SHORT Texture2DRD RIDs are valid.")
+		print("OceanV4 FFT textures published: LONG_COASTAL/LONG_REMAINDER/MID/SHORT Texture2DRD RIDs are valid.")
 		return true
 	return false
 
@@ -57,6 +56,15 @@ func normal_textures() -> Array[Texture2DRD]:
 	var result: Array[Texture2DRD] = []
 	for cascade in _cascades: result.append(cascade.normal)
 	return result
+
+
+func _append_cascade(config: OpenOceanFFTConfigV4, h0: PackedByteArray, render_id: String) -> void:
+	_print_h0_diagnostic(render_id, h0)
+	var solver := Solver.new()
+	var displacement := Texture2DRD.new()
+	var normal := Texture2DRD.new()
+	RenderingServer.call_on_render_thread(solver.initialize.bind(config, h0, "OceanV4.%s" % render_id))
+	_cascades.append({"solver": solver, "displacement": displacement, "normal": normal})
 
 
 func _exit_tree() -> void:

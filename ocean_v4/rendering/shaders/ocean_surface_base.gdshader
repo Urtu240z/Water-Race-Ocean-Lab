@@ -1,19 +1,37 @@
 shader_type spatial;
 render_mode cull_disabled, diffuse_burley, specular_schlick_ggx;
 
-uniform sampler2D displacement_long : filter_linear, repeat_enable;
+// Phase 1 geometry only: LONG_COASTAL + LONG_REMAINDER + MID + SHORT.
+uniform sampler2D displacement_long_coastal : filter_linear, repeat_enable;
+uniform sampler2D displacement_long_remainder : filter_linear, repeat_enable;
 uniform sampler2D displacement_mid : filter_linear, repeat_enable;
 uniform sampler2D displacement_short : filter_linear, repeat_enable;
-uniform sampler2D normal_long : filter_linear, repeat_enable;
+uniform sampler2D normal_long_coastal : filter_linear, repeat_enable;
+uniform sampler2D normal_long_remainder : filter_linear, repeat_enable;
 uniform sampler2D normal_mid : filter_linear, repeat_enable;
 uniform sampler2D normal_short : filter_linear, repeat_enable;
-uniform float domain_long_m = 512.0;
+uniform sampler2D coastal_field_texture : filter_linear, repeat_disable;
+uniform sampler2D coastal_metrics_texture : filter_linear, repeat_disable;
+uniform sampler2D coastal_warp_texture : filter_linear, repeat_disable;
+uniform sampler2D coastal_warp_jacobian_texture : filter_linear, repeat_disable;
+uniform float domain_long_coastal_m = 512.0;
+uniform float domain_long_remainder_m = 512.0;
 uniform float domain_mid_m = 137.0;
 uniform float domain_short_m = 37.0;
 uniform vec2 camera_world_xz = vec2(0.0);
 uniform vec2 short_fade_range_m = vec2(24.0, 80.0);
 uniform vec2 mid_fade_range_m = vec2(96.0, 280.0);
 uniform vec2 long_fade_range_m = vec2(768.0, 2500.0);
+uniform bool coastal_geometry_enabled = false;
+uniform vec2 coastal_origin_xz = vec2(0.0);
+uniform vec2 coastal_extent_m = vec2(1.0);
+uniform vec2 coastal_warp_origin_xz = vec2(0.0);
+uniform vec2 coastal_warp_extent_m = vec2(1.0);
+uniform float coastal_warp_detj_safe = 0.5;
+uniform float coastal_min_valid_depth_m = 0.25;
+uniform float coastal_cell_size_m = 1.0;
+uniform vec2 shore_vertical_depth_range_m = vec2(0.25, 6.0);
+uniform vec2 shore_horizontal_depth_range_m = vec2(0.75, 12.0);
 uniform vec3 base_color : source_color = vec3(0.015, 0.07, 0.10);
 uniform float base_roughness : hint_range(0.0, 1.0) = 0.12;
 uniform float base_specular : hint_range(0.0, 1.0) = 0.75;
@@ -23,32 +41,112 @@ vec3 sample_displacement(sampler2D map, float domain_m, vec2 world_xz) {
 	return texture(map, fract(world_xz / domain_m + vec2(0.5))).xyz;
 }
 
+float field_inside(vec2 uv) {
+	return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+}
+
+vec4 coastal_warp_state(vec2 world_xz) {
+	if (!coastal_geometry_enabled) return vec4(world_xz, 0.0, 1.0);
+	vec2 coast_uv = (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
+	vec4 field = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
+	float render_confidence = field_inside(coast_uv) * clamp(field.a, 0.0, 1.0);
+	vec2 warp_uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
+	vec4 warp = textureLod(coastal_warp_texture, clamp(warp_uv, vec2(0.0), vec2(1.0)), 0.0);
+	float warp_confidence = smoothstep(0.0, coastal_warp_detj_safe, warp.b) * warp.a * field_inside(warp_uv) * render_confidence;
+	return vec4(warp.xy, warp_confidence, mix(1.0, field.g, warp_confidence));
+}
+
+void shore_weights(vec2 world_xz, out float vertical_weight, out float horizontal_weight) {
+	vertical_weight = 1.0;
+	horizontal_weight = 1.0;
+	if (!coastal_geometry_enabled) return;
+	vec2 uv = (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
+	float inside = field_inside(uv);
+	float depth = max(textureLod(coastal_metrics_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0).r, 0.0);
+	float water = smoothstep(0.0, max(coastal_min_valid_depth_m, 0.001), depth);
+	float vertical = water * smoothstep(min(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y), max(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y), depth);
+	float horizontal = water * smoothstep(min(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y), max(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y), depth);
+	vertical_weight = mix(1.0, vertical, inside);
+	horizontal_weight = mix(1.0, horizontal, inside);
+}
+
+vec2 slope_from_normal(vec3 normal_value) {
+	vec3 n = normalize(normal_value);
+	return -n.xz / max(n.y, 0.0001);
+}
+
+vec2 shoreline_vertical_gradient(vec2 world_xz) {
+	if (!coastal_geometry_enabled) return vec2(0.0);
+	float step_m = max(coastal_cell_size_m, 0.25);
+	float vm;
+	float hm;
+	float vp;
+	float hp;
+	shore_weights(world_xz - vec2(step_m, 0.0), vm, hm);
+	shore_weights(world_xz + vec2(step_m, 0.0), vp, hp);
+	float dx = (vp - vm) / (2.0 * step_m);
+	shore_weights(world_xz - vec2(0.0, step_m), vm, hm);
+	shore_weights(world_xz + vec2(0.0, step_m), vp, hp);
+	return vec2(dx, (vp - vm) / (2.0 * step_m));
+}
+
 vec3 total_displacement(vec2 world_xz) {
 	float distance_to_camera = length(world_xz - camera_world_xz);
-	float short_weight = 1.0 - smoothstep(short_fade_range_m.x, short_fade_range_m.y, distance_to_camera);
+	float long_weight = 1.0 - smoothstep(long_fade_range_m.x, long_fade_range_m.y, distance_to_camera);
 	float mid_weight = 1.0 - smoothstep(mid_fade_range_m.x, mid_fade_range_m.y, distance_to_camera);
-	vec3 long_displacement = sample_displacement(displacement_long, domain_long_m, world_xz);
-	vec3 mid_displacement = sample_displacement(displacement_mid, domain_mid_m, world_xz) * mid_weight;
-	vec3 short_displacement = sample_displacement(displacement_short, domain_short_m, world_xz) * short_weight;
-	if (debug_band == 1) return long_displacement;
-	if (debug_band == 2) return mid_displacement;
-	if (debug_band == 3) return short_displacement;
-	return long_displacement + mid_displacement + short_displacement;
+	float short_weight = 1.0 - smoothstep(short_fade_range_m.x, short_fade_range_m.y, distance_to_camera);
+	vec4 coastal = coastal_warp_state(world_xz);
+	vec3 long_coastal_open = sample_displacement(displacement_long_coastal, domain_long_coastal_m, world_xz);
+	vec3 long_coastal_deep = sample_displacement(displacement_long_coastal, domain_long_coastal_m, coastal.xy);
+	vec3 long_coastal = mix(long_coastal_open, long_coastal_deep, coastal.z) * coastal.w;
+	vec3 long_remainder = sample_displacement(displacement_long_remainder, domain_long_remainder_m, world_xz);
+	vec3 mid = sample_displacement(displacement_mid, domain_mid_m, world_xz) * mid_weight;
+	vec3 short_wave = sample_displacement(displacement_short, domain_short_m, world_xz) * short_weight;
+	vec3 displacement = (long_coastal + long_remainder) * long_weight;
+	if (debug_band == 1) displacement = (long_coastal + long_remainder) * long_weight;
+	else if (debug_band == 2) displacement = mid;
+	else if (debug_band == 3) displacement = short_wave;
+	else displacement += mid + short_wave;
+	float vertical_weight;
+	float horizontal_weight;
+	shore_weights(world_xz, vertical_weight, horizontal_weight);
+	displacement.xz *= horizontal_weight;
+	displacement.y *= vertical_weight;
+	return displacement;
 }
 
 void vertex() {
 	vec3 world_base = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec2 xz = world_base.xz;
 	vec3 displacement = total_displacement(xz);
-	float derivative_step = 0.35;
-	vec3 x0 = total_displacement(xz - vec2(derivative_step, 0.0));
-	vec3 x1 = total_displacement(xz + vec2(derivative_step, 0.0));
-	vec3 z0 = total_displacement(xz - vec2(0.0, derivative_step));
-	vec3 z1 = total_displacement(xz + vec2(0.0, derivative_step));
-	vec3 tangent_x = vec3(1.0, 0.0, 0.0) + (x1 - x0) / (2.0 * derivative_step);
-	vec3 tangent_z = vec3(0.0, 0.0, 1.0) + (z1 - z0) / (2.0 * derivative_step);
+	float distance_to_camera = length(xz - camera_world_xz);
+	float long_weight = 1.0 - smoothstep(long_fade_range_m.x, long_fade_range_m.y, distance_to_camera);
+	float mid_weight = 1.0 - smoothstep(mid_fade_range_m.x, mid_fade_range_m.y, distance_to_camera);
+	float short_weight = 1.0 - smoothstep(short_fade_range_m.x, short_fade_range_m.y, distance_to_camera);
+	vec4 coastal = coastal_warp_state(xz);
+	vec2 coastal_open_slope = slope_from_normal(textureLod(normal_long_coastal, fract(xz / domain_long_coastal_m + vec2(0.5)), 0.0).rgb);
+	vec2 coastal_deep_slope = slope_from_normal(textureLod(normal_long_coastal, fract(coastal.xy / domain_long_coastal_m + vec2(0.5)), 0.0).rgb);
+	vec2 warp_uv = (xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
+	vec4 jacobian = textureLod(coastal_warp_jacobian_texture, clamp(warp_uv, vec2(0.0), vec2(1.0)), 0.0);
+	vec2 coastal_world_slope = vec2(
+		jacobian.r * coastal_deep_slope.x + jacobian.b * coastal_deep_slope.y,
+		jacobian.g * coastal_deep_slope.x + jacobian.a * coastal_deep_slope.y
+	);
+	vec2 long_slope = (mix(coastal_open_slope, coastal_world_slope, coastal.z) * coastal.w
+		+ slope_from_normal(textureLod(normal_long_remainder, fract(xz / domain_long_remainder_m + vec2(0.5)), 0.0).rgb)) * long_weight;
+	vec2 mid_slope = slope_from_normal(textureLod(normal_mid, fract(xz / domain_mid_m + vec2(0.5)), 0.0).rgb) * mid_weight;
+	vec2 short_slope = slope_from_normal(textureLod(normal_short, fract(xz / domain_short_m + vec2(0.5)), 0.0).rgb) * short_weight;
+	vec2 slope = long_slope + mid_slope + short_slope;
+	if (debug_band == 1) slope = long_slope;
+	else if (debug_band == 2) slope = mid_slope;
+	else if (debug_band == 3) slope = short_slope;
+	float vertical_weight;
+	float horizontal_weight;
+	shore_weights(xz, vertical_weight, horizontal_weight);
+	float pre_envelope_height = displacement.y / max(vertical_weight, 0.001);
+	slope = slope * vertical_weight + pre_envelope_height * shoreline_vertical_gradient(xz);
 	VERTEX += displacement;
-	NORMAL = normalize(cross(tangent_z, tangent_x));
+	NORMAL = normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
 void fragment() {
