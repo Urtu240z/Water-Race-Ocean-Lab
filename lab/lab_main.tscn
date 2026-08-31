@@ -11,9 +11,10 @@
 [ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="7_ody2a"]
 [ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/coastal_bake.tres" id="8_35bca"]
 [ext_resource type="PackedScene" uid="uid://d5cxjh8hsaa5" path="res://boat_03.glb" id="8_mi5lw"]
-[ext_resource type="Texture2D" uid="uid://d1056fkhkqacl" path="res://ocean_v3/rendering/caustics/caustics_filament_tile.png" id="9_35bca"]
+[ext_resource type="Texture2D" uid="uid://dponk8bkwb613" path="res://ocean_v3/rendering/caustics/caustics-generator2.png" id="9_35bca"]
 [ext_resource type="PackedScene" uid="uid://dv7rboahkhlyt" path="res://paradise_island.glb" id="9_73jaq"]
 [ext_resource type="Script" uid="uid://cqg3ydt8w2tnp" path="res://ocean_v3/rendering/ocean_clipmap_config.gd" id="9_kst5p"]
+[ext_resource type="Texture2D" uid="uid://cy6pg10er0d1b" path="res://ocean_v3/rendering/caustics/luma_gradient.tres" id="10_4qkou"]
 [ext_resource type="Material" uid="uid://dmj6dyip8ab0w" path="res://terrain/materials/sand_02.res" id="13_ody2a"]
 [ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
 [ext_resource type="Script" uid="uid://bgmu6kdgxmpru" path="res://ocean_v3/coastal/coastal_bake_authoring.gd" id="17_4qkou"]
@@ -147,6 +148,9 @@ crest_tint = Color(0.022200117, 0.15144762, 0.1125462, 1)
 water_body_depth_start_m = 0.7
 water_body_depth_end_m = 26.0
 opacity_distance_end = 1000.0
+refraction_long_weight = 1.0
+refraction_mid_weight = 3.0
+refraction_short_weight = 2.0
 refraction_depth_end_m = 38.0
 transmission_detail_fade_start_m = 7.0
 transmission_detail_fade_end_m = 46.5
@@ -156,11 +160,16 @@ seabed_match_tolerance_start_m = 0.0
 seabed_match_tolerance_end_m = 22.85
 shallow_fresnel_depth_end_m = 48.6
 caustics_enabled = true
-caustics_strength = 8.0
-caustics_max_depth = 35.4
-caustics_field_extent_m = 512.0
 caustics_texture = ExtResource("9_35bca")
+caustics_scale = 15.0
+caustics_strength = 1.44
+caustics_layer_a_speed_multiplier = 0.2999999999999998
+caustics_luma_gradient = ExtResource("10_4qkou")
+caustics_max_depth = 38.0
+caustics_resolution = 512
+caustics_field_extent_m = 512.0
 caustics_texture_scale = 0.01
+caustics_animation_speed = 1.0
 reflection_base_roughness = 0.08
 reflection_roughness_distance_m = Vector2(80, 300)
 reflection_sspr_resolution_scale = 0.4
@@ -253,14 +262,13 @@ transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0
 [node name="OceanSeaStateZone3D" type="Node3D" parent="." unique_id=1747485942]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 573.061, 24.53561, -593.7915)
 script = ExtResource("15_ody2a")
-enabled = false
 box_size_m = Vector2(519.99963, 672.10895)
 feather_distance_m = 96.865234
-long_amplitude_multiplier = 0.46
-mid_amplitude_multiplier = 0.86
-short_amplitude_multiplier = 0.0
+long_amplitude_multiplier = 0.3
+mid_amplitude_multiplier = 1.2
+short_amplitude_multiplier = 1.2
 choppiness_multiplier = 2.0
-foam_generation_multiplier = 0.0
+foam_generation_multiplier = 2.0
 metadata/_custom_type_script = "uid://didnedvqjuvg1"
 
 [node name="CoastalBakeAuthoring" type="Node" parent="." unique_id=1647447480 node_paths=PackedStringArray("source_root")]
