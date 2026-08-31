@@ -27,6 +27,10 @@ En Godot 4.7 abre y ejecuta `res://ocean_v3/tests/foam_visual_lab/foam_visual_la
 
 Los cuatro SubViewports usan la misma geometría generada determinísticamente (16 m × 16 m, 128 celdas por lado), el mismo transform, la misma cámara virtual, resolución interna, Environment, luz y coordenadas world-space. El controlador sincroniza los uniforms dinámicos del material de producción, incluido `coastal_time_s`, `camera_world_xz` y el estado de breakers/reflexiones, para que las diferencias observadas pertenezcan al candidato.
 
+En GRID, los cuatro candidatos permanecen en su `SubViewportContainer` original y renderizan continuamente. En FULLSCREEN A/B también siguen los cuatro en `UPDATE_ALWAYS`: el `TextureRect` de `FullscreenHost` muestra directamente el `ViewportTexture` ya existente del candidato elegido. Alternar `SPACE` o seleccionar `1`/`2`/`3` sólo cambia esa textura mostrada; no pausa ni reparenta ningún candidato.
+
+PERF es deliberadamente distinto: únicamente el candidato seleccionado usa `UPDATE_ALWAYS` y los otros tres quedan en `UPDATE_DISABLED`. Al volver de PERF a GRID o FULLSCREEN A/B, el Lab reactiva los cuatro y muestra `A/B RESYNC` durante `VISUAL_RESYNC_FRAMES` (30) frames no bloqueantes. Sólo cuando el HUD muestra `A/B READY` debe hacerse una comparación temporal estricta: así se da tiempo a que los historiales de exposición y postprocesado de los viewports que estuvieron pausados vuelvan a avanzar.
+
 La medición disponible en PERF es el tiempo de frame/FPS y los monitores CPU de Godot. No se inventa un GPU time: el proyecto marca explícitamente esa métrica como no disponible cuando el renderer no expone una lectura fiable.
 
 ## Autoridad de iluminación y exposición

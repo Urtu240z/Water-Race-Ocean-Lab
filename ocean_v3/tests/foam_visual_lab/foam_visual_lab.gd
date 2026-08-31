@@ -14,6 +14,9 @@ const CANDIDATE_SHADER_PATHS := [
 	"res://ocean_v3/tests/foam_visual_lab/shaders/ocean_surface_option_c.gdshader",
 ]
 const SIMULATION_SEED := 20260820
+## Number of visual frames required to let paused viewport histories catch up
+## after leaving PERF mode. This is intentionally non-blocking.
+const VISUAL_RESYNC_FRAMES := 30
 
 const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
 const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
@@ -22,6 +25,7 @@ const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_con
 @onready var _simulation_camera: Camera3D = $SimulationCamera
 @onready var _grid: GridContainer = $UI/Grid
 @onready var _fullscreen_host: Control = $UI/FullscreenHost
+@onready var _fullscreen_texture: TextureRect = $UI/FullscreenHost/FullscreenTexture
 @onready var _mode_label: Label = $UI/ModeLabel
 @onready var _time_label: Label = $UI/TimeLabel
 @onready var _help_label: Label = $UI/HelpLabel
@@ -31,8 +35,6 @@ var _clock: Node
 var _source_material: ShaderMaterial
 var _candidate_materials: Array[ShaderMaterial] = []
 var _candidate_viewports: Array[SubViewport] = []
-var _candidate_containers: Array[SubViewportContainer] = []
-var _pane_wrappers: Array[VBoxContainer] = []
 var _uniform_names: Array[StringName] = []
 var _test_mesh: ArrayMesh
 var _lab_ready := false
@@ -40,6 +42,7 @@ var _initializing := false
 var _mode := &"GRID"
 var _selected_candidate := 1
 var _fullscreen_baseline := true
+var _visual_resync_frames_remaining := 0
 
 
 func _ready() -> void:
@@ -62,6 +65,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _lab_ready:
 		_sync_candidate_materials()
+		_advance_visual_resync()
 	_update_hud()
 
 
@@ -79,6 +83,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_SPACE:
 			if _mode == &"FULLSCREEN":
 				_fullscreen_baseline = not _fullscreen_baseline
+				_refresh_fullscreen_texture()
 				_update_fullscreen_text()
 		KEY_0:
 			if _mode == &"PERF":
@@ -99,7 +104,7 @@ func _select_candidate(index: int) -> void:
 	if _mode == &"PERF":
 		_show_fullscreen(true)
 	elif _mode == &"FULLSCREEN":
-		_show_fullscreen(false)
+		_refresh_fullscreen_texture()
 	_update_fullscreen_text()
 
 
@@ -149,6 +154,7 @@ func _wait_for_shared_ocean() -> void:
 		return
 	_build_candidate_materials()
 	_build_candidate_viewports()
+	_refresh_fullscreen_texture()
 	_lab_ready = true
 	_initializing = false
 	_sync_candidate_materials()
@@ -183,8 +189,6 @@ func _build_candidate_materials() -> void:
 
 func _build_candidate_viewports() -> void:
 	_candidate_viewports.clear()
-	_candidate_containers.clear()
-	_pane_wrappers.clear()
 	for index in CANDIDATE_NAMES.size():
 		var wrapper := VBoxContainer.new()
 		wrapper.name = "Pane_%s" % CANDIDATE_NAMES[index].to_pascal_case()
@@ -198,8 +202,6 @@ func _build_candidate_viewports() -> void:
 		var container := _make_candidate_container(index)
 		wrapper.add_child(container)
 		_grid.add_child(wrapper)
-		_pane_wrappers.append(wrapper)
-		_candidate_containers.append(container)
 
 
 func _make_candidate_container(index: int) -> SubViewportContainer:
@@ -281,48 +283,63 @@ func _sync_candidate_materials() -> void:
 
 
 func _show_grid() -> void:
+	var leaving_perf := _mode == &"PERF"
 	_mode = &"GRID"
 	_fullscreen_host.visible = false
 	_grid.visible = true
-	for index in _candidate_containers.size():
-		_reparent_to_grid(index)
-		_candidate_viewports[index].render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_set_all_viewports_update_mode(SubViewport.UPDATE_ALWAYS)
+	if leaving_perf:
+		_begin_visual_resync()
 	_update_fullscreen_text()
 	_update_hud()
 
 
 func _show_fullscreen(perf_mode: bool) -> void:
+	var leaving_perf := _mode == &"PERF"
 	_mode = &"PERF" if perf_mode else &"FULLSCREEN"
 	_grid.visible = false
 	_fullscreen_host.visible = true
-	var active_index := _selected_candidate if perf_mode else (_selected_candidate if not _fullscreen_baseline else 0)
-	for index in _candidate_containers.size():
-		_candidate_viewports[index].render_target_update_mode = SubViewport.UPDATE_ALWAYS if index == active_index else SubViewport.UPDATE_DISABLED
-		if index == active_index:
-			_reparent_to_fullscreen(index)
-		else:
-			_reparent_to_grid(index)
+	if perf_mode:
+		_visual_resync_frames_remaining = 0
+		_set_performance_viewport(_selected_candidate)
+	else:
+		_set_all_viewports_update_mode(SubViewport.UPDATE_ALWAYS)
+		if leaving_perf:
+			_begin_visual_resync()
+	_refresh_fullscreen_texture()
 	_update_fullscreen_text()
 	_update_hud()
 
 
-func _reparent_to_fullscreen(index: int) -> void:
-	var container := _candidate_containers[index]
-	if container.get_parent() != _fullscreen_host:
-		if container.get_parent() != null:
-			container.get_parent().remove_child(container)
-		_fullscreen_host.add_child(container)
-	container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+func _set_all_viewports_update_mode(update_mode: SubViewport.UpdateMode) -> void:
+	for viewport in _candidate_viewports:
+		viewport.render_target_update_mode = update_mode
 
 
-func _reparent_to_grid(index: int) -> void:
-	var container := _candidate_containers[index]
-	var wrapper := _pane_wrappers[index]
-	if container.get_parent() != wrapper:
-		if container.get_parent() != null:
-			container.get_parent().remove_child(container)
-		wrapper.add_child(container)
-	container.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+func _set_performance_viewport(active_index: int) -> void:
+	for index in _candidate_viewports.size():
+		_candidate_viewports[index].render_target_update_mode = SubViewport.UPDATE_ALWAYS if index == active_index else SubViewport.UPDATE_DISABLED
+
+
+func _visible_candidate_index() -> int:
+	if _mode == &"FULLSCREEN" and _fullscreen_baseline:
+		return 0
+	return _selected_candidate
+
+
+func _refresh_fullscreen_texture() -> void:
+	if _candidate_viewports.is_empty():
+		return
+	_fullscreen_texture.texture = _candidate_viewports[_visible_candidate_index()].get_texture()
+
+
+func _begin_visual_resync() -> void:
+	_visual_resync_frames_remaining = VISUAL_RESYNC_FRAMES
+
+
+func _advance_visual_resync() -> void:
+	if _mode != &"PERF" and _visual_resync_frames_remaining > 0:
+		_visual_resync_frames_remaining -= 1
 
 
 func _update_fullscreen_text() -> void:
@@ -333,18 +350,24 @@ func _update_fullscreen_text() -> void:
 		_fullscreen_label.text = "PERF MODE — %s only | 0 BASELINE | 1/2/3 candidate | G grid" % CANDIDATE_NAMES[_selected_candidate]
 	else:
 		var shown := "BASELINE" if _fullscreen_baseline else String(CANDIDATE_NAMES[_selected_candidate])
-		_fullscreen_label.text = "FULLSCREEN A/B — %s | SPACE baseline/candidate | 1/2/3 select | P perf | G grid" % shown
+		var visual_state := "A/B READY" if _visual_resync_frames_remaining == 0 else "A/B RESYNC (%d)" % _visual_resync_frames_remaining
+		_fullscreen_label.text = "FULLSCREEN A/B — 4 VIEWPORTS ACTIVE — %s — %s | SPACE baseline/candidate | 1/2/3 select | P perf | G grid" % [visual_state, shown]
 
 
 func _update_hud() -> void:
 	var time_value := float(_clock.get_render_time()) if _clock != null else 0.0
 	var frozen: bool = _clock != null and _clock.is_paused()
-	var mode_text := "FOAM VISUAL LAB  |  %s" % _mode
+	var mode_text := "FOAM VISUAL LAB"
+	if _mode == &"GRID":
+		mode_text += "  |  GRID — 4 VIEWPORTS ACTIVE"
+	elif _mode == &"FULLSCREEN":
+		var visual_state := "A/B READY" if _visual_resync_frames_remaining == 0 else "A/B RESYNC (%d)" % _visual_resync_frames_remaining
+		mode_text += "  |  FULLSCREEN A/B — 4 VIEWPORTS ACTIVE — VISUAL ONLY — %s" % visual_state
 	if _mode == &"PERF":
 		var fps := Engine.get_frames_per_second()
 		var frame_ms := 1000.0 / float(fps) if fps > 0 else 0.0
 		var cpu_process_ms := float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0
-		mode_text += "  |  ACTIVE: %s  |  FPS: %d  |  FRAME: %.2f ms  |  CPU: %.2f ms  |  GPU: unavailable" % [CANDIDATE_NAMES[_selected_candidate], fps, frame_ms, cpu_process_ms]
+		mode_text += "  |  PERF — %s ONLY  |  FPS: %d  |  FRAME: %.2f ms  |  CPU: %.2f ms  |  GPU TIMING: unavailable" % [CANDIDATE_NAMES[_selected_candidate], fps, frame_ms, cpu_process_ms]
 	_mode_label.text = mode_text
 	_time_label.text = "TIME: %.3f s   %s" % [time_value, "FROZEN" if frozen else "PLAY"]
 	_help_label.text = "F5 freeze/play   F fullscreen A/B   SPACE toggle baseline/candidate   P perf   G grid   1/2/3 candidate   0 baseline perf"
