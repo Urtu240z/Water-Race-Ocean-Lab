@@ -7,6 +7,7 @@ const MeshBuilder := preload("res://ocean_v4/rendering/ocean_clipmap_mesh_builde
 const BASE_SHADER := preload("res://ocean_v4/rendering/shaders/ocean_surface_base.gdshader")
 const ReflectionConfig := preload("res://ocean_v4/reflections/reflection_phase_1_config_v4.gd")
 const CrestFoamConfig := preload("res://ocean_v4/foam/crest_foam_phase_1_config_v4.gd")
+const OpticsConfig := preload("res://ocean_v4/optics/optics_phase_1_config_v4.gd")
 
 @export var clipmap_config: OceanClipmapConfigV4 = Config.new()
 @export var base_color := Color(0.015, 0.07, 0.10)
@@ -15,6 +16,7 @@ const CrestFoamConfig := preload("res://ocean_v4/foam/crest_foam_phase_1_config_
 @export_enum("FULL", "LONG", "MID", "SHORT") var debug_band := 0
 @export var reflection_phase_1 = ReflectionConfig.new()
 @export var crest_foam_phase_1 = CrestFoamConfig.new()
+@export var optics_phase_1 = OpticsConfig.new()
 
 var _material := ShaderMaterial.new()
 var _levels: Array[MeshInstance3D] = []
@@ -33,6 +35,7 @@ func configure(configs: Array[OpenOceanFFTConfigV4], displacements: Array[Textur
 	_material.set_shader_parameter(&"base_specular", specular)
 	_bind_reflection_phase_1()
 	_bind_crest_foam_phase_1()
+	_bind_optics_phase_1()
 	_material.set_shader_parameter(&"short_fade_range_m", clipmap_config.short_fade_range_m)
 	_material.set_shader_parameter(&"mid_fade_range_m", clipmap_config.mid_fade_range_m)
 	_material.set_shader_parameter(&"long_fade_range_m", clipmap_config.long_fade_range_m)
@@ -101,6 +104,14 @@ func set_crest_foam_phase_1_mode(mode: int) -> void:
 	_bind_crest_foam_phase_1()
 
 
+func set_optics_phase_1_mode(mode: int) -> void:
+	if optics_phase_1 == null:
+		push_error("OceanV4 Optics Phase 1 configuration is missing.")
+		return
+	optics_phase_1.mode = clampi(mode, 0, 4)
+	_bind_optics_phase_1()
+
+
 func _bind_reflection_phase_1() -> void:
 	if reflection_phase_1 == null or not reflection_phase_1.is_valid():
 		push_error("OceanV4 Reflection Phase 1 configuration is invalid.")
@@ -129,6 +140,20 @@ func _bind_crest_foam_phase_1() -> void:
 	_material.set_shader_parameter(&"crest_foam_color", crest_foam_phase_1.color)
 	_material.set_shader_parameter(&"crest_foam_roughness", crest_foam_phase_1.roughness)
 	_material.set_shader_parameter(&"crest_foam_specular", crest_foam_phase_1.specular)
+
+
+func _bind_optics_phase_1() -> void:
+	if optics_phase_1 == null or not optics_phase_1.is_valid():
+		push_error("OceanV4 Optics Phase 1 configuration is invalid.")
+		return
+	_material.set_shader_parameter(&"optics_phase_1_mode", optics_phase_1.mode)
+	_material.set_shader_parameter(&"optics_absorption_rgb", optics_phase_1.absorption_rgb)
+	_material.set_shader_parameter(&"optics_shallow_color", optics_phase_1.shallow_color)
+	_material.set_shader_parameter(&"optics_deep_color", optics_phase_1.deep_color)
+	_material.set_shader_parameter(&"optics_depth_scale", optics_phase_1.depth_scale)
+	_material.set_shader_parameter(&"optics_max_depth_m", optics_phase_1.max_optical_depth_m)
+	_material.set_shader_parameter(&"optics_color_strength", optics_phase_1.color_strength)
+	_material.set_shader_parameter(&"optics_transmission_strength", optics_phase_1.transmission_strength)
 
 
 func _process(_delta: float) -> void:

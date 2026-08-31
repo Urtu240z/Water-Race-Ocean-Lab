@@ -57,12 +57,24 @@ uniform float crest_foam_strength : hint_range(0.0, 1.0) = 0.90;
 uniform vec3 crest_foam_color : source_color = vec3(0.84, 0.89, 0.88);
 uniform float crest_foam_roughness : hint_range(0.0, 1.0) = 0.78;
 uniform float crest_foam_specular : hint_range(0.0, 1.0) = 0.12;
+// Optics Phase 1 reuses the coastal metrics depth already needed by geometry.
+// 0 OFF, 1 absorption only, 2 ON, 3 depth debug, 4 transmittance debug.
+uniform int optics_phase_1_mode = 2;
+uniform vec3 optics_absorption_rgb = vec3(0.34, 0.12, 0.055);
+uniform vec3 optics_shallow_color : source_color = vec3(0.08, 0.30, 0.31);
+uniform vec3 optics_deep_color : source_color = vec3(0.008, 0.045, 0.095);
+uniform float optics_depth_scale : hint_range(0.01, 4.0) = 1.0;
+uniform float optics_max_depth_m : hint_range(1.0, 100.0) = 18.0;
+uniform float optics_color_strength : hint_range(0.0, 1.0) = 0.64;
+uniform float optics_transmission_strength : hint_range(0.0, 1.0) = 0.72;
 uniform int debug_band = 0;
 
 varying float reflection_distance_to_camera;
 varying float reflection_slope_magnitude;
 varying float crest_foam_raw_trigger;
 varying float crest_foam_mid_detail;
+varying float optics_coastal_depth_m;
+varying float optics_coastal_confidence;
 
 vec3 sample_displacement(sampler2D map, float domain_m, vec2 world_xz) {
 	return texture(map, fract(world_xz / domain_m + vec2(0.5))).xyz;
@@ -72,11 +84,13 @@ float field_inside(vec2 uv) {
 	return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
 }
 
-vec4 coastal_warp_state(vec2 world_xz) {
+vec4 coastal_warp_state(vec2 world_xz, out float field_confidence) {
+	field_confidence = 0.0;
 	if (!coastal_geometry_enabled) return vec4(world_xz, 0.0, 1.0);
 	vec2 coast_uv = (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
 	vec4 field = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	float render_confidence = field_inside(coast_uv) * clamp(field.a, 0.0, 1.0);
+	field_confidence = render_confidence;
 	vec2 warp_uv = (world_xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
 	vec4 warp = textureLod(coastal_warp_texture, clamp(warp_uv, vec2(0.0), vec2(1.0)), 0.0);
 	float warp_confidence = smoothstep(0.0, coastal_warp_detj_safe, warp.b) * warp.a * field_inside(warp_uv) * render_confidence;
@@ -117,12 +131,31 @@ vec2 shoreline_vertical_gradient(vec2 world_xz) {
 	return vec2(dx, (vp - vm) / (2.0 * step_m));
 }
 
-vec3 total_displacement(vec2 world_xz) {
+void shore_weights_with_depth(vec2 world_xz, out float vertical_weight,
+		out float horizontal_weight, out float depth_m) {
+	vertical_weight = 1.0;
+	horizontal_weight = 1.0;
+	depth_m = 0.0;
+	if (!coastal_geometry_enabled) return;
+	vec2 uv = (world_xz - coastal_origin_xz) / max(coastal_extent_m, vec2(0.0001));
+	float inside = field_inside(uv);
+	depth_m = max(textureLod(coastal_metrics_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0).r, 0.0);
+	float water = smoothstep(0.0, max(coastal_min_valid_depth_m, 0.001), depth_m);
+	float vertical = water * smoothstep(min(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y), max(shore_vertical_depth_range_m.x, shore_vertical_depth_range_m.y), depth_m);
+	float horizontal = water * smoothstep(min(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y), max(shore_horizontal_depth_range_m.x, shore_horizontal_depth_range_m.y), depth_m);
+	vertical_weight = mix(1.0, vertical, inside);
+	horizontal_weight = mix(1.0, horizontal, inside);
+}
+
+vec3 total_displacement(vec2 world_xz, out float vertical_weight,
+		out float horizontal_weight, out float coastal_depth_m,
+		out float coastal_confidence) {
 	float distance_to_camera = length(world_xz - camera_world_xz);
 	float long_weight = 1.0 - smoothstep(long_fade_range_m.x, long_fade_range_m.y, distance_to_camera);
 	float mid_weight = 1.0 - smoothstep(mid_fade_range_m.x, mid_fade_range_m.y, distance_to_camera);
 	float short_weight = 1.0 - smoothstep(short_fade_range_m.x, short_fade_range_m.y, distance_to_camera);
-	vec4 coastal = coastal_warp_state(world_xz);
+	float field_confidence;
+	vec4 coastal = coastal_warp_state(world_xz, field_confidence);
 	vec3 long_coastal_open = sample_displacement(displacement_long_coastal, domain_long_coastal_m, world_xz);
 	vec3 long_coastal_deep = sample_displacement(displacement_long_coastal, domain_long_coastal_m, coastal.xy);
 	vec3 long_coastal = mix(long_coastal_open, long_coastal_deep, coastal.z) * coastal.w;
@@ -134,9 +167,10 @@ vec3 total_displacement(vec2 world_xz) {
 	else if (debug_band == 2) displacement = mid;
 	else if (debug_band == 3) displacement = short_wave;
 	else displacement += mid + short_wave;
-	float vertical_weight;
-	float horizontal_weight;
-	shore_weights(world_xz, vertical_weight, horizontal_weight);
+	shore_weights_with_depth(world_xz, vertical_weight, horizontal_weight, coastal_depth_m);
+	// Optics follows the existing baked-field validity, not warp confidence: a
+	// valid shallow cell remains optically shallow when the warp is attenuated.
+	coastal_confidence = field_confidence;
 	displacement.xz *= horizontal_weight;
 	displacement.y *= vertical_weight;
 	return displacement;
@@ -145,12 +179,17 @@ vec3 total_displacement(vec2 world_xz) {
 void vertex() {
 	vec3 world_base = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec2 xz = world_base.xz;
-	vec3 displacement = total_displacement(xz);
+	float vertical_weight;
+	float horizontal_weight;
+	float coastal_depth_m;
+	float coastal_confidence;
+	vec3 displacement = total_displacement(xz, vertical_weight, horizontal_weight, coastal_depth_m, coastal_confidence);
 	float distance_to_camera = length(xz - camera_world_xz);
 	float long_weight = 1.0 - smoothstep(long_fade_range_m.x, long_fade_range_m.y, distance_to_camera);
 	float mid_weight = 1.0 - smoothstep(mid_fade_range_m.x, mid_fade_range_m.y, distance_to_camera);
 	float short_weight = 1.0 - smoothstep(short_fade_range_m.x, short_fade_range_m.y, distance_to_camera);
-	vec4 coastal = coastal_warp_state(xz);
+	float unused_field_confidence;
+	vec4 coastal = coastal_warp_state(xz, unused_field_confidence);
 	vec2 coastal_open_slope = slope_from_normal(textureLod(normal_long_coastal, fract(xz / domain_long_coastal_m + vec2(0.5)), 0.0).rgb);
 	vec2 coastal_deep_slope = slope_from_normal(textureLod(normal_long_coastal, fract(coastal.xy / domain_long_coastal_m + vec2(0.5)), 0.0).rgb);
 	vec2 warp_uv = (xz - coastal_warp_origin_xz) / max(coastal_warp_extent_m, vec2(0.0001));
@@ -167,9 +206,6 @@ void vertex() {
 	if (debug_band == 1) slope = long_slope;
 	else if (debug_band == 2) slope = mid_slope;
 	else if (debug_band == 3) slope = short_slope;
-	float vertical_weight;
-	float horizontal_weight;
-	shore_weights(xz, vertical_weight, horizontal_weight);
 	float pre_envelope_height = displacement.y / max(vertical_weight, 0.001);
 	slope = slope * vertical_weight + pre_envelope_height * shoreline_vertical_gradient(xz);
 	VERTEX += displacement;
@@ -192,6 +228,8 @@ void vertex() {
 		max(crest_foam_mid_detail_range.y, crest_foam_mid_detail_range.x + 0.001),
 		length(mid_slope)
 	);
+	optics_coastal_depth_m = coastal_depth_m;
+	optics_coastal_confidence = coastal_confidence;
 }
 
 void fragment() {
@@ -226,7 +264,34 @@ void fragment() {
 	float crest_foam = crest_foam_raw_trigger
 		* mix(1.0, crest_foam_mid_detail, crest_foam_mid_fragmentation)
 		* crest_distance_fade * crest_foam_strength;
-	if (crest_foam_mode == 2) {
+	if (optics_phase_1_mode > 0) {
+		float optical_depth = mix(
+			max(optics_max_depth_m, 0.001),
+			clamp(optics_coastal_depth_m, 0.0, max(optics_max_depth_m, 0.001)),
+			clamp(optics_coastal_confidence, 0.0, 1.0)
+		);
+		vec3 transmittance = exp(-optics_absorption_rgb * optical_depth * optics_depth_scale);
+		transmittance *= 1.0 - crest_foam;
+		float color_transmittance = clamp(dot(transmittance, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+		if (optics_phase_1_mode == 1) {
+			ALBEDO = mix(ALBEDO, optics_deep_color, optics_color_strength);
+		} else if (optics_phase_1_mode == 2) {
+			vec3 optical_color = mix(optics_deep_color, optics_shallow_color, color_transmittance);
+			ALBEDO = mix(ALBEDO, optical_color, optics_color_strength * optics_transmission_strength);
+		} else if (optics_phase_1_mode == 3) {
+			float depth_visual = optical_depth / max(optics_max_depth_m, 0.001);
+			ALBEDO = vec3(depth_visual);
+			EMISSION = vec3(depth_visual);
+			ROUGHNESS = 1.0;
+			SPECULAR = 0.0;
+		} else if (optics_phase_1_mode == 4) {
+			ALBEDO = transmittance;
+			EMISSION = transmittance;
+			ROUGHNESS = 1.0;
+			SPECULAR = 0.0;
+		}
+	}
+	if (crest_foam_mode == 2 && optics_phase_1_mode < 3) {
 		ALBEDO = mix(ALBEDO, crest_foam_color, crest_foam);
 		ROUGHNESS = mix(ROUGHNESS, crest_foam_roughness, crest_foam);
 		SPECULAR = mix(SPECULAR, crest_foam_specular, crest_foam);
