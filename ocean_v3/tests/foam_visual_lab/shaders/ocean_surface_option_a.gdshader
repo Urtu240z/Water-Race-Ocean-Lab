@@ -1348,23 +1348,11 @@ vec3 pixel_ocean_normal(vec2 world_xz) {
 // Production composition of the high-resolution persistent field. It mirrors
 // the established coastal/open/deep coordinate policy while MID/SHORT provide
 // a small non-saturating detail contribution.
-vec4 pixel_ocean_crest_foam(vec2 world_xz) {
+vec4 pixel_ocean_crest_foam(vec2 world_xz, float zone_foam_activity) {
 	float distance_to_camera = distance(world_xz, camera_world_xz);
 	float long_weight = band_mask.x * distance_fade(long_fade_range_m, distance_to_camera);
 	float mid_weight = band_mask.y * distance_fade(mid_fade_range_m, distance_to_camera);
 	float short_weight = band_mask.z * distance_fade(short_fade_range_m, distance_to_camera);
-	float zone_long_amplitude;
-	float zone_mid_amplitude;
-	float zone_short_amplitude;
-	float zone_choppiness;
-	vec2 zone_grad_long;
-	vec2 zone_grad_mid;
-	vec2 zone_grad_short;
-	vec2 zone_grad_chop;
-	float zone_foam_multiplier;
-	sea_state_zone_state(world_xz, zone_long_amplitude, zone_mid_amplitude,
-		zone_short_amplitude, zone_choppiness, zone_grad_long, zone_grad_mid,
-		zone_grad_short, zone_grad_chop, zone_foam_multiplier);
 
 	vec2 coast_uv = coastal_uv(world_xz);
 	vec4 field_data = textureLod(coastal_field_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
@@ -1387,10 +1375,6 @@ vec4 pixel_ocean_crest_foam(vec2 world_xz) {
 	vec2 remainder = textureLod(foam_long_remainder, spectrum_uv(world_xz, domain_long_remainder_m), 0.0).rg;
 	vec2 mid = textureLod(foam_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).rg;
 	vec2 short = textureLod(foam_short, spectrum_uv(world_xz, domain_short_m), 0.0).rg;
-	float zone_foam_activity = sea_state_zone_foam_activity(
-		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
-		zone_choppiness, zone_foam_multiplier);
-
 	vec2 long_base = clamp(coastal * coastal_weight + remainder * remainder_weight, 0.0, 1.0);
 	// MID and SHORT remain physical contributors, but their addition is
 	// complementary rather than linear so they cannot turn the whole field white.
@@ -2061,19 +2045,6 @@ void fragment() {
 	}
 	else {
 		vec3 color = lod_debug_index >= 0.0 ? level_color(lod_debug_index) : base_color;
-	vec4 hires_foam_composition = vec4(0.0);
-	if (perf_crest_foam_solver_enabled) {
-		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
-	}
-	vec2 surface_foam_world_xz = surface_foam_visual_xz();
-	vec2 raw_foam_channels = hires_foam_composition.xy;
-	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
-	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
-	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
-	vec2 surface_foam_field_unweighted = vec2(0.0);
-	if (perf_surface_foam_solver_enabled && perf_surface_foam_render_enabled) {
-		surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
-	}
 	float zone_long_amplitude;
 	float zone_mid_amplitude;
 	float zone_short_amplitude;
@@ -2089,6 +2060,26 @@ void fragment() {
 	float zone_foam_activity = sea_state_zone_foam_activity(
 		zone_long_amplitude, zone_mid_amplitude, zone_short_amplitude,
 		zone_choppiness, zone_foam_multiplier);
+	vec4 hires_foam_composition = vec4(0.0);
+	if (perf_crest_foam_solver_enabled) {
+		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz, zone_foam_activity);
+	}
+	vec2 surface_foam_world_xz = surface_foam_visual_xz();
+	vec2 raw_foam_channels = hires_foam_composition.xy;
+	float raw_residual = clamp(raw_foam_channels.r * foam_residual_strength, 0.0, 1.0);
+	float raw_fresh = clamp(raw_foam_channels.g * foam_fresh_strength, 0.0, 1.0);
+	float raw_foam = 1.0 - (1.0 - raw_residual) * (1.0 - raw_fresh);
+	vec2 surface_foam_field_unweighted = vec2(0.0);
+	// The temporal field only feeds the two Direct-J presentation paths below.
+	// Keep its debug view explicit, but do not build its stochastic lattice or
+	// issue its three field reads when no visible consumer can use the result.
+	bool surface_foam_field_needed = perf_surface_foam_solver_enabled
+		&& perf_surface_foam_render_enabled
+		&& (foam_debug_mode == 2
+			|| (foam_enabled && (surface_foam_enabled || crest_filigree_enabled)));
+	if (surface_foam_field_needed) {
+		surface_foam_field_unweighted = pixel_ocean_surface_foam_field_unweighted(surface_foam_world_xz);
+	}
 	// Debug reuses the production reflection context below. Surface Detail is
 	// intentionally excluded because it is visual distortion, not physical wave
 	// activity. Keeping only the scalar outputs here avoids a second FFT-normal

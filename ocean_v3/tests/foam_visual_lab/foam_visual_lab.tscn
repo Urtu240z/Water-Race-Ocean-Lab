@@ -1,42 +1,103 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene format=3 uid="uid://behoxj6cquild"]
 
-[ext_resource type="Script" path="res://ocean_v3/tests/foam_visual_lab/foam_visual_lab.gd" id="1_lab"]
-[ext_resource type="PackedScene" path="res://ocean_v3/ocean_v3.tscn" id="2_ocean"]
-[ext_resource type="Resource" path="res://ocean_v3/presets/waves/rough.tres" id="3_wave"]
+[ext_resource type="Script" uid="uid://dn0k3afe4kpul" path="res://ocean_v3/tests/foam_visual_lab/foam_visual_lab.gd" id="1_lab"]
+[ext_resource type="PackedScene" uid="uid://da7bkkbh7g742" path="res://ocean_v3/ocean_v3.tscn" id="2_ocean"]
+[ext_resource type="Resource" uid="uid://cgxhqijreoaiv" path="res://ocean_v3/presets/waves/rough.tres" id="3_wave"]
 [ext_resource type="Resource" path="res://ocean_v3/baked/coastal/paradise_island_phase_test/coastal_bake.tres" id="4_coastal"]
 
-[sub_resource type="Environment" id="Environment_lab"]
-background_mode = 1
-background_color = Color(0.015, 0.035, 0.06, 1)
-ambient_light_source = 3
-ambient_light_color = Color(0.25, 0.34, 0.45, 1)
-ambient_light_energy = 0.65
-reflected_light_source = 2
-tonemap_mode = 2
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_l5yxo"]
+load_path = "res://.godot/imported/kloofendal_48d_partly_cloudy_puresky_4k.hdr-bc8446ec431ba71a5d65dcd9d1e8fea4.bptc.ctex"
 
-[node name="FoamVisualLab" type="Node3D"]
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_ko7et"]
+panorama = SubResource("CompressedTexture2D_l5yxo")
+energy_multiplier = 3.0
+
+[sub_resource type="Sky" id="Sky_wicgi"]
+sky_material = SubResource("PanoramaSkyMaterial_ko7et")
+radiance_size = 4
+
+[sub_resource type="Environment" id="Environment_673x1"]
+background_mode = 2
+sky = SubResource("Sky_wicgi")
+ambient_light_source = 3
+ambient_light_sky_contribution = 0.15
+reflected_light_source = 2
+tonemap_mode = 4
+tonemap_exposure = 0.5
+tonemap_agx_white = 2.0
+tonemap_agx_contrast = 1.12
+ssao_enabled = true
+ssao_intensity = 4.0
+ssao_light_affect = 1.0
+ssil_enabled = true
+ssil_intensity = 3.5
+glow_enabled = true
+fog_enabled = true
+fog_mode = 1
+fog_light_color = Color(1, 1, 1, 1)
+fog_light_energy = 0.0
+fog_sun_scatter = 0.13
+fog_density = 1.0
+fog_aerial_perspective = 0.692
+fog_sky_affect = 0.464
+fog_depth_curve = 1.071768
+fog_depth_begin = 306.3
+fog_depth_end = 1945.9
+adjustment_enabled = true
+adjustment_contrast = 1.1
+adjustment_saturation = 0.8
+
+[sub_resource type="CameraAttributesPhysical" id="CameraAttributesPhysical_l5yxo"]
+auto_exposure_enabled = true
+auto_exposure_scale = 0.69
+exposure_aperture = 9.0
+exposure_shutter_speed = 500.0
+auto_exposure_min_exposure_value = -3.0
+
+[node name="FoamVisualLab" type="Node3D" unique_id=1575746052]
 script = ExtResource("1_lab")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_lab")
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=343271414]
+environment = SubResource("Environment_673x1")
+camera_attributes = SubResource("CameraAttributesPhysical_l5yxo")
 
-[node name="LabLight" type="DirectionalLight3D" parent="."]
-rotation_degrees = Vector3(-42, -28, 0)
-light_color = Color(1, 0.94, 0.84, 1)
-light_energy = 1.2
-shadow_enabled = false
+[node name="LabLight" type="DirectionalLight3D" parent="." unique_id=1546132304]
+transform = Transform3D(0.90630776, 0.22395359, -0.35840064, 0, 0.84804815, 0.5299193, 0.42261827, -0.48026997, 0.7685926, 0, 0, 0)
+light_temperature = 5800.0
+light_energy = 3.611
+light_angular_distance = 0.5
+shadow_enabled = true
+shadow_normal_bias = 1.0
+shadow_blur = 2.5
+directional_shadow_split_1 = 0.05
+directional_shadow_split_2 = 0.15
+directional_shadow_split_3 = 0.4
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 300.0
 
-[node name="SimulationCamera" type="Camera3D" parent="."]
+[node name="SimulationCamera" type="Camera3D" parent="." unique_id=722141498]
 current = true
 
-[node name="OceanV3" parent="." instance=ExtResource("2_ocean")]
+[node name="OceanV3" parent="." unique_id=357841423 instance=ExtResource("2_ocean")]
 visible = false
 wave_preset = ExtResource("3_wave")
+global_wind_speed_mps = 18.0
 coastal_bake_asset = ExtResource("4_coastal")
-coastal_enabled_on_start = true
+long_target_hs_m = 2.5
+long_choppiness = 2.0
+long_wind_direction = Vector2(1, 0.1)
+long_directional_spread = 5.0
+mid_target_hs_m = 0.6
+mid_choppiness = 1.25
+mid_wind_direction = Vector2(1, 0.38)
+mid_directional_spread = 3.5
+short_target_hs_m = 0.12
+short_choppiness = 0.4
+short_wind_direction = Vector2(1, 0.62)
+short_directional_spread = 3.0
 reflection_sspr_enabled = false
 
-[node name="UI" type="Control" parent="."]
+[node name="UI" type="Control" parent="." unique_id=1440297961]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -45,27 +106,27 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="ModeLabel" type="Label" parent="UI"]
+[node name="ModeLabel" type="Label" parent="UI" unique_id=183844141]
 layout_mode = 0
 offset_left = 24.0
 offset_top = 16.0
 offset_right = 600.0
 offset_bottom = 44.0
-theme_override_font_sizes/font_size = 20
 theme_override_colors/font_color = Color(0.85, 0.97, 1, 1)
+theme_override_font_sizes/font_size = 20
 text = "FOAM VISUAL LAB"
 
-[node name="TimeLabel" type="Label" parent="UI"]
+[node name="TimeLabel" type="Label" parent="UI" unique_id=515706762]
 layout_mode = 0
 offset_left = 24.0
 offset_top = 46.0
 offset_right = 600.0
 offset_bottom = 70.0
-theme_override_font_sizes/font_size = 16
 theme_override_colors/font_color = Color(0.75, 0.92, 1, 1)
+theme_override_font_sizes/font_size = 16
 text = "TIME: 0.000 s   PLAY"
 
-[node name="Grid" type="GridContainer" parent="UI"]
+[node name="Grid" type="GridContainer" parent="UI" unique_id=1400532150]
 layout_mode = 0
 offset_left = 24.0
 offset_top = 88.0
@@ -75,7 +136,7 @@ theme_override_constants/h_separation = 12
 theme_override_constants/v_separation = 8
 columns = 2
 
-[node name="FullscreenHost" type="Control" parent="UI"]
+[node name="FullscreenHost" type="Control" parent="UI" unique_id=1583952414]
 visible = false
 layout_mode = 1
 anchors_preset = 15
@@ -85,22 +146,21 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="FullscreenLabel" type="Label" parent="UI"]
+[node name="FullscreenLabel" type="Label" parent="UI" unique_id=996675978]
 layout_mode = 0
 offset_left = 24.0
 offset_top = 82.0
 offset_right = 1500.0
 offset_bottom = 108.0
-theme_override_font_sizes/font_size = 16
 theme_override_colors/font_color = Color(0.75, 0.92, 1, 1)
-text = ""
+theme_override_font_sizes/font_size = 16
 
-[node name="HelpLabel" type="Label" parent="UI"]
+[node name="HelpLabel" type="Label" parent="UI" unique_id=495952192]
 layout_mode = 0
 offset_left = 24.0
 offset_top = -48.0
 offset_right = 1800.0
 offset_bottom = -20.0
-theme_override_font_sizes/font_size = 14
 theme_override_colors/font_color = Color(0.65, 0.78, 0.85, 1)
+theme_override_font_sizes/font_size = 14
 text = "F5 freeze/play"
