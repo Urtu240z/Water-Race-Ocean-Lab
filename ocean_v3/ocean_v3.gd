@@ -533,17 +533,98 @@ var _performance_overlay_label: Label
 		shallow_fresnel_depth_end_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
 
-@export_group("Caustics P0/P1")
+@export_group("Caustics / Main")
 @export var caustics_enabled := false:
 	set(value):
 		caustics_enabled = value
 		_request_visual_sync()
 
-@export_range(0.0, 8.0, 0.01) var caustics_strength := 0.65:
+const REFERENCE_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/reference_assets/caustics-generator.png"
+const FALLBACK_REFERENCE_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/caustics-generator.png"
+const FALLBACK_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/caustics_filament_tile.png"
+const REFERENCE_CAUSTICS_LUMA_GRADIENT_PATH := "res://ocean_v3/rendering/caustics/reference_assets/luma_gradient.tres"
+const FALLBACK_CAUSTICS_LUMA_GRADIENT_PATH := "res://ocean_v3/rendering/caustics/luma_gradient.tres"
+
+@export var caustics_texture: Texture2D:
+	set(value):
+		caustics_texture = value
+		_request_visual_sync()
+
+## Larger values produce a visually larger pattern: tiling is 1.0 / scale.
+@export_range(0.05, 50.0, 0.01) var caustics_scale := 4.0:
+	set(value):
+		caustics_scale = clampf(value, 0.05, 50.0)
+		_request_visual_sync()
+
+@export_range(-5.0, 5.0, 0.001) var caustics_speed := 0.1:
+	set(value):
+		caustics_speed = clampf(value, -5.0, 5.0)
+		_request_visual_sync()
+
+@export_range(0.0, 8.0, 0.01) var caustics_strength := 1.0:
 	set(value):
 		caustics_strength = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 
+@export_range(0.25, 8.0, 0.01) var caustics_power := 2.0:
+	set(value):
+		caustics_power = clampf(value, 0.25, 8.0)
+		_request_visual_sync()
+
+@export_group("Caustics / Chromatic")
+@export_range(0.0, 0.02, 0.0001) var caustics_chroma_split := 0.002:
+	set(value):
+		caustics_chroma_split = clampf(value, 0.0, 0.02)
+		_request_visual_sync()
+
+@export_group("Caustics / Layers")
+@export_range(-4.0, 4.0, 0.01) var caustics_layer_a_speed_multiplier := 0.75:
+	set(value):
+		caustics_layer_a_speed_multiplier = clampf(value, -4.0, 4.0)
+		_request_visual_sync()
+
+@export_range(-4.0, 4.0, 0.01) var caustics_layer_b_speed_multiplier := 1.0:
+	set(value):
+		caustics_layer_b_speed_multiplier = clampf(value, -4.0, 4.0)
+		_request_visual_sync()
+
+@export_range(-4.0, 4.0, 0.01) var caustics_layer_a_scale_multiplier := 1.0:
+	set(value):
+		caustics_layer_a_scale_multiplier = clampf(value, -4.0, 4.0)
+		_request_visual_sync()
+
+@export_range(-4.0, 4.0, 0.01) var caustics_layer_b_scale_multiplier := -1.0:
+	set(value):
+		caustics_layer_b_scale_multiplier = clampf(value, -4.0, 4.0)
+		_request_visual_sync()
+
+@export var caustics_layer_a_direction := Vector2(1.0, 0.0):
+	set(value):
+		caustics_layer_a_direction = value
+		_request_visual_sync()
+
+@export var caustics_layer_b_direction := Vector2(1.0, 0.0):
+	set(value):
+		caustics_layer_b_direction = value
+		_request_visual_sync()
+
+@export_group("Caustics / Lighting")
+@export var caustics_luma_gradient: Texture2D:
+	set(value):
+		caustics_luma_gradient = value
+		_request_visual_sync()
+
+@export_range(-2.0, 2.0, 0.01) var caustics_luminance_mask_strength := 0.2:
+	set(value):
+		caustics_luminance_mask_strength = clampf(value, -2.0, 2.0)
+		_request_visual_sync()
+
+@export_range(0.0, 1.0, 0.01) var caustics_sun_strength := 1.0:
+	set(value):
+		caustics_sun_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_group("Caustics / Depth")
 @export_range(0.0, 20.0, 0.1) var caustics_fade_start_depth := 4.0:
 	set(value):
 		caustics_fade_start_depth = clampf(value, 0.0, 20.0)
@@ -554,46 +635,25 @@ var _performance_overlay_label: Label
 		caustics_max_depth = clampf(value, 0.1, 50.0)
 		_request_visual_sync()
 
-@export_enum("128:128", "256:256", "512:512") var caustics_resolution := 256:
-	set(value):
-		caustics_resolution = 128 if value <= 128 else 256 if value <= 256 else 512
-		_request_visual_sync()
+@export_group("Caustics / Spatial Fade")
+## Reserved until Ocean V3 has a coherent caustics receiver volume. Depth fade
+## is the active spatial constraint for the full-screen compositor pass.
+@export_range(0.0, 500.0, 0.1, "suffix: m") var caustics_fade_radius := 100.0
+@export_range(0.0, 1.0, 0.01) var caustics_fade_strength := 0.5
 
-@export_range(1.0, 60.0, 1.0, "suffix: Hz") var caustics_update_rate := 30.0:
-	set(value):
-		caustics_update_rate = clampf(value, 1.0, 60.0)
-		_request_visual_sync()
-
-@export_range(16.0, 512.0, 1.0, "suffix: m") var caustics_field_extent_m := 96.0:
-	set(value):
-		caustics_field_extent_m = clampf(value, 16.0, 512.0)
-		_request_visual_sync()
-
-const DEFAULT_CAUSTICS_TEXTURE_PATH := "res://ocean_v3/rendering/caustics/caustics_filament_tile.png"
-@export var caustics_texture: Texture2D:
-	set(value):
-		caustics_texture = value
-		_request_visual_sync()
-
-@export_range(0.01, 1.0, 0.005) var caustics_texture_scale := 0.105:
-	set(value):
-		caustics_texture_scale = clampf(value, 0.01, 1.0)
-		_request_visual_sync()
-
-@export_range(0.25, 4.0, 0.01) var caustics_power := 1.0:
-	set(value):
-		caustics_power = clampf(value, 0.25, 4.0)
-		_request_visual_sync()
-
-@export_range(0.0, 1.0, 0.01) var caustics_animation_speed := 0.12:
-	set(value):
-		caustics_animation_speed = clampf(value, 0.0, 1.0)
-		_request_visual_sync()
-
+@export_group("Caustics / Debug")
 @export_enum("CAUSTICS_OFF", "CAUSTICS_ON", "DEBUG_CAUSTICS_FINAL") var caustics_debug_mode := 0:
 	set(value):
 		caustics_debug_mode = clampi(value, 0, 2)
 		_request_visual_sync()
+
+## Legacy serialized properties only. They are intentionally hidden from the
+## Inspector and do not affect the projected compositor implementation.
+@export_storage var caustics_resolution := 256
+@export_storage var caustics_update_rate := 30.0
+@export_storage var caustics_field_extent_m := 96.0
+@export_storage var caustics_texture_scale := 0.105
+@export_storage var caustics_animation_speed := 0.12
 
 @export_enum("OFF", "WATER_THICKNESS", "TRANSMITTANCE_RGB", "WATER_BODY_COLOR", "REFRACTION_OFFSET", "REFRACTION_VALIDITY", "SCATTERING", "WATER_BODY_FINAL", "TRANSMISSION_DETAIL_FADE", "BODY_DEPTH_FACTOR", "TRANSMISSION_OPTICAL_DEPTH", "SHALLOW_SCATTERING_FACTOR", "SCATTERING_TINT_INFLUENCE", "SHALLOW_SCATTERING_FINAL", "LOCAL_WATER_DEPTH", "VIEW_WATER_PATH", "SHALLOW_DEEP_AUTHORITY", "RAW_BATHYMETRY_FRAGMENT", "BATHYMETRY_DOMAIN", "COASTAL_PROPAGATION_VALIDITY", "RAW_SCENE_DEPTH", "SCENE_DEPTH_CLASS", "RAW_WATER_FRAGMENT_DEPTH", "BATHYMETRY_COMPARE_VERTEX_FRAGMENT", "DEBUG_SENTINEL_MAGENTA", "DEBUG_SENTINEL_GREEN", "SEABED_MATCH", "BOTTOM_DEPTH_VISIBILITY", "BOTTOM_TRANSMISSION_WEIGHT", "SEABED_HEIGHT_ERROR", "ORIGINAL_SEABED_MATCH", "CANDIDATE_SEABED_MATCH", "EFFECTIVE_SEABED_MATCH", "EFFECTIVE_BOTTOM_TRANSMISSION_WEIGHT", "REAL_SEABED_COVERAGE_RAW", "OPTICAL_SEABED_CONFIDENCE", "OPTICAL_LOCAL_WATER_DEPTH", "OPEN_OCEAN_NO_SEABED_MASK", "REFRACTION_SLOPE", "REFRACTION_DEPTH_FACTOR", "REFRACTION_BACKGROUND_ONLY") var water_optics_debug_mode: int = 0:
 	set(value):
@@ -1242,9 +1302,14 @@ func _ready() -> void:
 		_caustics_manager.name = &"OceanCausticsManager"
 		add_child(_caustics_manager)
 		_caustics_manager.configure(self, _surface_sea_level(), caustics_enabled,
-			_active_caustics_texture(), caustics_texture_scale, caustics_strength,
-			caustics_power, caustics_fade_start_depth, caustics_max_depth,
-			_sun_direction_world, caustics_debug_mode)
+			_active_caustics_texture(), _active_caustics_luma_gradient(), caustics_scale,
+			caustics_speed, caustics_strength, caustics_power, caustics_chroma_split,
+			caustics_layer_a_speed_multiplier, caustics_layer_b_speed_multiplier,
+			caustics_layer_a_scale_multiplier, caustics_layer_b_scale_multiplier,
+			caustics_layer_a_direction, caustics_layer_b_direction,
+			caustics_luminance_mask_strength, caustics_sun_strength,
+			caustics_fade_start_depth, caustics_max_depth, _sun_direction_world,
+			caustics_debug_mode)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -2089,7 +2154,20 @@ func _flush_visual_sync() -> void:
 func _active_caustics_texture() -> Texture2D:
 	if caustics_texture != null:
 		return caustics_texture
-	return load(DEFAULT_CAUSTICS_TEXTURE_PATH) as Texture2D
+	for path in [REFERENCE_CAUSTICS_TEXTURE_PATH, FALLBACK_REFERENCE_CAUSTICS_TEXTURE_PATH,
+			FALLBACK_CAUSTICS_TEXTURE_PATH]:
+		if ResourceLoader.exists(path):
+			return load(path) as Texture2D
+	return null
+
+
+func _active_caustics_luma_gradient() -> Texture2D:
+	if caustics_luma_gradient != null:
+		return caustics_luma_gradient
+	for path in [REFERENCE_CAUSTICS_LUMA_GRADIENT_PATH, FALLBACK_CAUSTICS_LUMA_GRADIENT_PATH]:
+		if ResourceLoader.exists(path):
+			return load(path) as Texture2D
+	return null
 
 
 func _sync_caustics_manager() -> void:
@@ -2099,15 +2177,26 @@ func _sync_caustics_manager() -> void:
 		caustics_enabled,
 		_surface_sea_level(),
 		_active_caustics_texture(),
-		caustics_texture_scale,
+		_active_caustics_luma_gradient(),
+		caustics_scale,
+		caustics_speed,
 		caustics_strength,
 		caustics_power,
+		caustics_chroma_split,
+		caustics_layer_a_speed_multiplier,
+		caustics_layer_b_speed_multiplier,
+		caustics_layer_a_scale_multiplier,
+		caustics_layer_b_scale_multiplier,
+		caustics_layer_a_direction,
+		caustics_layer_b_direction,
+		caustics_luminance_mask_strength,
+		caustics_sun_strength,
 		caustics_fade_start_depth,
 		caustics_max_depth,
 		_sun_direction_world,
 		caustics_debug_mode
 	)
-	_caustics_manager.set_time(SimulationClock.get_render_time() * caustics_animation_speed)
+	_caustics_manager.set_time(SimulationClock.get_render_time())
 
 
 func _sync_water_visual_parameters() -> void:

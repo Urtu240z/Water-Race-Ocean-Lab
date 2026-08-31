@@ -1,21 +1,40 @@
 #[compute]
 #version 450
 
-// PRE_TRANSPARENT compositor pass. The resolved color image contains the
-// opaque scene; caustics are added in-place before Ocean V3's transparent water.
+// POST_SKY runs after opaque color/depth and sky resolve, before transparent
+// materials sample the background. Ocean V3 therefore sees this contribution
+// through its existing screen-texture refraction/transmission path.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D scene_depth;
 layout(set = 0, binding = 2) uniform sampler2D caustics_texture;
+layout(set = 0, binding = 3) uniform sampler2D luma_gradient;
 
-layout(push_constant, std430) uniform Params {
+layout(set = 0, binding = 4, std140) uniform Params {
 	mat4 inverse_view_projection;
 	vec4 viewport; // width, height, unused, unused
-	vec4 caustics; // sea level, texture scale, strength, power
+	vec4 caustics; // sea level, tiling (1 / scale), strength, power
+	vec4 lighting; // speed, chroma split, luminance-mask strength, sun strength
+	vec4 layer_a; // speed multiplier, scale multiplier, panner direction xy
+	vec4 layer_b; // speed multiplier, scale multiplier, panner direction xy
 	vec4 fade; // start depth, max depth, time, enabled/debug
 	vec4 sun; // surface -> sun direction, unused
 } params;
+
+
+vec3 sample_caustics(vec2 uv, float split) {
+	if (split <= 0.000001) {
+		float value = texture(caustics_texture, uv).r;
+		return vec3(value);
+	}
+	return vec3(
+		texture(caustics_texture, uv + vec2(split, split)).r,
+		texture(caustics_texture, uv + vec2(split, -split)).r,
+		texture(caustics_texture, uv + vec2(-split, -split)).r
+	);
+}
+
 
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -32,8 +51,8 @@ void main() {
 	if (!(raw_depth > 0.000001) || raw_depth > 1.000001) {
 		return;
 	}
-	vec2 uv = (vec2(pixel) + vec2(0.5)) / params.viewport.xy;
-	vec2 ndc = uv * 2.0 - 1.0;
+	vec2 screen_uv = (vec2(pixel) + vec2(0.5)) / params.viewport.xy;
+	vec2 ndc = screen_uv * 2.0 - 1.0;
 	vec4 world_position = params.inverse_view_projection * vec4(ndc, raw_depth, 1.0);
 	if (abs(world_position.w) <= 0.000001) {
 		return;
@@ -47,13 +66,19 @@ void main() {
 	if (water_depth <= 0.0) {
 		return;
 	}
-	float shallow = 1.0 - smoothstep(params.fade.x, max(params.fade.y, params.fade.x + 0.001), water_depth);
-	if (shallow <= 0.0001) {
+	float depth_mask = 1.0 - smoothstep(
+		params.fade.x,
+		max(params.fade.y, params.fade.x + 0.001),
+		water_depth
+	);
+	if (depth_mask <= 0.0001) {
 		return;
 	}
+
 	vec3 light = normalize(params.sun.xyz);
 	float sun_height = smoothstep(0.04, 0.45, light.y);
-	if (sun_height <= 0.0001) {
+	float sun_mask = mix(1.0, sun_height, params.lighting.w);
+	if (sun_mask <= 0.0001) {
 		return;
 	}
 	vec2 sun_axis = vec2(light.x, light.z);
@@ -66,17 +91,30 @@ void main() {
 	vec2 projected = vec2(
 		dot(world_position.xz, sun_tangent),
 		dot(world_position.xz, sun_axis)
-	) * max(params.caustics.y, 0.0001);
+	) * params.caustics.y;
+
 	float time = params.fade.z;
-	vec2 uv_a = fract(projected + vec2(time * 0.030, -time * 0.018));
-	vec2 uv_b = fract(projected * vec2(1.07, 0.93) + vec2(-time * 0.021, time * 0.026));
-	float sample_a = pow(max(texture(caustics_texture, uv_a).r, 0.0), max(params.caustics.w, 0.01));
-	float sample_b = pow(max(texture(caustics_texture, uv_b).r, 0.0), max(params.caustics.w, 0.01));
-	float caustic = min(sample_a, sample_b) * params.caustics.z * shallow * sun_height;
+	vec2 uv_a = fract(
+		projected * params.layer_a.y +
+		params.layer_a.zw * (time * params.lighting.x * params.layer_a.x)
+	);
+	vec2 uv_b = fract(
+		projected * params.layer_b.y +
+		params.layer_b.zw * (time * params.lighting.x * params.layer_b.x)
+	);
+	vec3 layer_a = pow(max(sample_caustics(uv_a, params.lighting.y), vec3(0.0)), vec3(max(params.caustics.w, 0.01)));
+	vec3 layer_b = pow(max(sample_caustics(uv_b, params.lighting.y), vec3(0.0)), vec3(max(params.caustics.w, 0.01)));
+	vec3 caustic = min(layer_a, layer_b) * params.caustics.z;
+
+	float luminance = dot(max(color.rgb, vec3(0.0)), vec3(0.299, 0.587, 0.114));
+	float gradient_luma = texture(luma_gradient, vec2(clamp(luminance, 0.0, 1.0), 0.5)).r;
+	float luminance_mask = mix(1.0, gradient_luma, params.lighting.z);
+	caustic *= depth_mask * sun_mask * luminance_mask;
+
 	if (params.fade.w > 1.5) {
-		color.rgb = vec3(caustic);
+		color.rgb = caustic;
 	} else {
-		color.rgb += vec3(caustic);
+		color.rgb += caustic;
 	}
 	imageStore(color_image, pixel, color);
 }
