@@ -19,29 +19,21 @@ or dispatching another IFFT.
 path remain the depth authority: a caustic is never invented when there is no
 valid real seabed coverage.
 
-## Field generation
+## Texture-driven field generation
 
-The P0 field is a 256 by 256 `RGBA16F` compute texture. In normal operation
-RGB contains the final focused-light value; during a diagnostic mode it contains
-the selected diagnostic visualization. At this resolution the persistent
-allocation is 512 KiB.
+The P0 field remains a 256 by 256 `RGBA16F` compute texture (512 KiB). It now
+stores only a low-frequency FFT activity modulation. The visible filament
+structure comes from one tileable, project-owned PNG texture sampled by the
+surface shader; the old Jacobian/focusing generator is gone.
 
-For each field texel, the compute shader combines slopes recovered from the
-already assembled normal maps, refracts the sun ray with a fixed air/water IOR
-approximation, and projects the ray to a configurable shallow receiver plane.
-It then forms the local Jacobian of that surface-to-landing map using two
-neighbouring samples. Compression is the inverse local landing area:
-
-```text
-compression = 1 / abs(det(d landing / d surface))
-focus = clamp(max(compression - (1 + threshold), 0) * focus_gain, 0, focus_clamp)
-```
-
-This replaces the original direction-divergence approximation, which could
-produce broad moving blobs because it did not measure where neighbouring rays
-actually landed. It remains a cheap focusing approximation, not photon mapping
-or a physically complete optical solution. LONG is conservative, MID holds the
-main structure and SHORT contributes limited detail.
+The receiver uses two samples of that tile, with different scale/sign and slow
+opposed panning, then combines them with `min()` as in the reference shader.
+LONG and MID slopes deform both UV layers; SHORT is limited to the cheap field
+activity and cannot turn the pattern into sparkle. The real sun direction
+selects the projection basis and attenuates the effect below the horizon.
+The current tile is an Ocean V3-owned PNG (`caustics_filament_tile.png`), so it
+does not inherit an undocumented third-party image license and can be replaced
+without touching the shader.
 
 The field follows a camera-centred 96 m square by default (0.375 m per texel at
 256). Its origin is snapped to one field texel in world coordinates, which
@@ -64,18 +56,23 @@ caustic = field.r * shallow * real_seabed_coverage * seabed_confidence
 The sample uses the reconstructed seabed world position, so it is a light
 contribution on the visible bottom rather than a camera-space overlay. Missing
 or invalid bathymetry produces zero. Defaults start the fade at 4 m and remove
-the effect at 6 m.
+the effect at 6 m. The finite activity field is only a soft modulation window;
+the filament texture itself is world-anchored and tileable, so no rectangle is
+visible and camera recentering does not move the pattern.
 
 ## Controls and diagnostics
 
 All controls live under `OceanV3 > Caustics P0/P1`: enable, strength, fade
-depths, 128/256/512 resolution, 1--60 Hz update rate, field extent, projection
-depth, focus gain, threshold, response power, focus clamp and the following
-debug views:
+depths, 128/256/512 resolution, 1--60 Hz update rate, field extent, texture,
+texture scale, FFT warp strength, animation speed and the following debug
+views:
 
-`CAUSTICS_OFF`, `CAUSTICS_ON`, `DEBUG_CAUSTICS_SHALLOW_MASK`,
-`DEBUG_CAUSTICS_RAY_DIR`, `DEBUG_CAUSTICS_LANDING`,
-`DEBUG_CAUSTICS_FOCUS`, `DEBUG_CAUSTICS_FINAL`.
+`CAUSTICS_OFF`, `CAUSTICS_ON`, `DEBUG_CAUSTICS_TEXTURE`,
+`DEBUG_CAUSTICS_FFT_WARP`, `DEBUG_CAUSTICS_SHALLOW_MASK`, `DEBUG_CAUSTICS_FINAL`.
+
+The texture and FFT-warp views are emitted before seabed colour and foam can
+hide them. Depth, real coverage and seabed confidence still gate production
+output; deep water remains zero.
 
 The default is disabled, preserving the previous Ocean V3 visual baseline.
 
@@ -93,16 +90,17 @@ the GPU or read textures back, so GPU milliseconds remain unavailable by
 design. The target is an observed cost near or below +0.20 ms; it is not a
 claim until a successful graphical run is recorded.
 
-### Recorded focusing run
+### Current paired run
 
-On 2026-08-31, after successful creation of the caustics compute shader, the
-paired test completed at 1920x1080, Forward+, D3D12, render scale 0.70, on the
-RTX 4070 Laptop GPU. Seven `FULL` / `NO_CAUSTICS` pairs measured a mean
-CPU-frame delta of `+0.0389 ms`, with `0.0787 ms` standard deviation and range
-`-0.1167..+0.1055 ms`. `FULL` averaged `4.3901 ms` (P95 `5.8416 ms`) and
-`NO_CAUSTICS` averaged `4.3512 ms` (P95 `5.8337 ms`). This is below the
-`+0.20 ms` CPU-frame target for that configuration; it is not a GPU-time claim
-because the benchmark intentionally performs no GPU synchronization or readback.
+On 2026-08-31, the texture-driven receiver completed seven `FULL` /
+`NO_CAUSTICS` pairs at 1920x1080, Forward+, D3D12, render scale 0.70, on an
+RTX 4070 Laptop GPU. `FULL` averaged `4.4327 ms` (P95 `5.9429 ms`, P99
+`6.0980 ms`) and `NO_CAUSTICS` averaged `4.3611 ms` (P95 `5.8700 ms`, P99
+`6.0136 ms`). The paired mean delta was `+0.0716 ms` (range
+`-0.0212..+0.1603 ms`), below the initial `+0.20 ms` budget. GPU milliseconds
+remain unavailable because the benchmark intentionally performs no GPU
+synchronization or readback. The benchmark could not write its optional
+`user://` CSV on this machine, but printed all aggregate statistics above.
 
 ## Current limitations and next checks
 
