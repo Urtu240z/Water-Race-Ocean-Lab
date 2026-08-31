@@ -25,3 +25,20 @@ func outer_width_for_level(level: int) -> float:
 
 func inner_width_for_level(level: int) -> float:
 	return 0.0 if level == 0 else outer_width_for_level(level - 1)
+
+
+## Odd half-grids (for example 126 cells => half=63) need a deterministic
+## lattice phase so each coarse inner edge lands exactly on the fine outer edge.
+func grid_phase_offset_cells(level: int) -> float:
+	var half := cells_per_side / 2
+	if half % 2 == 0 or level == 0:
+		return 0.0
+	return 1.0 - 1.0 / pow(2.0, float(level))
+
+
+func inner_cell_min() -> int:
+	return -ceili(float(cells_per_side / 2) * 0.5)
+
+
+func inner_cell_max() -> int:
+	return floori(float(cells_per_side / 2) * 0.5)
