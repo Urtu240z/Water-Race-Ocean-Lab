@@ -175,10 +175,14 @@ uniform float underwater_water_ior : hint_range(1.0, 2.0, 0.001) = 1.333;
 uniform float underwater_snell_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 uniform float underwater_tir_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 uniform float underwater_snell_wave_distortion : hint_range(0.0, 1.5, 0.01) = 1.0;
-uniform float underwater_snell_micro_refraction_strength : hint_range(0.0, 2.0, 0.01) = 0.35;
-uniform float underwater_snell_micro_refraction_max_px : hint_range(0.0, 8.0, 0.05) = 1.25;
+uniform float underwater_snell_detail_strength : hint_range(0.0, 2.0, 0.01) = 0.5;
+uniform float underwater_snell_detail_world_scale : hint_range(0.25, 4.0, 0.05) = 1.0;
+uniform float underwater_snell_detail_max_px : hint_range(0.0, 8.0, 0.05) = 2.5;
 uniform float underwater_snell_edge_softness : hint_range(0.0, 3.0, 0.05) = 1.0;
 uniform float underwater_snell_cone_angle_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
+uniform float underwater_snell_release_start_m : hint_range(0.0, 5.0, 0.05) = 1.5;
+uniform float underwater_snell_release_full_m : hint_range(0.0, 2.0, 0.05) = 0.20;
+uniform float underwater_surface_sea_level_y = 0.0;
 uniform int underwater_debug_mode = 0;
 uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
 uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
@@ -461,7 +465,6 @@ vec3 level_color(float level) {
 	if (lod == 9) return vec3(1.0, 1.0, 1.0);
 	return vec3(0.2);
 }
-
 float periodic_grid(vec2 world_xz, float domain_size_m) {
 	vec2 cell = abs(fract(world_xz / domain_size_m + 0.5) - 0.5);
 	return smoothstep(0.485, 0.5, max(cell.x, cell.y));
@@ -1807,6 +1810,7 @@ const float SNELL_EDGE_SCALE = 1.5;
 const float SNELL_MICRO_ANGLE_SCALE = 0.03;
 const float SNELL_MICRO_SOURCE_VIS_GAIN = 20.0;
 const float SNELL_MICRO_SAMPLE_DELTA_VIS_GAIN = 8.0;
+const float SNELL_TRANSMISSION_MAX_LOD = 2.0;
 const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
 const float WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR = 0.08;
 const float WATER_OPTICS_SHALLOW_PATH_MULTIPLIER = 1.5;
@@ -2369,6 +2373,7 @@ void fragment() {
 	float underwater_snell_tir = 0.0;
 	float underwater_snell_artistic_tir = 0.0;
 	float underwater_tir_visual_weight = 0.0;
+	float underwater_snell_release = 0.0;
 	vec3 underwater_snell_normal_world = vec3(0.0, 1.0, 0.0);
 	bool underwater_snell_active = underwater_camera_active && underwater_snell_enabled;
 	if (underwater_snell_active) {
@@ -2396,6 +2401,25 @@ void fragment() {
 			radians(clamp(underwater_snell_cone_angle_deg, 0.0, 90.0)),
 			physical_critical_angle
 		);
+		float camera_depth_m = max(
+			underwater_surface_sea_level_y - CAMERA_POSITION_WORLD.y,
+			0.0
+		);
+		float release_full_m = max(underwater_snell_release_full_m, 0.0);
+		float release_start_m = max(
+			underwater_snell_release_start_m,
+			release_full_m + WATER_OPTICS_EPSILON
+		);
+		underwater_snell_release = 1.0 - smoothstep(
+			release_full_m,
+			release_start_m,
+			camera_depth_m
+		);
+		effective_critical_angle = mix(
+			effective_critical_angle,
+			physical_critical_angle,
+			underwater_snell_release
+		);
 		float snell_cos_threshold = cos(effective_critical_angle);
 		underwater_snell_artistic_tir = underwater_snell_cos_i < snell_cos_threshold ? 1.0 : 0.0;
 		underwater_tir_visual_weight = underwater_snell_artistic_tir;
@@ -2411,6 +2435,9 @@ void fragment() {
 				snell_cos_threshold - underwater_snell_cos_i
 			);
 		}
+		// Release is an artistic production relaxation only. Raw k/TIR above are
+		// intentionally untouched; the compositor still owns camera-medium depth.
+		underwater_tir_visual_weight *= 1.0 - underwater_snell_release;
 	}
 	if (underwater_camera_active && underwater_debug_mode == 5) {
 		color = vec3(underwater_snell_cos_i);
@@ -2419,6 +2446,10 @@ void fragment() {
 		color = vec3(underwater_snell_k);
 	} else if (underwater_camera_active && underwater_debug_mode == 7) {
 		color = vec3(underwater_snell_tir);
+	} else if (underwater_camera_active && underwater_debug_mode == 11) {
+		color = vec3(underwater_snell_release);
+	} else if (underwater_camera_active && underwater_debug_mode == 12) {
+		color = vec3(underwater_tir_visual_weight);
 	}
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
 	if (underwater_snell_active) {
@@ -2824,7 +2855,7 @@ void fragment() {
 		color = vec3(sspr_facet_confidence);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || (underwater_camera_active && underwater_debug_mode >= 5 && underwater_debug_mode <= 7);
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || (underwater_camera_active && ((underwater_debug_mode >= 5 && underwater_debug_mode <= 7) || (underwater_debug_mode >= 11 && underwater_debug_mode <= 12)));
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -2935,13 +2966,20 @@ void fragment() {
 			} else if (scene_depth_valid) {
 				scene_depth_class_color = vec3(0.0, 1.0, 0.0);
 			}
-			// Keep physical water distance separate from the bounded value used by
-			// stability-sensitive R2 and artistic saturation controls. For the sky or
-			// an invalid depth sample, active_maximum_optical_depth remains the conservative
-			// finite fallback because no scene bottom distance is available.
-			// VIEW-RAY OPTICAL PATH: this is camera-dependent water distance, not
-			// bathymetric depth. It remains the authority for transmission and optics.
-			float view_water_path_m = scene_is_sky
+			// VIEW-RAY OPTICAL PATH: underwater Snell surface fragments use the
+			// actual displaced camera-to-surface distance. It is independent of
+			// seabed/bathymetry and remains valid over open ocean and coastal water.
+			float underwater_camera_to_surface_path_m = distance(
+				CAMERA_POSITION_WORLD,
+				ocean_world_position
+			);
+			if (isnan(underwater_camera_to_surface_path_m)
+					|| isinf(underwater_camera_to_surface_path_m)) {
+				underwater_camera_to_surface_path_m = 0.0;
+			}
+			float view_water_path_m = underwater_snell_active
+				? underwater_camera_to_surface_path_m
+				: scene_is_sky
 				? active_maximum_optical_depth
 				: scene_depth_valid && water_depth_valid
 				? max(scene_linear_depth - water_linear_depth, 0.0)
@@ -3019,6 +3057,12 @@ void fragment() {
 				0.0,
 				active_maximum_optical_depth
 			);
+			// POST_TRANSPARENT underwater_medium.glsl applies the camera-to-surface
+			// Beer-Lambert/scattering pass to the composed framebuffer. Do not apply
+			// that same segment a second time in the surface shader.
+			if (underwater_snell_active) {
+				transmission_optical_depth_m = 0.0;
+			}
 			// BathymetryData is baked as sea_level_y - top_surface_y. Use that
 			// same sea-level convention, not the instantaneous FFT crest height.
 			float expected_seabed_y = coastal_bathymetry_sea_level_y
@@ -3090,17 +3134,20 @@ void fragment() {
 			// suppress recognizable deep-bottom geometry while retaining broad color.
 			// The turbidity contribution is depth-gated by the same optical authority
 			// so very shallow water stays near LOD 0 at long viewing distances.
+			float transmission_lod_depth_m = underwater_snell_active
+				? bounded_view_water_path_m
+				: transmission_optical_depth_m;
 			float transmission_detail_fade = smoothstep(
 				transmission_detail_fade_start_m,
 				max(transmission_detail_fade_end_m, transmission_detail_fade_start_m + 0.001),
-				transmission_optical_depth_m
+				transmission_lod_depth_m
 			);
 			float turbidity_factor = smoothstep(
 				0.0,
 				1.0,
 				clamp(water_turbidity * 0.75, 0.0, 1.0)
 			);
-			float turbidity_depth_gate = smoothstep(2.0, 10.0, transmission_optical_depth_m);
+			float turbidity_depth_gate = smoothstep(2.0, 10.0, transmission_lod_depth_m);
 			float turbidity_detail_fade = turbidity_factor * turbidity_depth_gate;
 			float transmission_blur_factor = clamp(
 				mix(
@@ -3414,6 +3461,31 @@ void fragment() {
 						}
 					}
 				}
+				// A sky sample has no depth candidate, but the underwater Snell ray is
+				// still a valid transmitted direction. Project a far point along that
+				// ray instead of falling back to SCREEN_UV plus a tiny detail offset.
+				if (underwater_snell_active && refraction_direction_valid && scene_is_sky) {
+					refracted_direction_view = normalize(refracted_direction_view);
+					float sky_projection_distance_m = max(
+						active_maximum_optical_depth * 4.0,
+						1000.0
+					);
+					vec3 sky_position_view = water_position_view
+						+ refracted_direction_view * sky_projection_distance_m;
+					bool sky_projection_valid;
+					vec2 sky_refracted_uv = water_optics_project_view_position(
+						sky_position_view,
+						projection_matrix,
+						sky_projection_valid
+					);
+					if (sky_projection_valid) {
+						float sky_edge_confidence = water_optics_edge_confidence(sky_refracted_uv);
+						candidate_refracted_uv = sky_refracted_uv;
+						refraction_final_offset_px = (sky_refracted_uv - SCREEN_UV)
+							* refraction_screen_size * sky_edge_confidence;
+						refraction_validity = sky_edge_confidence;
+					}
+				}
 				// SHORT slope is deliberately introduced only after physical
 				// Snell/TIR classification. It perturbs transmitted sampling by a
 				// bounded pixel amount and also works when the background is sky, where
@@ -3432,9 +3504,24 @@ void fragment() {
 							&& length(surface_detail_offset_view) > WATER_OPTICS_EPSILON) {
 						micro_slope = vec2(surface_detail_offset_view.x, -surface_detail_offset_view.z);
 					}
+					if (surface_detail_enabled && perf_benchmark_surface_detail_enabled
+							&& abs(underwater_snell_detail_world_scale - 1.0) > 0.001) {
+						vec3 snell_detail_normal = sample_surface_detail(
+							surface_detail_carrier_xz() / max(underwater_snell_detail_world_scale, 0.01),
+							camera_distance
+						);
+						vec2 snell_detail_slope = snell_detail_normal.xy
+							/ max(snell_detail_normal.z, 0.08);
+						vec3 snell_detail_offset_view = mat3(VIEW_MATRIX) * vec3(
+							snell_detail_slope.x,
+							0.0,
+							snell_detail_slope.y
+						);
+						micro_slope = vec2(snell_detail_offset_view.x, -snell_detail_offset_view.z);
+					}
 					snell_micro_source_slope = micro_slope;
-					if (underwater_snell_micro_refraction_strength > 0.0
-							&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
+					if (underwater_snell_detail_strength > 0.0
+							&& underwater_snell_detail_max_px > WATER_OPTICS_EPSILON) {
 						// A small normal slope is an angular perturbation. Convert that angle
 						// to pixels using the active projection focal length, then clamp in
 						// pixel space. No fixed viewport-shaped mask or arbitrary gain is used.
@@ -3444,10 +3531,10 @@ void fragment() {
 						);
 						snell_micro_offset_px = micro_slope * focal_pixels
 						* SNELL_MICRO_ANGLE_SCALE
-						* underwater_snell_micro_refraction_strength;
+						* underwater_snell_detail_strength;
 						float micro_offset_length_px = length(snell_micro_offset_px);
-						if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
-							snell_micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
+						if (micro_offset_length_px > underwater_snell_detail_max_px) {
+							snell_micro_offset_px *= underwater_snell_detail_max_px / micro_offset_length_px;
 						}
 					}
 				}
@@ -3479,7 +3566,9 @@ void fragment() {
 				vec3 refracted_scene = textureLod(
 					screen_texture,
 					final_refracted_uv,
-					transmission_lod
+					underwater_snell_active
+						? min(transmission_lod, SNELL_TRANSMISSION_MAX_LOD)
+						: transmission_lod
 				).rgb;
 				float bottom_luma = dot(
 					max(refracted_scene, vec3(0.0)),
@@ -3737,7 +3826,7 @@ void fragment() {
 				} else if (underwater_debug_mode == 9) {
 					// Final displacement: RG is signed direction, B is magnitude
 					// relative to max_px. Strength 0 is exactly zero displacement.
-					float max_micro_px = max(underwater_snell_micro_refraction_max_px, WATER_OPTICS_EPSILON);
+					float max_micro_px = max(underwater_snell_detail_max_px, WATER_OPTICS_EPSILON);
 					vec2 normalized_offset = clamp(snell_micro_offset_px / max_micro_px, -1.0, 1.0);
 					diagnostic_color = vec3(
 						normalized_offset * 0.5 + 0.5,

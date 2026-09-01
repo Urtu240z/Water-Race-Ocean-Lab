@@ -389,9 +389,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 10)
+		underwater_debug_mode = clampi(value, 0, 12)
 		_request_visual_sync()
 
 @export_group("Underwater / Snell-TIR")
@@ -417,14 +417,30 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_snell_wave_distortion = clampf(value, 0.0, 1.5)
 		_request_visual_sync()
-@export_range(0.0, 2.0, 0.01) var underwater_snell_micro_refraction_strength := 0.35:
+@export_range(0.0, 2.0, 0.01) var underwater_snell_detail_strength := 0.5:
 	set(value):
-		underwater_snell_micro_refraction_strength = clampf(value, 0.0, 2.0)
+		underwater_snell_detail_strength = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
-@export_range(0.0, 8.0, 0.05, "suffix:px") var underwater_snell_micro_refraction_max_px := 1.25:
+@export_range(0.25, 4.0, 0.05, "suffix:x") var underwater_snell_detail_world_scale := 1.0:
 	set(value):
-		underwater_snell_micro_refraction_max_px = clampf(value, 0.0, 8.0)
+		underwater_snell_detail_world_scale = clampf(value, 0.25, 4.0)
 		_request_visual_sync()
+@export_range(0.0, 8.0, 0.05, "suffix:px") var underwater_snell_detail_max_px := 2.5:
+	set(value):
+		underwater_snell_detail_max_px = clampf(value, 0.0, 8.0)
+		_request_visual_sync()
+# Compatibility aliases for scenes/scripts written before the detail controls
+# were renamed. They are serialized but intentionally hidden from the Inspector.
+@export_storage var underwater_snell_micro_refraction_strength: float:
+	get:
+		return underwater_snell_detail_strength
+	set(value):
+		underwater_snell_detail_strength = value
+@export_storage var underwater_snell_micro_refraction_max_px: float:
+	get:
+		return underwater_snell_detail_max_px
+	set(value):
+		underwater_snell_detail_max_px = value
 @export_range(0.0, 3.0, 0.05) var underwater_snell_edge_softness := 1.0:
 	set(value):
 		underwater_snell_edge_softness = clampf(value, 0.0, 3.0)
@@ -432,6 +448,14 @@ var _performance_overlay_label: Label
 @export_range(0.0, 90.0, 0.25, "suffix:°") var underwater_snell_cone_angle_deg := 48.75:
 	set(value):
 		underwater_snell_cone_angle_deg = clampf(value, 0.0, 90.0)
+		_request_visual_sync()
+@export_range(0.0, 5.0, 0.05, "suffix:m") var underwater_snell_release_start_m := 1.5:
+	set(value):
+		underwater_snell_release_start_m = clampf(value, 0.0, 5.0)
+		_request_visual_sync()
+@export_range(0.0, 2.0, 0.05, "suffix:m") var underwater_snell_release_full_m := 0.20:
+	set(value):
+		underwater_snell_release_full_m = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
 @export_group("Water Optics / View Depth")
@@ -1375,10 +1399,14 @@ var _underwater_surface_water_ior := 1.333
 var _underwater_surface_snell_strength := 1.0
 var _underwater_surface_tir_strength := 1.0
 var _underwater_surface_snell_wave_distortion := 1.0
-var _underwater_surface_snell_micro_refraction_strength := 0.35
-var _underwater_surface_snell_micro_refraction_max_px := 1.25
+var _underwater_surface_snell_detail_strength := 0.5
+var _underwater_surface_snell_detail_world_scale := 1.0
+var _underwater_surface_snell_detail_max_px := 2.5
 var _underwater_surface_snell_edge_softness := 1.0
 var _underwater_surface_snell_cone_angle_deg := 48.75
+var _underwater_surface_snell_release_start_m := 1.5
+var _underwater_surface_snell_release_full_m := 0.20
+var _underwater_surface_sea_level_y := 0.0
 var _underwater_surface_debug_mode := -1
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
@@ -1499,10 +1527,14 @@ func _sync_underwater_manager() -> void:
 			or not is_equal_approx(_underwater_surface_snell_strength, underwater_snell_strength) \
 			or not is_equal_approx(_underwater_surface_tir_strength, underwater_tir_strength) \
 			or not is_equal_approx(_underwater_surface_snell_wave_distortion, underwater_snell_wave_distortion) \
-			or not is_equal_approx(_underwater_surface_snell_micro_refraction_strength, underwater_snell_micro_refraction_strength) \
-			or not is_equal_approx(_underwater_surface_snell_micro_refraction_max_px, underwater_snell_micro_refraction_max_px) \
+			or not is_equal_approx(_underwater_surface_snell_detail_strength, underwater_snell_detail_strength) \
+			or not is_equal_approx(_underwater_surface_snell_detail_world_scale, underwater_snell_detail_world_scale) \
+			or not is_equal_approx(_underwater_surface_snell_detail_max_px, underwater_snell_detail_max_px) \
 			or not is_equal_approx(_underwater_surface_snell_edge_softness, underwater_snell_edge_softness) \
 			or not is_equal_approx(_underwater_surface_snell_cone_angle_deg, underwater_snell_cone_angle_deg) \
+			or not is_equal_approx(_underwater_surface_snell_release_start_m, underwater_snell_release_start_m) \
+			or not is_equal_approx(_underwater_surface_snell_release_full_m, underwater_snell_release_full_m) \
+			or not is_equal_approx(_underwater_surface_sea_level_y, _surface_sea_level()) \
 			or _underwater_surface_debug_mode != underwater_debug_mode
 		if not surface_state_changed:
 			return
@@ -1514,10 +1546,14 @@ func _sync_underwater_manager() -> void:
 		surface_material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)
 		surface_material.set_shader_parameter(&"underwater_tir_strength", underwater_tir_strength)
 		surface_material.set_shader_parameter(&"underwater_snell_wave_distortion", underwater_snell_wave_distortion)
-		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_strength", underwater_snell_micro_refraction_strength)
-		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_max_px", underwater_snell_micro_refraction_max_px)
+		surface_material.set_shader_parameter(&"underwater_snell_detail_strength", underwater_snell_detail_strength)
+		surface_material.set_shader_parameter(&"underwater_snell_detail_world_scale", underwater_snell_detail_world_scale)
+		surface_material.set_shader_parameter(&"underwater_snell_detail_max_px", underwater_snell_detail_max_px)
 		surface_material.set_shader_parameter(&"underwater_snell_edge_softness", underwater_snell_edge_softness)
 		surface_material.set_shader_parameter(&"underwater_snell_cone_angle_deg", underwater_snell_cone_angle_deg)
+		surface_material.set_shader_parameter(&"underwater_snell_release_start_m", underwater_snell_release_start_m)
+		surface_material.set_shader_parameter(&"underwater_snell_release_full_m", underwater_snell_release_full_m)
+		surface_material.set_shader_parameter(&"underwater_surface_sea_level_y", _surface_sea_level())
 		surface_material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
 		_underwater_surface_state_initialized = true
 		_underwater_surface_camera_active = _camera_underwater
@@ -1526,10 +1562,14 @@ func _sync_underwater_manager() -> void:
 		_underwater_surface_snell_strength = underwater_snell_strength
 		_underwater_surface_tir_strength = underwater_tir_strength
 		_underwater_surface_snell_wave_distortion = underwater_snell_wave_distortion
-		_underwater_surface_snell_micro_refraction_strength = underwater_snell_micro_refraction_strength
-		_underwater_surface_snell_micro_refraction_max_px = underwater_snell_micro_refraction_max_px
+		_underwater_surface_snell_detail_strength = underwater_snell_detail_strength
+		_underwater_surface_snell_detail_world_scale = underwater_snell_detail_world_scale
+		_underwater_surface_snell_detail_max_px = underwater_snell_detail_max_px
 		_underwater_surface_snell_edge_softness = underwater_snell_edge_softness
 		_underwater_surface_snell_cone_angle_deg = underwater_snell_cone_angle_deg
+		_underwater_surface_snell_release_start_m = underwater_snell_release_start_m
+		_underwater_surface_snell_release_full_m = underwater_snell_release_full_m
+		_underwater_surface_sea_level_y = _surface_sea_level()
 		_underwater_surface_debug_mode = underwater_debug_mode
 
 func set_water_lens_jetski_velocity(velocity: Vector3) -> void:

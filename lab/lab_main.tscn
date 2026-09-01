@@ -147,6 +147,16 @@ trough_tint = Color(0.005060052, 0.04589343, 0.02705579, 1)
 crest_tint = Color(0.022200117, 0.15144762, 0.1125462, 1)
 underwater_absorption_scale = 0.43
 underwater_scattering_color = Color(0.0024315654, 0.09275196, 0.13127226, 1)
+underwater_snell_wave_distortion = 0.81
+underwater_snell_detail_strength = null
+underwater_snell_detail_world_scale = null
+underwater_snell_detail_max_px = null
+underwater_snell_micro_refraction_strength = null
+underwater_snell_micro_refraction_max_px = null
+underwater_snell_edge_softness = 3.0
+underwater_snell_cone_angle_deg = 37.0
+underwater_snell_release_start_m = null
+underwater_snell_release_full_m = null
 water_body_depth_start_m = 0.7
 water_body_depth_end_m = 26.0
 opacity_distance_end = 1000.0
@@ -217,6 +227,22 @@ clipmap_config = SubResource("Resource_ody2a")
 
 [node name="OceanUnderwaterParticles" parent="OceanV3Mount/OceanV3" index="2"]
 top_level = true
+underwater_particles_fine_strength = 8.0
+underwater_particles_near_strength = 8.0
+underwater_particles_drift_speed = 0.25
+underwater_particles_velocity_influence = 0.5
+underwater_particles_far_distance_m = 24.0
+underwater_particles_spawn_near_distance_m = null
+underwater_particles_spawn_far_distance_m = null
+underwater_particles_spawn_near_width_m = null
+underwater_particles_spawn_far_width_m = null
+underwater_particles_spawn_near_height_m = null
+underwater_particles_spawn_far_height_m = null
+underwater_particles_cull_distance_m = null
+underwater_particles_fine_color = Color(1, 1, 1, 1)
+underwater_particles_near_color = Color(1, 1, 1, 1)
+underwater_particles_fine_size_scale = 2.65
+underwater_particles_near_size_scale = 2.5
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
