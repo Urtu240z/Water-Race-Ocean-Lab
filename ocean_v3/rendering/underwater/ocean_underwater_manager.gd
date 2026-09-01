@@ -19,20 +19,35 @@ func set_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
 	_push_settings()
 
+func reset_dispatch_count() -> void:
+	if _effect != null:
+		_effect.reset_dispatch_count()
+
+func get_dispatch_count() -> int:
+	return _effect.get_dispatch_count() if _effect != null else 0
+
 func _ready() -> void:
 	if not Engine.is_editor_hint(): call_deferred(&"_initialize")
 
 func _push_settings() -> void:
 	if _effect == null: return
+	var enabled := bool(_settings.get("enabled", true))
+	var camera_underwater := bool(_settings.get("camera_underwater", false))
+	var debug_mode := int(_settings.get("debug_mode", 0))
+	# Keep the effect attached for its whole lifetime, but use the inherited
+	# CompositorEffect gate so ordinary AIR frames never enter the resolver or
+	# allocate/dispatch a compute list. CAMERA_STATE is the one intentional AIR
+	# diagnostic exception.
+	_effect.enabled = enabled and (camera_underwater or debug_mode == 4)
 	var absorption: Vector3 = _settings.get("absorption", Vector3(0.35, 0.14, 0.10))
 	var scattering_color: Color = _settings.get("scattering_color", Color(0.02, 0.32, 0.42, 1.0))
 	_effect.set_settings(
-		bool(_settings.get("enabled", true)), float(_settings.get("sea_level", 0.0)),
-		bool(_settings.get("camera_underwater", false)), float(_settings.get("camera_factor", 0.0)),
+		enabled, float(_settings.get("sea_level", 0.0)),
+		camera_underwater, float(_settings.get("camera_factor", 0.0)),
 		float(_settings.get("transition_width", 0.12)), absorption,
 		float(_settings.get("absorption_scale", 1.0)), scattering_color,
 		float(_settings.get("scattering_strength", 1.0)), float(_settings.get("scattering_density", 0.15)),
-		float(_settings.get("max_distance", 120.0)), int(_settings.get("debug_mode", 0)))
+		float(_settings.get("max_distance", 120.0)), debug_mode)
 
 func _initialize() -> void:
 	if _attached or Engine.is_editor_hint() or not is_inside_tree(): return

@@ -9,6 +9,7 @@
 [ext_resource type="Texture2D" uid="uid://c47l61keywwhk" path="res://ocean_v3/rendering/surface_detail/surface_foam_micro_detail.png" id="7_foam_micro"]
 [ext_resource type="Resource" uid="uid://dbga6yq23o0gy" path="res://ocean_v3/presets/waves/race.tres" id="8_race"]
 [ext_resource type="Script" uid="uid://cqg3ydt8w2tnp" path="res://ocean_v3/rendering/ocean_clipmap_config.gd" id="9_6m6ii"]
+[ext_resource type="Script" uid="uid://b6ng8kk0tyn71" path="res://ocean_v3/rendering/underwater/water_lens_fx.gd" id="10_lens"]
 
 [sub_resource type="Resource" id="Resource_w8h77"]
 script = ExtResource("9_6m6ii")
@@ -23,6 +24,9 @@ surface_foam_micro_detail = ExtResource("7_foam_micro")
 
 [node name="OpenOceanFFT" type="Node3D" parent="." unique_id=396589776]
 script = ExtResource("1_fft")
+
+[node name="WaterLensFX" type="Node" parent="."]
+script = ExtResource("10_lens")
 
 [node name="OceanClipmapSurface" type="Node3D" parent="OpenOceanFFT" unique_id=140669600]
 script = ExtResource("2_surface")

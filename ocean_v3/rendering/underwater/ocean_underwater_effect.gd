@@ -24,6 +24,7 @@ var _scattering_strength := 1.0
 var _scattering_density := 0.15
 var _max_distance := 120.0
 var _debug_mode := 0
+var _dispatch_count := 0
 
 func _init() -> void:
 	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
@@ -47,8 +48,21 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_scattering_strength = clampf(scattering_strength, 0.0, 4.0)
 	_scattering_density = clampf(scattering_density, 0.0, 2.0)
 	_max_distance = clampf(max_distance, 1.0, 500.0)
-	_debug_mode = clampi(debug_mode, 0, 4)
+	# The compositor owns only medium diagnostics 0..4. Snell diagnostics are
+	# rendered by the surface material and must not turn this pass into CAMERA_STATE.
+	_debug_mode = debug_mode if debug_mode <= 4 else 0
 	_mutex.unlock()
+
+func reset_dispatch_count() -> void:
+	_mutex.lock()
+	_dispatch_count = 0
+	_mutex.unlock()
+
+func get_dispatch_count() -> int:
+	_mutex.lock()
+	var count := _dispatch_count
+	_mutex.unlock()
+	return count
 
 func free_resources() -> void:
 	if _rd == null: return
@@ -96,6 +110,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	# In normal AIR mode this compositor remains attached but does no GPU work;
 	# debug modes intentionally keep the pass alive so CAMERA_STATE can be seen.
 	if not is_enabled or (not camera_underwater and debug_mode == 0) or not _ensure_pipeline(): return
+	# A pipeline can only be bound with all of its backing RIDs alive. Keep this
+	# explicit guard next to the render callback so a teardown/rebuild race cannot
+	# reach uniform creation or dispatch with a stale shader resource.
+	if not _shader.is_valid() or not _pipeline.is_valid() or not _sampler.is_valid() or not _params_buffer.is_valid(): return
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
 	if buffers == null or scene_data == null or buffers.get_view_count() != 1: return
@@ -136,6 +154,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_rd.compute_list_bind_uniform_set(list, uniform_set, 0)
 	_rd.compute_list_dispatch(list, ceili(float(size.x) / THREAD_SIZE), ceili(float(size.y) / THREAD_SIZE), 1)
 	_rd.compute_list_end()
+	_mutex.lock()
+	_dispatch_count += 1
+	_mutex.unlock()
 
 func _append_projection(values: PackedFloat32Array, projection: Projection) -> void:
 	for column in [projection.x, projection.y, projection.z, projection.w]:

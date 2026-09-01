@@ -13,6 +13,7 @@ const BASE_WAVE_PRESET_PATHS := [
 const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
 const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocean_caustics_manager.gd")
 const UNDERWATER_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_manager.gd")
+const WATER_LENS_SCRIPT := preload("res://ocean_v3/rendering/underwater/water_lens_fx.gd")
 const UNDERWATER_ENTER_MARGIN_M := 0.05
 const UNDERWATER_EXIT_MARGIN_M := 0.05
 const PERF_PRESET_FULL := &"FULL"
@@ -388,14 +389,55 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 4)
+		underwater_debug_mode = clampi(value, 0, 7)
 		_request_visual_sync()
 
-@export_range(1.0, 100.0, 0.5) var maximum_optical_depth: float = 38.0:
+@export_group("Underwater / Snell-TIR")
+@export var underwater_snell_enabled := true:
 	set(value):
-		maximum_optical_depth = value
+		underwater_snell_enabled = value
+		_request_visual_sync()
+@export_range(1.0, 2.0, 0.001) var underwater_water_ior := 1.333:
+	set(value):
+		underwater_water_ior = clampf(value, 1.0, 2.0)
+		_request_visual_sync()
+@export_range(0.0, 1.0, 0.01) var underwater_snell_strength := 1.0:
+	set(value):
+		underwater_snell_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+@export_range(0.0, 1.0, 0.01) var underwater_tir_strength := 1.0:
+	set(value):
+		underwater_tir_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+
+@export_group("Underwater / Surface")
+@export_range(0.0, 1.5, 0.01) var underwater_snell_wave_distortion := 1.0:
+	set(value):
+		underwater_snell_wave_distortion = clampf(value, 0.0, 1.5)
+		_request_visual_sync()
+@export_range(0.0, 2.0, 0.01) var underwater_snell_micro_refraction_strength := 0.35:
+	set(value):
+		underwater_snell_micro_refraction_strength = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+@export_range(0.0, 4.0, 0.05, "suffix:px") var underwater_snell_micro_refraction_max_px := 1.25:
+	set(value):
+		underwater_snell_micro_refraction_max_px = clampf(value, 0.0, 4.0)
+		_request_visual_sync()
+@export_range(0.0, 3.0, 0.05) var underwater_snell_edge_softness := 1.0:
+	set(value):
+		underwater_snell_edge_softness = clampf(value, 0.0, 3.0)
+		_request_visual_sync()
+
+@export_group("Water Optics / View Depth")
+@export_range(1.0, 100.0, 0.5) var maximum_optical_depth_above_m: float = 38.0:
+	set(value):
+		maximum_optical_depth_above_m = clampf(value, 1.0, 100.0)
+		_request_visual_sync()
+@export_range(1.0, 100.0, 0.5) var maximum_optical_depth_underwater_m: float = 80.0:
+	set(value):
+		maximum_optical_depth_underwater_m = clampf(value, 1.0, 100.0)
 		_request_visual_sync()
 
 # Body color depth range is independent from Beer-Lambert absorption.
@@ -1317,9 +1359,21 @@ var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
 var _reflection_sspr_manager: Node
 var _caustics_manager: Node
 var _underwater_manager: Node
+var _water_lens_fx: Node
 var _camera_underwater := false
 var _underwater_factor := 0.0
 var _camera_water_surface_y := 0.0
+var _underwater_surface_state_initialized := false
+var _underwater_surface_camera_active := false
+var _underwater_surface_snell_enabled := false
+var _underwater_surface_water_ior := 1.333
+var _underwater_surface_snell_strength := 1.0
+var _underwater_surface_tir_strength := 1.0
+var _underwater_surface_snell_wave_distortion := 1.0
+var _underwater_surface_snell_micro_refraction_strength := 0.35
+var _underwater_surface_snell_micro_refraction_max_px := 1.25
+var _underwater_surface_snell_edge_softness := 1.0
+var _underwater_surface_debug_mode := -1
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
 var _startup_stable_frames := 0
@@ -1359,6 +1413,12 @@ func _ready() -> void:
 		_underwater_manager.name = &"OceanUnderwaterManager"
 		add_child(_underwater_manager)
 		_underwater_manager.configure(self)
+		_water_lens_fx = get_node_or_null(^"WaterLensFX")
+		if _water_lens_fx == null:
+			_water_lens_fx = WATER_LENS_SCRIPT.new()
+			_water_lens_fx.name = &"WaterLensFX"
+			add_child(_water_lens_fx)
+		_water_lens_fx.configure(self)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -1394,22 +1454,72 @@ func _update_underwater_camera_state() -> void:
 
 
 func _sync_underwater_manager() -> void:
-	if _underwater_manager == null or not is_instance_valid(_underwater_manager):
-		return
-	_underwater_manager.set_settings({
-		"enabled": underwater_enabled,
-		"sea_level": _surface_sea_level(),
-		"camera_underwater": _camera_underwater,
-		"camera_factor": _underwater_factor,
-		"transition_width": underwater_transition_width_m,
-		"absorption": absorption_coeff_rgb,
-		"absorption_scale": underwater_absorption_scale,
-		"scattering_color": underwater_scattering_color,
-		"scattering_strength": underwater_scattering_strength,
-		"scattering_density": underwater_scattering_density,
-		"max_distance": underwater_max_optical_distance_m,
-		"debug_mode": underwater_debug_mode,
-	})
+	if _water_lens_fx != null and is_instance_valid(_water_lens_fx):
+		# The existing binary state is the sole authority. Lens FX only consumes
+		# the transition and never queries FFT/OceanQuery.
+		_water_lens_fx.set_medium_state(_camera_underwater)
+	if _underwater_manager != null and is_instance_valid(_underwater_manager):
+		_underwater_manager.set_settings({
+			"enabled": underwater_enabled,
+			"sea_level": _surface_sea_level(),
+			"camera_underwater": _camera_underwater,
+			"camera_factor": _underwater_factor,
+			"transition_width": underwater_transition_width_m,
+			"absorption": absorption_coeff_rgb,
+			"absorption_scale": underwater_absorption_scale,
+			"scattering_color": underwater_scattering_color,
+			"scattering_strength": underwater_scattering_strength,
+			"scattering_density": underwater_scattering_density,
+			"max_distance": underwater_max_optical_distance_m,
+			"debug_mode": underwater_debug_mode,
+			"snell_enabled": underwater_snell_enabled,
+			"water_ior": underwater_water_ior,
+			"snell_strength": underwater_snell_strength,
+			"tir_strength": underwater_tir_strength,
+		})
+	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+	var surface_material := surface.get_surface_material() if surface != null else null
+	if surface_material != null and is_instance_valid(surface_material):
+		var surface_state_changed := not _underwater_surface_state_initialized \
+			or _underwater_surface_camera_active != _camera_underwater \
+			or _underwater_surface_snell_enabled != underwater_snell_enabled \
+			or not is_equal_approx(_underwater_surface_water_ior, underwater_water_ior) \
+			or not is_equal_approx(_underwater_surface_snell_strength, underwater_snell_strength) \
+			or not is_equal_approx(_underwater_surface_tir_strength, underwater_tir_strength) \
+			or not is_equal_approx(_underwater_surface_snell_wave_distortion, underwater_snell_wave_distortion) \
+			or not is_equal_approx(_underwater_surface_snell_micro_refraction_strength, underwater_snell_micro_refraction_strength) \
+			or not is_equal_approx(_underwater_surface_snell_micro_refraction_max_px, underwater_snell_micro_refraction_max_px) \
+			or not is_equal_approx(_underwater_surface_snell_edge_softness, underwater_snell_edge_softness) \
+			or _underwater_surface_debug_mode != underwater_debug_mode
+		if not surface_state_changed:
+			return
+		# Camera medium state changes every frame as the camera crosses the
+		# hysteresis band; keep the surface's Snell branch in lockstep with it.
+		surface_material.set_shader_parameter(&"underwater_camera_active", _camera_underwater)
+		surface_material.set_shader_parameter(&"underwater_snell_enabled", underwater_snell_enabled)
+		surface_material.set_shader_parameter(&"underwater_water_ior", underwater_water_ior)
+		surface_material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)
+		surface_material.set_shader_parameter(&"underwater_tir_strength", underwater_tir_strength)
+		surface_material.set_shader_parameter(&"underwater_snell_wave_distortion", underwater_snell_wave_distortion)
+		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_strength", underwater_snell_micro_refraction_strength)
+		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_max_px", underwater_snell_micro_refraction_max_px)
+		surface_material.set_shader_parameter(&"underwater_snell_edge_softness", underwater_snell_edge_softness)
+		surface_material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
+		_underwater_surface_state_initialized = true
+		_underwater_surface_camera_active = _camera_underwater
+		_underwater_surface_snell_enabled = underwater_snell_enabled
+		_underwater_surface_water_ior = underwater_water_ior
+		_underwater_surface_snell_strength = underwater_snell_strength
+		_underwater_surface_tir_strength = underwater_tir_strength
+		_underwater_surface_snell_wave_distortion = underwater_snell_wave_distortion
+		_underwater_surface_snell_micro_refraction_strength = underwater_snell_micro_refraction_strength
+		_underwater_surface_snell_micro_refraction_max_px = underwater_snell_micro_refraction_max_px
+		_underwater_surface_snell_edge_softness = underwater_snell_edge_softness
+		_underwater_surface_debug_mode = underwater_debug_mode
+
+func set_water_lens_jetski_velocity(velocity: Vector3) -> void:
+	if _water_lens_fx != null and is_instance_valid(_water_lens_fx):
+		_water_lens_fx.set_jetski_velocity(velocity)
 
 
 func _configure_coastal_bake_asset() -> void:
@@ -2355,7 +2465,8 @@ func _sync_water_visual_parameters() -> void:
 	# Keep the legacy parameter synchronized for old materials/resources; the
 	# shader no longer uses it in the production optics path.
 	material.set_shader_parameter(&"absorption_density", absorption_density)
-	material.set_shader_parameter(&"maximum_optical_depth", maximum_optical_depth)
+	material.set_shader_parameter(&"maximum_optical_depth_above_m", maximum_optical_depth_above_m)
+	material.set_shader_parameter(&"maximum_optical_depth_underwater_m", maximum_optical_depth_underwater_m)
 	# Legacy compatibility parameter; the production shader no longer uses it.
 	material.set_shader_parameter(&"shallow_depth_range", shallow_depth_range)
 	material.set_shader_parameter(&"water_body_depth_start_m", water_body_depth_start_m)

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://hlwqfmfwdhvi"
+path="res://.godot/imported/water_lens.glsl-9a5b0a4b2aa429a122fb15d1df48a410.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/underwater/water_lens.glsl"
+dest_files=["res://.godot/imported/water_lens.glsl-9a5b0a4b2aa429a122fb15d1df48a410.res"]
+
+[params]
+

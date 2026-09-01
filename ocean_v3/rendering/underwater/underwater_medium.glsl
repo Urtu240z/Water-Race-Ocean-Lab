@@ -71,15 +71,24 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv) {
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = ivec2(params.viewport.xy);
-	if (pixel.x >= size.x || pixel.y >= size.y || params.state.z < 0.5 || params.camera.w < 0.5) return;
+	if (pixel.x >= size.x || pixel.y >= size.y || params.state.z < 0.5) return;
+	int debug_mode = int(params.state.y + 0.5);
+	vec4 color = imageLoad(color_image, pixel);
+	// CAMERA_STATE is deliberately useful while the camera is above water. It
+	// does not touch depth or reconstruct any path, so it remains a cheap
+	// diagnostic even though normal AIR frames are gated off by the effect.
+	if (debug_mode == 4) {
+		color.rgb = vec3(params.camera.w, params.state.x, 0.0);
+		imageStore(color_image, pixel, color);
+		return;
+	}
+	if (params.camera.w < 0.5) return;
 	vec2 uv = (vec2(pixel) + vec2(0.5)) / params.viewport.xy;
 	float raw_depth = texelFetch(scene_depth, pixel, 0).r;
 	vec3 scene_world = vec3(0.0);
 	bool scene_valid = raw_depth > EPSILON && raw_depth <= 1.000001 && reconstruct_world(uv, raw_depth, scene_world);
 	float water_path_m = clamp(water_path_for_scene(scene_world, scene_valid, uv), 0.0, params.medium.z);
 	if (isnan(water_path_m) || isinf(water_path_m)) water_path_m = 0.0;
-	vec4 color = imageLoad(color_image, pixel);
-	int debug_mode = int(params.state.y + 0.5);
 	if (debug_mode == 1) {
 		color.rgb = vec3(water_path_m / max(params.medium.z, EPSILON));
 	} else if (debug_mode == 2) {

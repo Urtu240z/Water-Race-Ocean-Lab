@@ -166,6 +166,19 @@ uniform bool water_optics_enabled = true;
 uniform bool water_refraction_enabled = true;
 uniform sampler2D screen_texture : hint_screen_texture, repeat_disable, filter_linear_mipmap;
 uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
+// Simple underwater medium optics. The binary camera state is intentionally
+// the only medium authority; Snell/TIR is evaluated at each displaced surface
+// fragment from the existing LONG+MID macro slope.
+uniform bool underwater_camera_active = false;
+uniform bool underwater_snell_enabled = false;
+uniform float underwater_water_ior : hint_range(1.0, 2.0, 0.001) = 1.333;
+uniform float underwater_snell_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
+uniform float underwater_tir_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
+uniform float underwater_snell_wave_distortion : hint_range(0.0, 1.5, 0.01) = 1.0;
+uniform float underwater_snell_micro_refraction_strength : hint_range(0.0, 2.0, 0.01) = 0.35;
+uniform float underwater_snell_micro_refraction_max_px : hint_range(0.0, 4.0, 0.05) = 1.25;
+uniform float underwater_snell_edge_softness : hint_range(0.0, 3.0, 0.05) = 1.0;
+uniform int underwater_debug_mode = 0;
 uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
 uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
 uniform vec4 horizon_water_color : source_color = vec4(0.025, 0.22, 0.34, 1.0);
@@ -175,7 +188,8 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 // Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
-uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
+uniform float maximum_optical_depth_above_m : hint_range(1.0, 100.0, 0.5) = 38.0;
+uniform float maximum_optical_depth_underwater_m : hint_range(1.0, 100.0, 0.5) = 80.0;
 uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
 uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
 // Deprecated compatibility uniform. Legacy only. No production effect.
@@ -1781,7 +1795,12 @@ bool water_optics_world_position_from_depth(vec2 screen_uv, float raw_depth,
 
 
 const float WATER_OPTICS_EPSILON = 0.0001;
+// Stable fallback for the unrelated bathymetric-depth path. This was the
+// historical maximum_optical_depth default and must not vary with camera medium.
+const float BATHYMETRIC_DEEP_FALLBACK_M = 38.0;
 const float WATER_OPTICS_EDGE_FADE_UV = 0.02;
+const float SNELL_EDGE_MIN_WIDTH = 0.0005;
+const float SNELL_EDGE_SCALE = 1.5;
 const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
 const float WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR = 0.08;
 const float WATER_OPTICS_SHALLOW_PATH_MULTIPLIER = 1.5;
@@ -2061,6 +2080,9 @@ void fragment() {
 	}
 	else {
 		vec3 color = lod_debug_index >= 0.0 ? level_color(lod_debug_index) : base_color;
+		float active_maximum_optical_depth = underwater_camera_active
+			? maximum_optical_depth_underwater_m
+			: maximum_optical_depth_above_m;
 	vec4 hires_foam_composition = vec4(0.0);
 	if (perf_crest_foam_solver_enabled) {
 		hires_foam_composition = pixel_ocean_crest_foam(ocean_base_xz);
@@ -2333,7 +2355,67 @@ void fragment() {
 	NORMAL = visual_normal;
 
 	vec3 view_direction = normalize(VIEW);
+	// Physical water->air interface classification. This uses the displaced
+	// surface's macro normal only (LONG+MID); SHORT/microdetail never changes the
+	// critical-angle boundary. Screen UVs are not involved in this decision.
+	float underwater_snell_cos_i = 1.0;
+	float underwater_snell_k = 1.0;
+	float underwater_snell_tir = 0.0;
+	float underwater_tir_visual_weight = 0.0;
+	vec3 underwater_snell_normal_world = vec3(0.0, 1.0, 0.0);
+	bool underwater_snell_active = underwater_camera_active && underwater_snell_enabled;
+	if (underwater_snell_active) {
+		vec2 snell_macro_slope = (refraction_long_slope + refraction_mid_slope)
+			* underwater_snell_wave_distortion;
+		underwater_snell_normal_world = normalize(vec3(
+			-snell_macro_slope.x,
+			1.0,
+			-snell_macro_slope.y
+		));
+		vec3 incident_world = normalize((INV_VIEW_MATRIX * vec4(-view_direction, 0.0)).xyz);
+		if (dot(incident_world, underwater_snell_normal_world) > 0.0) {
+			underwater_snell_normal_world = -underwater_snell_normal_world;
+		}
+		underwater_snell_cos_i = clamp(-dot(incident_world, underwater_snell_normal_world), 0.0, 1.0);
+		float eta_water_air = max(underwater_water_ior, 1.0003) / 1.0003;
+		underwater_snell_k = 1.0 - eta_water_air * eta_water_air
+			* (1.0 - underwater_snell_cos_i * underwater_snell_cos_i);
+		underwater_snell_tir = underwater_snell_k < 0.0 ? 1.0 : 0.0;
+		underwater_tir_visual_weight = underwater_snell_tir;
+		if (underwater_snell_edge_softness > 0.0) {
+			float edge_width = max(
+				fwidth(underwater_snell_k) * SNELL_EDGE_SCALE
+				* underwater_snell_edge_softness,
+				SNELL_EDGE_MIN_WIDTH
+			);
+			underwater_tir_visual_weight = 1.0 - smoothstep(
+				-edge_width,
+				edge_width,
+				underwater_snell_k
+			);
+		}
+	}
+	if (underwater_camera_active && underwater_debug_mode == 5) {
+		color = vec3(underwater_snell_cos_i);
+	} else if (underwater_camera_active && underwater_debug_mode == 6) {
+		// Raw k is intentionally unremapped: negative values are the TIR side.
+		color = vec3(underwater_snell_k);
+	} else if (underwater_camera_active && underwater_debug_mode == 7) {
+		color = vec3(underwater_snell_tir);
+	}
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
+	if (underwater_snell_active) {
+		float eta_water_air = max(underwater_water_ior, 1.0003) / 1.0003;
+		float snell_f0 = pow((eta_water_air - 1.0) / (eta_water_air + 1.0), 2.0);
+		float snell_fresnel = snell_f0 + (1.0 - snell_f0)
+			* pow(1.0 - underwater_snell_cos_i, 5.0);
+		// TIR is an explicit hard Fresnel result; strength only controls how much
+		// of the new physical interface response is applied to the existing look.
+		if (underwater_snell_tir > 0.5) {
+			snell_fresnel = 1.0;
+		}
+		fresnel = mix(fresnel, snell_fresnel, clamp(underwater_snell_strength, 0.0, 1.0));
+	}
 	float reflection_pixel_footprint = max(fwidth(ocean_world_xz.x), fwidth(ocean_world_xz.y));
 	vec2 reflection_detail_metrics = vec2(0.0);
 	if (perf_spectral_enabled) {
@@ -2725,7 +2807,7 @@ void fragment() {
 		color = vec3(sspr_facet_confidence);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug;
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || (underwater_camera_active && underwater_debug_mode >= 5 && underwater_debug_mode <= 7);
 	if (unlit) {
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
@@ -2838,18 +2920,18 @@ void fragment() {
 			}
 			// Keep physical water distance separate from the bounded value used by
 			// stability-sensitive R2 and artistic saturation controls. For the sky or
-			// an invalid depth sample, maximum_optical_depth remains the conservative
+			// an invalid depth sample, active_maximum_optical_depth remains the conservative
 			// finite fallback because no scene bottom distance is available.
 			// VIEW-RAY OPTICAL PATH: this is camera-dependent water distance, not
 			// bathymetric depth. It remains the authority for transmission and optics.
 			float view_water_path_m = scene_is_sky
-				? max(maximum_optical_depth, 0.0)
+				? active_maximum_optical_depth
 				: scene_depth_valid && water_depth_valid
 				? max(scene_linear_depth - water_linear_depth, 0.0)
-				: max(maximum_optical_depth, 0.0);
+				: active_maximum_optical_depth;
 			float bounded_view_water_path_m = min(
 				view_water_path_m,
-				max(maximum_optical_depth, 0.0)
+				active_maximum_optical_depth
 			);
 			// LOCAL/BATHYMETRIC DEPTH: the direct fragment metrics.r sample is the
 			// baked seabed depth in metres. Domain membership is the spatial authority;
@@ -2885,7 +2967,10 @@ void fragment() {
 				&& local_depth_authority > 0.001;
 			float coastal_local_depth_m = max(raw_bathymetry_m, 0.0);
 			float local_deep_fallback_m = max(
-				maximum_optical_depth,
+				// This is a bathymetric fallback, not camera/view path length. Keep
+				// the historical constant so medium switching or view-depth tuning
+				// cannot alter coastal depth authority.
+				BATHYMETRIC_DEEP_FALLBACK_M,
 				max(
 					water_body_depth_end_m,
 					max(shallow_scattering_depth_end_m, 20.0)
@@ -2915,7 +3000,7 @@ void fragment() {
 			transmission_optical_depth_m = clamp(
 				transmission_optical_depth_m,
 				0.0,
-				max(maximum_optical_depth, 0.0)
+				active_maximum_optical_depth
 			);
 			// BathymetryData is baked as sea_level_y - top_surface_y. Use that
 			// same sea-level convention, not the instantaneous FFT crest height.
@@ -2953,7 +3038,7 @@ void fragment() {
 				+ vec3(absorption_density + shallow_depth_range) * 0.0
 			);
 			float transmission_path_saturation_factor = clamp(
-				transmission_optical_depth_m / max(maximum_optical_depth, 0.001),
+				transmission_optical_depth_m / max(active_maximum_optical_depth, 0.001),
 				0.0,
 				1.0
 			);
@@ -3102,6 +3187,7 @@ void fragment() {
 			float refraction_wave_depth_factor = 0.0;
 			float refraction_wave_grazing_factor = 0.0;
 			float refraction_wave_influence = 0.0;
+			bool underwater_reflected_direction_valid = true;
 			// Keep the R2 candidate sample alive until seabed classification. This
 			// reuses the exact depth fetch that controls the refracted color.
 			vec2 candidate_refracted_uv = SCREEN_UV;
@@ -3178,15 +3264,29 @@ void fragment() {
 						refraction_wave_influence
 					));
 				}
+				if (underwater_snell_active) {
+					// Underwater classification and the water->air ray both use the
+					// same LONG+MID macro normal; visual SHORT detail stays out.
+					refraction_normal_view = normalize(
+						mat3(VIEW_MATRIX) * underwater_snell_normal_world
+					);
+				}
 				vec3 incident_view = normalize(-view_direction);
+				vec3 reflected_direction_view = reflect(incident_view, refraction_normal_view);
+				underwater_reflected_direction_valid = length(reflected_direction_view) > WATER_OPTICS_EPSILON
+					&& !any(isnan(reflected_direction_view))
+					&& !any(isinf(reflected_direction_view));
 				vec3 refracted_direction_view = refract(
 					incident_view,
 					refraction_normal_view,
-					1.0 / max(WATER_IOR, WATER_OPTICS_EPSILON)
+					underwater_snell_active
+						? max(underwater_water_ior, 1.0003) / 1.0003
+						: 1.0 / max(WATER_IOR, WATER_OPTICS_EPSILON)
 				);
 				bool refraction_direction_valid = length(refracted_direction_view) > WATER_OPTICS_EPSILON
 					&& !any(isnan(refracted_direction_view))
-					&& !any(isinf(refracted_direction_view));
+					&& !any(isinf(refracted_direction_view))
+					&& !(underwater_snell_active && underwater_snell_tir > 0.5);
 				if (refraction_direction_valid && !scene_is_sky && scene_depth_valid && water_depth_valid) {
 					refracted_direction_view = normalize(refracted_direction_view);
 					float target_scene_depth = min(
@@ -3202,7 +3302,7 @@ void fragment() {
 					}
 					bool path_valid = direction_z_valid
 						&& path_distance >= 0.0
-						&& path_distance <= max(maximum_optical_depth * 8.0, 1.0)
+						&& path_distance <= max(active_maximum_optical_depth * 8.0, 1.0)
 						&& !isnan(path_distance) && !isinf(path_distance);
 					if (path_valid) {
 						vec3 candidate_position_view = water_position_view
@@ -3210,9 +3310,26 @@ void fragment() {
 						bool projection_valid;
 						candidate_refracted_uv = water_optics_project_view_position(
 							candidate_position_view, projection_matrix, projection_valid);
-						if (projection_valid) {
-							vec2 candidate_offset_px = (candidate_refracted_uv - SCREEN_UV) * refraction_screen_size;
-							float candidate_offset_length_px = length(candidate_offset_px);
+					if (projection_valid) {
+						vec2 candidate_offset_px = (candidate_refracted_uv - SCREEN_UV) * refraction_screen_size;
+						// SHORT slope is deliberately introduced only after physical
+						// Snell/TIR classification. It perturbs transmitted sampling by a
+						// bounded pixel amount and can never create a new TIR island.
+						if (underwater_snell_active
+								&& underwater_snell_tir <= 0.5
+								&& underwater_snell_micro_refraction_strength > 0.0
+								&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
+							vec2 micro_offset_px = vec2(
+								refraction_short_slope.x,
+								-refraction_short_slope.y
+							) * underwater_snell_micro_refraction_strength;
+							float micro_offset_length_px = length(micro_offset_px);
+							if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
+								micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
+							}
+							candidate_offset_px += micro_offset_px;
+						}
+						float candidate_offset_length_px = length(candidate_offset_px);
 							float max_offset_px = max(refraction_max_offset_px, 0.0);
 							if (max_offset_px <= WATER_OPTICS_EPSILON) {
 								candidate_offset_px = vec2(0.0);
@@ -3351,6 +3468,21 @@ void fragment() {
 			);
 			vec3 shallow_scattering_component = scattering_tint * shallow_scattering_share;
 			optical_scene += shallow_scattering_component;
+			if (underwater_snell_active && underwater_tir_visual_weight > 0.0 && underwater_reflected_direction_valid) {
+				// TIR has no transmitted ray. Promote the existing reflection radiance
+				// path explicitly, with a bounded artist strength, instead of sampling a
+				// rectangular/screen-space boundary.
+				float tir_strength = clamp(
+					underwater_tir_strength * underwater_snell_strength,
+					0.0,
+					1.0
+				);
+				optical_scene = mix(
+					optical_scene,
+					reflection_radiance,
+					tir_strength * underwater_tir_visual_weight
+				);
+			}
 
 			// The existing physical Fresnel is the single optical balance between
 			// transmission and the surface/body response. The refraction offset above
@@ -3370,6 +3502,17 @@ void fragment() {
 				* (1.0 - shallow_surface_relief);
 			float surface_weight = fresnel
 				+ (1.0 - fresnel) * relieved_distance_opacity;
+			if (underwater_snell_active && underwater_tir_visual_weight > 0.0) {
+				surface_weight = max(
+					surface_weight,
+					clamp(
+						underwater_tir_strength * underwater_snell_strength
+						* underwater_tir_visual_weight,
+						0.0,
+						1.0
+					)
+				);
+			}
 			vec3 final_color = mix(optical_scene, surface_color, surface_weight);
 
 			// Foam is composited after water optics, so Fresnel/reflection cannot be
@@ -3380,7 +3523,7 @@ void fragment() {
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
 			if (water_optics_debug_mode == 1) {
-				final_color = vec3(bounded_view_water_path_m / max(maximum_optical_depth, 0.001));
+				final_color = vec3(bounded_view_water_path_m / max(active_maximum_optical_depth, 0.001));
 			} else if (water_optics_debug_mode == 2) {
 				final_color = transmittance_rgb;
 			} else if (water_optics_debug_mode == 3) {
