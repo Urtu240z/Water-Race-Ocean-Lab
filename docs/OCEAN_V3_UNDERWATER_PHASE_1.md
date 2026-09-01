@@ -4,9 +4,10 @@
 
 Underwater optics are split into two deliberately separate responsibilities:
 
-- `OceanUnderwaterEffect` is a `POST_TRANSPARENT` compositor effect.  It
-  reconstructs the per-pixel scene ray and applies Beer-Lambert absorption and
-  single-pass scattering only to its underwater segment.
+- `OceanUnderwaterDepthCaptureEffect` snapshots resolved depth at
+  `PRE_TRANSPARENT`. `OceanUnderwaterEffect` runs at `POST_TRANSPARENT`,
+  compares that snapshot with final depth, then reconstructs the per-pixel
+  scene ray and applies Beer-Lambert absorption and single-pass scattering.
 - `ocean_surface.gdshader` remains the visual interface authority.  When the
   actual displaced FFT surface puts a fragment on the water-to-air side, it
   uses its already-evaluated FFT slope data to construct the Snell/TIR branch.
@@ -25,37 +26,37 @@ hysteresis and the smooth interface factor. Entering requires the camera to be
 0.05 m below that level; exiting requires it to be 0.05 m above it.
 
 No OceanQuery is run from `_process()` for underwater state. The retained
-camera state is compatibility/debug telemetry only; it never decides the
-surface Snell/TIR branch or which pixels receive medium attenuation.
+transition factor only selects the clearly-above and clearly-below fast paths.
+Inside the crossing band it cannot classify the whole frame: the depth-derived
+water mask decides every pixel.
 
 ## Per-pixel medium approximation
 
-At render time a 1x1 compute probe samples the already-published LONG coastal,
-LONG remainder and MID displacement/normal maps at the camera XZ. It writes
-height and slope to a GPU-only texture; there is no CPU query, CPU readback,
-per-pixel FFT sampling, or new ocean solver. The compositor converts that
-sample into a local tangent plane and uses it for the three visual camera
-ranges: above, underwater, and crossing.
+The compositor no longer consumes cached FFT `RID`s. Those resources are
+published and replaced on the render thread, so caching them across solver
+initialization/rebuilds can bind a stale non-null RID. The depth pair is owned
+by the same renderer callbacks and is checked before any uniform set or
+dispatch is created.
 
-In the crossing band, it reconstructs each pixel view ray and classifies a
-fixed point along it against the tangent plane, producing a feathered,
-slope-following waterline. Where the mask permits the effect, the compositor
-uses the same plane to intersect the reconstructed ray. Valid scene depth uses
-the four camera/scene-side combinations analytically; invalid sky depth from an
-underwater camera uses only ray direction and never far-plane length. Invalid
-probe data falls back deterministically to `y = sea_level` with an up normal.
+For a camera clearly above the interface, the medium mask is zero; clearly
+below it is one. In the crossing band, a pixel belongs to water only when the
+post-transparent reversed-Z depth is nearer than the pre-transparent snapshot.
+The surface has already written its real displaced FFT/coastal depth, so this
+preserves the visible waterline without a full-screen FFT raymarch, CPU
+readback, OceanQuery-per-pixel, or second ocean simulation. The pre-transparent
+depth remains the opaque-scene endpoint behind water for optical distance.
 
-`DEBUG_LOCAL_SURFACE_PLANE` shows the signed local-plane division and
-`DEBUG_WATERLINE_MASK` shows the final attenuation mask. They let the local
-interface be checked independently of the medium shading.
+`DEBUG_OCEAN_DEPTH_WRITE` shows pixels where transparent depth changed and
+`DEBUG_WATERLINE_MASK` shows the final medium mask.
 
 ## Surface interface
 
 The underwater branch derives its normal from existing LONG + MID slopes and a
-configurable, bounded SHORT contribution. It classifies the camera against the
-local displaced surface at each fragment, flips the normal toward the incident
-underwater ray, uses `refract(incident, normal, water_ior)`, and treats a zero
-or non-finite refracted vector as total internal reflection.
+configurable, bounded SHORT contribution. It classifies the view direction by
+the physical critical cone: `sin(theta_i) <= n_air / n_water`. The debug
+`SNELL_CRITICAL_ANGLE` is only that scalar angular classification. Projected
+screen UV bounds can choose a color fallback but never classify Snell/TIR, so
+the cone cannot become viewport-shaped.
 
 For Phase 1, refracted and reflected directions are projected to the available
 screen background.  A failed reflected projection falls back to the already

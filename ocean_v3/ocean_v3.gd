@@ -415,7 +415,7 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("UNDERWATER_OFF", "UNDERWATER_ON", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_WINDOW", "TIR", "DEBUG_LOCAL_SURFACE_PLANE", "DEBUG_WATERLINE_MASK", "FINAL") var underwater_debug_mode := 0:
+@export_enum("UNDERWATER_OFF", "UNDERWATER_ON", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_CRITICAL_ANGLE", "TIR", "DEBUG_OCEAN_DEPTH_WRITE", "DEBUG_WATERLINE_MASK", "FINAL") var underwater_debug_mode := 0:
 	set(value):
 		underwater_debug_mode = clampi(value, 0, 10)
 		_request_visual_sync()
@@ -2434,8 +2434,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
 	_sync_caustics_manager()
 	_sync_underwater_manager()
-	if _underwater_manager != null and is_instance_valid(_underwater_manager):
-		_underwater_manager.refresh_surface_probe_sources()
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():

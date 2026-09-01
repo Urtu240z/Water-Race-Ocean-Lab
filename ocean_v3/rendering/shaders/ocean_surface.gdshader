@@ -3414,7 +3414,7 @@ void fragment() {
 			);
 			bool underwater_surface_active = local_underwater_interface_factor > WATER_OPTICS_EPSILON;
 			bool underwater_tir = false;
-			bool underwater_refracted_valid = false;
+			float underwater_critical_angle_scalar = 0.0;
 			if (underwater_surface_active) {
 				vec3 underwater_macro_normal_world = underwater_macro_slope_normal_world;
 				// Incident points from the underwater camera to the interface.  Flip
@@ -3425,9 +3425,19 @@ void fragment() {
 					underwater_macro_normal_world) > 0.0
 					? -underwater_macro_normal_world : underwater_macro_normal_world;
 				float water_to_air_eta = max(underwater_water_ior, 1.0);
+				float cos_incident = clamp(-dot(underwater_incident_world,
+					underwater_interface_normal), 0.0, 1.0);
+				// Snell's critical cone is angular: sin(theta_i) <= n_air / n_water.
+				// This never depends on projected screen UV, so its shape follows the
+				// view ray and surface normal rather than the viewport rectangle.
+				float critical_cosine = sqrt(max(1.0 - 1.0 / (water_to_air_eta * water_to_air_eta), 0.0));
+				underwater_critical_angle_scalar = clamp(
+					(cos_incident - critical_cosine) / max(1.0 - critical_cosine, WATER_OPTICS_EPSILON),
+					0.0, 1.0);
 				vec3 refracted_exterior_world = refract(
 					underwater_incident_world, underwater_interface_normal, water_to_air_eta);
-				underwater_tir = length(refracted_exterior_world) <= WATER_OPTICS_EPSILON
+				underwater_tir = cos_incident < critical_cosine
+					|| length(refracted_exterior_world) <= WATER_OPTICS_EPSILON
 					|| any(isnan(refracted_exterior_world)) || any(isinf(refracted_exterior_world));
 				vec3 reflected_exterior_world = reflect(
 					underwater_incident_world, underwater_interface_normal);
@@ -3443,7 +3453,9 @@ void fragment() {
 						reflected_exterior = textureLod(screen_texture, reflected_uv, 0.0).rgb;
 					}
 				}
-				vec3 refracted_exterior = vec3(0.0);
+				// UV bounds only select a color fallback. They must never define the
+				// Snell/TIR classification, or the critical cone becomes rectangular.
+				vec3 refracted_exterior = final_color;
 				if (!underwater_tir) {
 					vec3 refracted_target_view = (VIEW_MATRIX * vec4(
 						ocean_world_position + normalize(refracted_exterior_world)
@@ -3454,12 +3466,9 @@ void fragment() {
 						if (all(greaterThanEqual(refracted_uv, vec2(0.001)))
 							&& all(lessThanEqual(refracted_uv, vec2(0.999)))) {
 							refracted_exterior = textureLod(screen_texture, refracted_uv, 0.0).rgb;
-							underwater_refracted_valid = true;
 						}
 					}
 				}
-				float cos_incident = clamp(-dot(underwater_incident_world,
-					underwater_interface_normal), 0.0, 1.0);
 				float underwater_f0 = pow((water_to_air_eta - 1.0)
 					/ (water_to_air_eta + 1.0), 2.0);
 				float underwater_fresnel = underwater_tir ? 1.0 : underwater_f0
@@ -3597,7 +3606,7 @@ void fragment() {
 				final_color = refraction_background_only;
 			}
 			if (underwater_debug_mode == 6) {
-				final_color = vec3(underwater_refracted_valid ? 1.0 : 0.0);
+				final_color = vec3(underwater_critical_angle_scalar);
 			} else if (underwater_debug_mode == 7) {
 				final_color = vec3(underwater_tir ? 1.0 : 0.0);
 			}

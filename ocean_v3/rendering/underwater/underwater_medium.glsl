@@ -1,27 +1,27 @@
 #[compute]
 #version 450
 
-// The local interface is a GPU-probed LONG+MID tangent plane at the camera.
-// If the probe is unavailable or invalid, sea_level remains the deterministic
-// flat fallback. No CPU wave query or GPU-to-CPU readback is involved.
+// Water coverage comes from the renderer's depth before and after transparent
+// geometry. The ocean already writes its displaced surface depth, so this is a
+// per-pixel FFT/coastal interface without an extra wave evaluation or readback.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
-layout(set = 0, binding = 1) uniform sampler2D scene_depth;
-layout(set = 0, binding = 3) uniform sampler2D local_surface_probe;
+layout(set = 0, binding = 1) uniform sampler2D post_transparent_depth;
+layout(set = 0, binding = 3) uniform sampler2D pre_transparent_depth;
 
 layout(set = 0, binding = 2, std140) uniform Params {
 	mat4 inverse_view_projection;
 	vec4 viewport; // width, height, unused, unused
-	vec4 camera; // xyz, local probe dispatch succeeded
-	vec4 medium; // sea level, transition width, max optical distance, absorption scale
+	vec4 camera; // xyz, depth snapshot available
+	vec4 medium; // mean sea level, transition width, max optical distance, absorption scale
 	vec4 absorption; // rgb, scattering strength
 	vec4 scattering; // rgb, scattering density
-	vec4 state; // legacy camera factor, debug mode, enabled, waterline feather
+	vec4 state; // CPU transition factor, debug mode, enabled, waterline feather
 } params;
 
 const float EPSILON = 0.00001;
-const float WATERLINE_REFERENCE_DISTANCE_M = 12.0;
+const float DEPTH_WRITE_EPSILON = 0.00001;
 
 
 bool finite_vec3(vec3 value) {
@@ -40,41 +40,12 @@ bool reconstruct_world(vec2 uv, float raw_depth, out vec3 world_position) {
 }
 
 
-void local_surface_plane(out vec3 plane_point, out vec3 plane_normal, out bool probe_valid) {
-	plane_point = vec3(params.camera.x, params.medium.x, params.camera.z);
-	plane_normal = vec3(0.0, 1.0, 0.0);
-	probe_valid = false;
-	if (params.camera.w <= 0.5) {
-		return;
-	}
-	vec4 probe = texelFetch(local_surface_probe, ivec2(0), 0);
-	if (probe.w <= 0.5 || isnan(probe.x) || isinf(probe.x)
-			|| any(isnan(probe.yz)) || any(isinf(probe.yz))) {
-		return;
-	}
-	vec3 candidate_normal = normalize(vec3(-probe.y, 1.0, -probe.z));
-	if (!finite_vec3(candidate_normal) || candidate_normal.y <= EPSILON) {
-		return;
-	}
-	plane_point.y = probe.x;
-	plane_normal = candidate_normal;
-	probe_valid = true;
-}
-
-
-float plane_side(vec3 point, vec3 plane_point, vec3 plane_normal) {
-	return dot(point - plane_point, plane_normal);
-}
-
-
-float distance_to_plane(vec3 origin, vec3 direction, vec3 plane_point,
-		vec3 plane_normal, out bool hit) {
+float distance_to_mean_surface(vec3 origin, vec3 direction, out bool hit) {
 	hit = false;
-	float denominator = dot(direction, plane_normal);
-	if (abs(denominator) <= EPSILON) {
+	if (abs(direction.y) <= EPSILON) {
 		return 0.0;
 	}
-	float distance_m = dot(plane_point - origin, plane_normal) / denominator;
+	float distance_m = (params.medium.x - origin.y) / direction.y;
 	if (distance_m > EPSILON && !isnan(distance_m) && !isinf(distance_m)) {
 		hit = true;
 		return distance_m;
@@ -83,34 +54,31 @@ float distance_to_plane(vec3 origin, vec3 direction, vec3 plane_point,
 }
 
 
-float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv,
-		vec3 plane_point, vec3 plane_normal) {
+float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv) {
 	vec3 camera_world = params.camera.xyz;
-	bool camera_below = plane_side(camera_world, plane_point, plane_normal) < 0.0;
+	bool camera_below = camera_world.y < params.medium.x;
 	if (!scene_valid) {
 		if (!camera_below) {
 			return 0.0;
 		}
 		vec3 sky_world;
 		if (reconstruct_world(uv, 0.0, sky_world)) {
-			vec3 sky_direction = normalize(sky_world - camera_world);
 			bool surface_hit;
-			float surface_distance = distance_to_plane(camera_world, sky_direction,
-				plane_point, plane_normal, surface_hit);
+			float surface_distance = distance_to_mean_surface(camera_world,
+				normalize(sky_world - camera_world), surface_hit);
 			if (surface_hit) {
 				return surface_distance;
 			}
 		}
 		return params.medium.z;
 	}
-
 	vec3 ray = scene_world - camera_world;
 	float ray_length = length(ray);
 	if (ray_length <= EPSILON || isnan(ray_length) || isinf(ray_length)) {
 		return 0.0;
 	}
 	vec3 ray_direction = ray / ray_length;
-	bool scene_below = plane_side(scene_world, plane_point, plane_normal) < 0.0;
+	bool scene_below = scene_world.y < params.medium.x;
 	if (!camera_below && !scene_below) {
 		return 0.0;
 	}
@@ -118,8 +86,7 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv,
 		return ray_length;
 	}
 	bool surface_hit;
-	float surface_distance = distance_to_plane(camera_world, ray_direction,
-		plane_point, plane_normal, surface_hit);
+	float surface_distance = distance_to_mean_surface(camera_world, ray_direction, surface_hit);
 	if (!surface_hit || surface_distance > ray_length) {
 		return 0.0;
 	}
@@ -127,27 +94,28 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv,
 }
 
 
-float waterline_mask(vec2 uv, vec3 plane_point, vec3 plane_normal) {
-	float transition_width = max(params.medium.y, EPSILON);
-	float camera_side = plane_side(params.camera.xyz, plane_point, plane_normal);
-	if (camera_side > transition_width) {
+bool water_wrote_depth(float pre_depth, float post_depth) {
+	// Forward+ uses reversed Z: a nearer transparent surface raises depth.
+	bool post_valid = post_depth > EPSILON && post_depth <= 1.000001;
+	if (!post_valid) {
+		return false;
+	}
+	bool pre_valid = pre_depth > EPSILON && pre_depth <= 1.000001;
+	return !pre_valid || post_depth > pre_depth + DEPTH_WRITE_EPSILON;
+}
+
+
+float waterline_mask(float pre_depth, float post_depth) {
+	float transition = clamp(params.state.x, 0.0, 1.0);
+	if (transition <= EPSILON) {
 		return 0.0;
 	}
-	if (camera_side < -transition_width) {
+	if (transition >= 1.0 - EPSILON) {
 		return 1.0;
 	}
-	vec3 ray_world;
-	if (reconstruct_world(uv, 0.0, ray_world)) {
-		vec3 ray_direction = normalize(ray_world - params.camera.xyz);
-		if (finite_vec3(ray_direction)) {
-			float signed_plane_side = camera_side
-				+ dot(ray_direction, plane_normal) * WATERLINE_REFERENCE_DISTANCE_M;
-			float feather_m = max(params.state.w * WATERLINE_REFERENCE_DISTANCE_M, EPSILON);
-			return 1.0 - smoothstep(-feather_m, feather_m, signed_plane_side);
-		}
-	}
-	float feather_uv = max(params.state.w, EPSILON);
-	return smoothstep(0.5 - feather_uv, 0.5 + feather_uv, uv.y);
+	// Within the crossing band the displaced ocean depth, not CPU state, decides
+	// every pixel. This preserves steep FFT and coastal silhouettes.
+	return water_wrote_depth(pre_depth, post_depth) ? 1.0 : 0.0;
 }
 
 
@@ -157,25 +125,14 @@ void main() {
 	if (pixel.x >= size.x || pixel.y >= size.y || params.state.z < 0.5) {
 		return;
 	}
-
 	vec2 uv = (vec2(pixel) + vec2(0.5)) / params.viewport.xy;
 	int debug_mode = int(params.state.y + 0.5);
-	vec3 plane_point;
-	vec3 plane_normal;
-	bool probe_valid;
-	local_surface_plane(plane_point, plane_normal, probe_valid);
-	float medium_mask = waterline_mask(uv, plane_point, plane_normal);
+	float post_depth = texelFetch(post_transparent_depth, pixel, 0).r;
+	float pre_depth = texelFetch(pre_transparent_depth, pixel, 0).r;
+	float medium_mask = waterline_mask(pre_depth, post_depth);
 	if (debug_mode == 8) {
-		vec3 ray_world;
-		float side = plane_side(params.camera.xyz, plane_point, plane_normal);
-		if (reconstruct_world(uv, 0.0, ray_world)) {
-			vec3 direction = normalize(ray_world - params.camera.xyz);
-			if (finite_vec3(direction)) {
-				side += dot(direction, plane_normal) * WATERLINE_REFERENCE_DISTANCE_M;
-			}
-		}
 		vec4 debug_color = imageLoad(color_image, pixel);
-		debug_color.rgb = vec3(clamp(0.5 - side / WATERLINE_REFERENCE_DISTANCE_M, 0.0, 1.0));
+		debug_color.rgb = vec3(water_wrote_depth(pre_depth, post_depth) ? 1.0 : 0.0);
 		imageStore(color_image, pixel, debug_color);
 		return;
 	}
@@ -188,19 +145,15 @@ void main() {
 	if (medium_mask <= EPSILON) {
 		return;
 	}
-	float raw_depth = texelFetch(scene_depth, pixel, 0).r;
+	// For pixels covered by water, pre-transparent depth is the scene endpoint
+	// behind the actual ocean surface. It is also the correct sky sentinel.
 	vec3 scene_world = vec3(0.0);
-	bool scene_valid = raw_depth > EPSILON && raw_depth <= 1.000001
-		&& reconstruct_world(uv, raw_depth, scene_world);
-	float water_path_m = clamp(water_path_for_scene(scene_world, scene_valid, uv,
-		plane_point, plane_normal), 0.0, params.medium.z);
-	if (isnan(water_path_m) || isinf(water_path_m)) {
-		water_path_m = 0.0;
-	}
-	if (water_path_m <= EPSILON) {
+	bool scene_valid = pre_depth > EPSILON && pre_depth <= 1.000001
+		&& reconstruct_world(uv, pre_depth, scene_world);
+	float water_path_m = clamp(water_path_for_scene(scene_world, scene_valid, uv), 0.0, params.medium.z);
+	if (isnan(water_path_m) || isinf(water_path_m) || water_path_m <= EPSILON) {
 		return;
 	}
-
 	vec4 color = imageLoad(color_image, pixel);
 	if (debug_mode == 2) {
 		color.rgb = vec3(water_path_m / max(params.medium.z, EPSILON)) * medium_mask;
@@ -213,7 +166,7 @@ void main() {
 		color.rgb = max(params.scattering.rgb, vec3(0.0)) * response
 			* max(params.absorption.w, 0.0) * medium_mask;
 	} else if (debug_mode == 5) {
-		color.rgb = vec3(float(probe_valid), medium_mask, 0.0);
+		color.rgb = vec3(params.state.x, medium_mask, 0.0);
 	} else if (debug_mode < 6 || debug_mode == 10) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0))
 			* max(params.medium.w, 0.0) * water_path_m);
