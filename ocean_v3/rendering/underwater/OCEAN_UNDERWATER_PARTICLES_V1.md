@@ -9,8 +9,9 @@ UNDERWATER   -> both GPU layers enabled
 ```
 
 The component is independent of `lab/`, FFT, OceanQuery, bathymetry, water
-height, physics, compositors, SubViewports, and compute shaders. It creates two
-`GPUParticles3D` nodes with one-quad procedural spatial material each:
+height, physics, compositors, SubViewports, and compute shaders. The base
+`ocean_v3.tscn` scene contains two authored `GPUParticles3D` nodes with
+one-quad procedural spatial material each:
 
 | layer | default amount | size range | role |
 | --- | ---: | ---: | --- |
@@ -19,11 +20,12 @@ height, physics, compositors, SubViewports, and compute shaders. It creates two
 
 The particle process shader initializes positions in a forward frustum starting
 4 m in front of the camera and reaching 50 m by default, widening to 60 m at
-the far end. It combines per-particle drift, low-frequency vertical variation, a small current,
+the far end. It combines per-particle drift, low-frequency vertical variation,
+a small current,
 and bounded `-camera_velocity * velocity_influence`. The random position is
 emitter-local and is converted with Godot's `EMISSION_TRANSFORM` before it is
 written to the world-space particle transform. Existing particles remain in
-world space (`local_coords=false`) while only the emitter translation follows
+world space (`local_coords=false`) while the authored emitter transform follows
 the active camera. The component never calls `restart()`, so following the
 camera does not reseed or reset the visible population each frame.
 
@@ -37,6 +39,8 @@ The Inspector exposes artist-facing appearance controls under
 
 - `underwater_particles_fine_color` and `underwater_particles_near_color` set
   the tint of each layer.
+- `underwater_particles_fine_amount` and `underwater_particles_near_amount`
+  accept up to 10000 GPU particles per layer.
 - `underwater_particles_fine_strength` and
   `underwater_particles_near_strength` control visibility up to 8x.
 - `underwater_particles_fine_size_scale` and

@@ -1,7 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://ocean_v3/tests/performance/ocean_underwater_particles_benchmark.gd" id="1_benchmark"]
 [ext_resource type="Script" path="res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd" id="2_particles"]
+[ext_resource type="Shader" path="res://ocean_v3/rendering/underwater/ocean_underwater_particles_process.gdshader" id="3_particles_process"]
+[ext_resource type="Shader" path="res://ocean_v3/rendering/underwater/ocean_underwater_particles.gdshader" id="4_particles_render"]
 
 [sub_resource type="Environment" id="Environment_particles_benchmark"]
 background_mode = 1
@@ -10,6 +12,68 @@ ambient_light_source = 3
 ambient_light_color = Color(0.20, 0.35, 0.39, 1)
 ambient_light_energy = 0.55
 tonemap_mode = 2
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_underwater_particles_fine_process"]
+shader = ExtResource("3_particles_process")
+shader_parameter/emission_depth_min_m = 4.0
+shader_parameter/emission_depth_max_m = 50.0
+shader_parameter/emission_width_near_m = 12.0
+shader_parameter/emission_width_far_m = 60.0
+shader_parameter/emission_height_near_m = 8.0
+shader_parameter/emission_height_far_m = 30.0
+shader_parameter/layer_seed = 1.0
+shader_parameter/drift_speed = 0.05
+shader_parameter/velocity_influence = 0.15
+shader_parameter/max_flow_speed = 0.45
+shader_parameter/current_velocity = Vector3(0.008, 0.001, -0.006)
+shader_parameter/size_min = 0.005
+shader_parameter/size_max = 0.025
+shader_parameter/debug_size_multiplier = 1.0
+shader_parameter/max_particle_distance_m = 72.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_underwater_particles_near_process"]
+shader = ExtResource("3_particles_process")
+shader_parameter/emission_depth_min_m = 4.0
+shader_parameter/emission_depth_max_m = 50.0
+shader_parameter/emission_width_near_m = 12.0
+shader_parameter/emission_width_far_m = 60.0
+shader_parameter/emission_height_near_m = 8.0
+shader_parameter/emission_height_far_m = 30.0
+shader_parameter/layer_seed = 17.0
+shader_parameter/drift_speed = 0.05
+shader_parameter/velocity_influence = 0.15
+shader_parameter/max_flow_speed = 0.8
+shader_parameter/current_velocity = Vector3(0.014, 0.003, -0.01)
+shader_parameter/size_min = 0.02
+shader_parameter/size_max = 0.07
+shader_parameter/debug_size_multiplier = 1.0
+shader_parameter/max_particle_distance_m = 72.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_underwater_particles_fine_render"]
+shader = ExtResource("4_particles_render")
+shader_parameter/particle_color = Color(0.37, 0.58, 0.59, 0.032)
+shader_parameter/strength = 1.0
+shader_parameter/near_fade_start_m = 0.15
+shader_parameter/near_fully_visible_m = 0.7
+shader_parameter/far_fade_start_m = 10.0
+shader_parameter/far_fade_end_m = 20.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_underwater_particles_near_render"]
+shader = ExtResource("4_particles_render")
+shader_parameter/particle_color = Color(0.4, 0.63, 0.62, 0.06)
+shader_parameter/strength = 1.0
+shader_parameter/near_fade_start_m = 0.15
+shader_parameter/near_fully_visible_m = 0.7
+shader_parameter/far_fade_start_m = 10.0
+shader_parameter/far_fade_end_m = 20.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_underwater_particles_fine"]
+material = SubResource("ShaderMaterial_underwater_particles_fine_render")
+size = Vector2(1, 1)
+
+[sub_resource type="QuadMesh" id="QuadMesh_underwater_particles_near"]
+material = SubResource("ShaderMaterial_underwater_particles_near_render")
+size = Vector2(1, 1)
 
 [node name="OceanUnderwaterParticlesBenchmark" type="Node3D"]
 script = ExtResource("1_benchmark")
@@ -26,3 +90,27 @@ far = 100.0
 
 [node name="OceanUnderwaterParticles" type="Node3D" parent="."]
 script = ExtResource("2_particles")
+
+[node name="FineParticles" type="GPUParticles3D" parent="OceanUnderwaterParticles"]
+amount = 1000
+lifetime = 22.0
+preprocess = 22.0
+randomness = 0.35
+visibility_aabb = AABB(Vector3(-74, -74, -74), Vector3(148, 148, 148))
+emitting = false
+visible = false
+local_coords = false
+process_material = SubResource("ShaderMaterial_underwater_particles_fine_process")
+draw_pass_1 = SubResource("QuadMesh_underwater_particles_fine")
+
+[node name="NearParticles" type="GPUParticles3D" parent="OceanUnderwaterParticles"]
+amount = 140
+lifetime = 22.0
+preprocess = 22.0
+randomness = 0.35
+visibility_aabb = AABB(Vector3(-74, -74, -74), Vector3(148, 148, 148))
+emitting = false
+visible = false
+local_coords = false
+process_material = SubResource("ShaderMaterial_underwater_particles_near_process")
+draw_pass_1 = SubResource("QuadMesh_underwater_particles_near")
