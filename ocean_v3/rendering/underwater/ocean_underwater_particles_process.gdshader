@@ -78,19 +78,19 @@ void process() {
 	if (!RESTART) {
 		if (distance(TRANSFORM[3].xyz, camera_position_world) > max_particle_distance_m) {
 			ACTIVE = false;
-			return;
+		} else {
+			float phase = CUSTOM.w + TIME * (0.12 + particle_hash(CUSTOM.w + 40.0) * 0.10);
+			vec3 gentle_variation = vec3(
+				sin(phase),
+				0.35 * sin(phase * 0.71 + 1.7),
+				cos(phase * 0.83)
+			) * drift_speed * 0.035;
+			vec3 target_velocity = CUSTOM.xyz + gentle_variation
+				+ current_velocity + bounded_relative_flow();
+			// Follow changes in apparent flow without introducing a fast jitter or
+			// unbounded acceleration into the particle layer.
+			VELOCITY = mix(VELOCITY, target_velocity, clamp(DELTA * 0.8, 0.0, 1.0));
+			TRANSFORM[3].xyz += VELOCITY * DELTA;
 		}
-		float phase = CUSTOM.w + TIME * (0.12 + particle_hash(CUSTOM.w + 40.0) * 0.10);
-		vec3 gentle_variation = vec3(
-			sin(phase),
-			0.35 * sin(phase * 0.71 + 1.7),
-			cos(phase * 0.83)
-		) * drift_speed * 0.035;
-		vec3 target_velocity = CUSTOM.xyz + gentle_variation
-			+ current_velocity + bounded_relative_flow();
-		// Follow changes in apparent flow without introducing a fast jitter or
-		// unbounded acceleration into the particle layer.
-		VELOCITY = mix(VELOCITY, target_velocity, clamp(DELTA * 0.8, 0.0, 1.0));
-		TRANSFORM[3].xyz += VELOCITY * DELTA;
 	}
 }

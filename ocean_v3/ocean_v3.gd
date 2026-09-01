@@ -431,12 +431,12 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 # Compatibility aliases for scenes/scripts written before the detail controls
 # were renamed. They are serialized but intentionally hidden from the Inspector.
-@export_storage var underwater_snell_micro_refraction_strength: float:
+@export_storage var underwater_snell_micro_refraction_strength: float = 0.5:
 	get:
 		return underwater_snell_detail_strength
 	set(value):
 		underwater_snell_detail_strength = value
-@export_storage var underwater_snell_micro_refraction_max_px: float:
+@export_storage var underwater_snell_micro_refraction_max_px: float = 2.5:
 	get:
 		return underwater_snell_detail_max_px
 	set(value):
