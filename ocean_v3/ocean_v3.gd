@@ -14,6 +14,7 @@ const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_mana
 const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocean_caustics_manager.gd")
 const UNDERWATER_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_manager.gd")
 const WATER_LENS_SCRIPT := preload("res://ocean_v3/rendering/underwater/water_lens_fx.gd")
+const SEDIMENT_SYSTEM_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_sediment_system.gd")
 const UNDERWATER_ENTER_MARGIN_M := 0.05
 const UNDERWATER_EXIT_MARGIN_M := 0.05
 const PERF_PRESET_FULL := &"FULL"
@@ -427,9 +428,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 16)
+		underwater_debug_mode = clampi(value, 0, 18)
 		_request_visual_sync()
 
 @export_group("Underwater / Snell-TIR")
@@ -1429,6 +1430,7 @@ var _caustics_manager: Node
 var _underwater_manager: Node
 var _water_lens_fx: Node
 var _underwater_particles: Node
+var _sediment_system: Node
 var _camera_underwater := false
 var _underwater_factor := 0.0
 var _camera_water_surface_y := 0.0
@@ -1494,6 +1496,17 @@ func _ready() -> void:
 			add_child(_water_lens_fx)
 		_water_lens_fx.configure(self)
 		_underwater_particles = get_node_or_null(^"OceanUnderwaterParticles")
+		_sediment_system = get_node_or_null(^"OceanSedimentSystem")
+		if _sediment_system == null:
+			_sediment_system = SEDIMENT_SYSTEM_SCRIPT.new()
+			_sediment_system.name = &"OceanSedimentSystem"
+			add_child(_sediment_system)
+		var sediment_surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
+		var sediment_bathymetry: BathymetryData = null
+		var runtime_fft := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+		if runtime_fft != null:
+			sediment_bathymetry = runtime_fft.coastal_bathymetry_data
+		_sediment_system.configure(self, sediment_bathymetry, sediment_surface)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -1570,6 +1583,8 @@ func _sync_underwater_manager() -> void:
 		# suspended particles. The component owns presentation and camera-relative
 		# movement; it never queries the ocean simulation.
 		_underwater_particles.call("set_underwater_state", _camera_underwater)
+	if _sediment_system != null and is_instance_valid(_sediment_system):
+		_sediment_system.call("set_camera_underwater", _camera_underwater)
 	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 	var surface_material := surface.get_surface_material() if surface != null else null
 	if surface_material != null and is_instance_valid(surface_material):

@@ -82,7 +82,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
 	# are rendered by the surface material and must not turn this pass into a
 	# conflicting compositor visualization.
-	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 16) else 0
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 18) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:

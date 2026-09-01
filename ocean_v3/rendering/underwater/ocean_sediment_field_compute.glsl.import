@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cq6qkj4xyjntx"
+path="res://.godot/imported/ocean_sediment_field_compute.glsl-04bd5bd1e8688616a93c6ecf87079a33.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/underwater/ocean_sediment_field_compute.glsl"
+dest_files=["res://.godot/imported/ocean_sediment_field_compute.glsl-04bd5bd1e8688616a93c6ecf87079a33.res"]
+
+[params]
+

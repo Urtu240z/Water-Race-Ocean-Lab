@@ -153,6 +153,20 @@ func set_surface_shader_parameter(parameter: StringName, value: Variant) -> void
 	_set_surface_material_shader_parameter(parameter, value)
 
 
+func set_sediment_field(texture: Texture2D, enabled: bool, origin_xz: Vector2,
+		extent_m: Vector2, optics_strength: float, debug_mode: int) -> void:
+	## Clean binding point for the single persistent SedimentField. The surface
+	## material consumes it as an optical input; it does not own or simulate it.
+	for material in _all_materials():
+		material.set_shader_parameter(&"sediment_field_enabled", enabled and texture != null)
+		if texture != null:
+			material.set_shader_parameter(&"sediment_field_texture", texture)
+		material.set_shader_parameter(&"sediment_field_origin_xz", origin_xz)
+		material.set_shader_parameter(&"sediment_field_extent_m", extent_m)
+		material.set_shader_parameter(&"sediment_optics_strength", clampf(optics_strength, 0.0, 2.0))
+		material.set_shader_parameter(&"sediment_debug_mode", clampi(debug_mode, 0, 4))
+
+
 func sync_lod_debug_materials_from_surface() -> void:
 	# Kept as a compatibility entry point for OceanV3.  The former implementation
 	# enumerated every shader property and copied it to every dormant LOD material
@@ -589,6 +603,9 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_forced_warp_offset_xz", Vector2(37.0, 23.0))
 		material.set_shader_parameter(&"coastal_debug_gain", 1.0)
 		material.set_shader_parameter(&"coastal_delta_heatmap", false)
+		material.set_shader_parameter(&"sediment_field_enabled", false)
+		material.set_shader_parameter(&"sediment_optics_strength", 1.0)
+		material.set_shader_parameter(&"sediment_debug_mode", 0)
 		for index in 4:
 			material.set_shader_parameter("domain_%s_m" % ids[index], configs[index].domain_size_m)
 			material.set_shader_parameter("displacement_%s" % ids[index], displacements[index])

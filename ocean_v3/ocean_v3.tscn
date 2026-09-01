@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://cqg3ydt8w2tnp" path="res://ocean_v3/rendering/ocean_clipmap_config.gd" id="9_6m6ii"]
 [ext_resource type="Script" uid="uid://b6ng8kk0tyn71" path="res://ocean_v3/rendering/underwater/water_lens_fx.gd" id="10_lens"]
 [ext_resource type="Script" path="res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd" id="11_particles"]
+[ext_resource type="Script" path="res://ocean_v3/rendering/underwater/ocean_sediment_system.gd" id="12_sediment"]
 
 [sub_resource type="Resource" id="Resource_w8h77"]
 script = ExtResource("9_6m6ii")
@@ -31,6 +32,9 @@ script = ExtResource("10_lens")
 
 [node name="OceanUnderwaterParticles" type="Node3D" parent="."]
 script = ExtResource("11_particles")
+
+[node name="OceanSedimentSystem" type="Node3D" parent="."]
+script = ExtResource("12_sediment")
 
 [node name="OceanClipmapSurface" type="Node3D" parent="OpenOceanFFT" unique_id=140669600]
 script = ExtResource("2_surface")

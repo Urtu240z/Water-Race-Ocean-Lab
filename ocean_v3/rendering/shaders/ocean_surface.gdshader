@@ -99,6 +99,15 @@ uniform vec2 coastal_incoming_direction_xz = vec2(1.0, 0.0);
 uniform vec2 coastal_warp_origin_xz = vec2(0.0);
 uniform vec2 coastal_warp_extent_m = vec2(1.0);
 uniform float coastal_warp_detj_safe = 0.5;
+// Same persistent world-space concentration field feeds underwater particles
+// and above-water optical turbidity. This is not a second simulation.
+uniform bool sediment_field_enabled = false;
+uniform sampler2D sediment_field_texture : repeat_disable, filter_linear;
+uniform vec2 sediment_field_origin_xz = vec2(0.0);
+uniform vec2 sediment_field_extent_m = vec2(1.0);
+uniform float sediment_optics_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
+// 0 OFF, 1 FIELD, 2 SOURCE, 3 CLOUDS, 4 WISPS.
+uniform int sediment_debug_mode = 0;
 // Near-shore base geometry stabilization. These values are metres of baked
 // depth, not propagation thresholds. The envelope is world anchored and is
 // intentionally independent from warp confidence and clipmap distance.
@@ -472,6 +481,23 @@ float periodic_grid(vec2 world_xz, float domain_size_m) {
 
 float shore_data_inside(vec2 uv) {
 	return step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+}
+
+float sediment_concentration_at(vec2 world_xz) {
+	if (!sediment_field_enabled) return 0.0;
+	vec2 uv = (world_xz - sediment_field_origin_xz) / max(sediment_field_extent_m, vec2(0.001));
+	float inside = shore_data_inside(uv);
+	return inside * clamp(textureLod(sediment_field_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0).r, 0.0, 1.0);
+}
+
+float sediment_source_proxy_at(vec2 world_xz) {
+	if (!sediment_field_enabled) return 0.0;
+	vec2 uv = coastal_uv(world_xz);
+	float inside = shore_data_inside(uv);
+	float depth_m = max(textureLod(coastal_metrics_texture, clamp(uv, vec2(0.0), vec2(1.0)), 0.0).r, 0.0);
+	float shallow = 1.0 - smoothstep(1.0, 5.0, depth_m);
+	float broad = 0.5 + 0.5 * sin(dot(world_xz, vec2(0.021, -0.016)) + coastal_time_s * 0.061);
+	return inside * shallow * mix(0.22, 1.0, broad);
 }
 
 void shore_weights_from_depth(float depth_m, out float vertical_weight, out float horizontal_weight) {
@@ -2090,6 +2116,9 @@ void fragment() {
 	}
 	else {
 		vec3 color = lod_debug_index >= 0.0 ? level_color(lod_debug_index) : base_color;
+		float sediment_concentration = sediment_concentration_at(ocean_base_xz);
+		float sediment_air_factor = sediment_field_enabled && !underwater_camera_active ? 1.0 : 0.0;
+		float sediment_optical_factor = sediment_concentration * sediment_air_factor * clamp(sediment_optics_strength, 0.0, 2.0);
 		float active_maximum_optical_depth = underwater_camera_active
 			? maximum_optical_depth_underwater_m
 			: maximum_optical_depth_above_m;
@@ -2855,8 +2884,10 @@ void fragment() {
 		color = vec3(sspr_facet_confidence);
 	}
 
-	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || (underwater_camera_active && ((underwater_debug_mode >= 5 && underwater_debug_mode <= 7) || (underwater_debug_mode >= 11 && underwater_debug_mode <= 12)));
+	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || sediment_debug_mode > 0 || (underwater_camera_active && ((underwater_debug_mode >= 5 && underwater_debug_mode <= 7) || (underwater_debug_mode >= 11 && underwater_debug_mode <= 12)));
 	if (unlit) {
+		if (sediment_debug_mode == 1) color = vec3(sediment_concentration);
+		else if (sediment_debug_mode == 2) color = vec3(sediment_source_proxy_at(ocean_base_xz));
 		ALBEDO = vec3(0.0);
 		EMISSION = color;
 		ROUGHNESS = 1.0;
@@ -3085,19 +3116,26 @@ void fragment() {
 			);
 			bottom_depth_visibility *= optical_seabed_confidence;
 			float effective_seabed_match = original_seabed_match;
-			float seabed_transmission_weight = mix(
-				1.0,
-				bottom_depth_visibility,
-				effective_seabed_match
-			);
+		float seabed_transmission_weight = mix(
+			1.0,
+			bottom_depth_visibility,
+			effective_seabed_match
+		);
+		seabed_transmission_weight *= 1.0 - 0.88 * clamp(sediment_optical_factor, 0.0, 1.0);
 
 			// R1 Beer-Lambert remains RGB and monotonic, but uses the confidence-
 			// blended optical depth so shallow water stays readable at distance while
 			// open-ocean rays retain their view-path behavior.
-			vec3 transmittance_rgb = exp(
-				-max(absorption_coeff_rgb, vec3(0.0)) * transmission_optical_depth_m
-				+ vec3(absorption_density + shallow_depth_range) * 0.0
-			);
+		vec3 transmittance_rgb = exp(
+			-max(absorption_coeff_rgb, vec3(0.0)) * transmission_optical_depth_m
+			+ vec3(absorption_density + shallow_depth_range) * 0.0
+		);
+		// Above-water sediment adds local extinction to the existing Beer-Lambert
+		// path. Underwater medium optics remain owned by the compositor.
+		transmittance_rgb *= exp(
+			-vec3(0.22, 0.11, 0.07) * sediment_optical_factor
+			* max(transmission_optical_depth_m, 0.25)
+		);
 			float transmission_path_saturation_factor = clamp(
 				transmission_optical_depth_m / max(active_maximum_optical_depth, 0.001),
 				0.0,
@@ -3186,7 +3224,8 @@ void fragment() {
 			// Turbidity is an independent scattering density in inverse metres. The
 			// exponential grows with optical thickness and saturates in deep water;
 			// it is deliberately not derived from absorption_coeff_rgb.
-			float scattering_density_m = 0.22 * clamp(water_turbidity, 0.0, 2.0);
+			float scattering_density_m = 0.22 * clamp(water_turbidity, 0.0, 2.0)
+				+ sediment_optical_factor * 0.35;
 			float scattering_depth_response = 1.0 - exp(
 				-max(scattering_density_m, 0.0) * max(transmission_optical_depth_m, 0.0)
 			);
@@ -3213,6 +3252,11 @@ void fragment() {
 				deep_scattering_base_color,
 				scattering_color.rgb,
 				scattering_tint_influence
+			);
+			scattering_tint = mix(
+				scattering_tint,
+				vec3(0.34, 0.27, 0.17),
+				clamp(sediment_optical_factor * 0.16, 0.0, 0.16)
 			);
 			// Treat scattering as a bounded share of the absorbed body response.
 			// This preserves the R1 body at strength 0 and avoids stacking the
@@ -3589,6 +3633,7 @@ void fragment() {
 					bottom_depth_visibility,
 					effective_seabed_match
 				);
+				seabed_transmission_weight *= 1.0 - 0.88 * clamp(sediment_optical_factor, 0.0, 1.0);
 				// R3 optical body: refracted transmission plus one bounded body/scatter
 				// response. effective_transmittance_rgb is production-only; the pure
 				// R1 transmittance_rgb remains available to debug mode 2.
