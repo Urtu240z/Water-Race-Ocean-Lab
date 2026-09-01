@@ -10,6 +10,7 @@ uniform float far_fade_start_m = 10.0;
 uniform float far_fade_end_m = 20.0;
 
 varying float particle_distance_m;
+varying float particle_lifetime_fade;
 
 void vertex() {
 	// Billboard in the shader so the custom procedural alpha remains cheap and
@@ -23,6 +24,7 @@ void vertex() {
 		+ camera_up * VERTEX.y * particle_size;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(billboard_world, 1.0);
 	particle_distance_m = distance(CAMERA_POSITION_WORLD, particle_center_world);
+	particle_lifetime_fade = clamp(length(MODEL_MATRIX[2].xyz), 0.0, 1.0);
 }
 
 void fragment() {
@@ -38,7 +40,7 @@ void fragment() {
 
 	float near_fade = smoothstep(near_fade_start_m, near_fully_visible_m, particle_distance_m);
 	float far_fade = 1.0 - smoothstep(far_fade_start_m, far_fade_end_m, particle_distance_m);
-	float alpha = soft_disc * near_fade * far_fade * particle_color.a * strength;
+	float alpha = soft_disc * near_fade * far_fade * particle_lifetime_fade * particle_color.a * strength;
 
 	ALBEDO = particle_color.rgb;
 	ALPHA = alpha;

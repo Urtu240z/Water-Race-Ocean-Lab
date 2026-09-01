@@ -41,13 +41,22 @@ func _push_settings() -> void:
 	_effect.enabled = enabled and (camera_underwater or debug_mode == 4)
 	var absorption: Vector3 = _settings.get("absorption", Vector3(0.35, 0.14, 0.10))
 	var scattering_color: Color = _settings.get("scattering_color", Color(0.02, 0.32, 0.42, 1.0))
+	var sun_direction: Vector3 = _settings.get("sun_direction", Vector3(0.0, 1.0, 0.0))
+	var sun_color: Color = _settings.get("sun_color", Color.WHITE)
+	var pattern_texture: Texture2D = _settings.get("sunrays_pattern_texture")
 	_effect.set_settings(
 		enabled, float(_settings.get("sea_level", 0.0)),
 		camera_underwater, float(_settings.get("camera_factor", 0.0)),
 		float(_settings.get("transition_width", 0.12)), absorption,
 		float(_settings.get("absorption_scale", 1.0)), scattering_color,
 		float(_settings.get("scattering_strength", 1.0)), float(_settings.get("scattering_density", 0.15)),
-		float(_settings.get("max_distance", 120.0)), debug_mode)
+		float(_settings.get("max_distance", 120.0)), debug_mode, sun_direction, sun_color,
+		float(_settings.get("sun_energy", 0.0)), bool(_settings.get("sunrays_enabled", true)),
+		float(_settings.get("sunrays_strength", 0.35)), float(_settings.get("sunrays_anisotropy", 0.72)),
+		float(_settings.get("sunrays_density", 0.08)), float(_settings.get("sunrays_max_distance", 30.0)),
+		float(_settings.get("sunrays_pattern_scale", 1.0)), float(_settings.get("sunrays_pattern_contrast", 1.4)),
+		float(_settings.get("sunrays_animation_speed", 0.12)), pattern_texture,
+		float(_settings.get("sunrays_time", 0.0)))
 
 func _initialize() -> void:
 	if _attached or Engine.is_editor_hint() or not is_inside_tree(): return
@@ -82,7 +91,8 @@ func _exit_tree() -> void:
 			effects.erase(_effect)
 			_compositor.compositor_effects = effects
 		_effect.enabled = false
-		_effect.set_settings(false, 0.0, false, 0.0, 0.12, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0)
+		_effect.set_settings(false, 0.0, false, 0.0, 0.12, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0,
+			Vector3(0.0, 1.0, 0.0), Color.WHITE, 0.0, false, 0.0, 0.72, 0.08, 30.0, 1.0, 1.4, 0.12, null, 0.0)
 		RenderingServer.call_on_render_thread(_effect.free_resources)
 	_effect = null
 	_attached = false

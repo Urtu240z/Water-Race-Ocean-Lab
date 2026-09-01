@@ -17,6 +17,8 @@ uniform vec3 camera_velocity = vec3(0.0);
 uniform float size_min = 0.005;
 uniform float size_max = 0.025;
 uniform float debug_size_multiplier = 1.0;
+uniform float lifetime_fade_seconds = 2.0;
+uniform float particle_lifetime_seconds = 22.0;
 uniform vec3 camera_position_world = vec3(0.0);
 uniform float max_particle_distance_m = 72.0;
 
@@ -58,7 +60,9 @@ void start() {
 	TRANSFORM = mat4(1.0);
 	TRANSFORM[0][0] = size;
 	TRANSFORM[1][1] = size;
-	TRANSFORM[2][2] = size;
+	// The quad only uses the X/Y axes. Z carries the normalized lifecycle fade
+	// to the spatial render shader without relying on INSTANCE_CUSTOM there.
+	TRANSFORM[2][2] = 0.0;
 	// local_coords=false means TRANSFORM is interpreted in world space. The
 	// random range above is authored in emitter-local metres, so apply the
 	// engine-provided emitter transform exactly once at spawn time.
@@ -70,16 +74,30 @@ void start() {
 	// while keeping the overall motion calm.
 	drift.y += (particle_hash(seed + 22.0) * 2.0 - 1.0) * drift_speed * 0.35;
 	CUSTOM.xyz = drift;
-	CUSTOM.w = particle_hash(seed + 23.0) * 6.2831853;
+	// CUSTOM.w stores the global spawn time. The phase used for the gentle
+	// variation is reconstructed from INDEX so the drift vector remains intact.
+	CUSTOM.w = TIME;
 	VELOCITY = drift + current_velocity + bounded_relative_flow();
 }
 
 void process() {
+	float fade_duration = min(max(lifetime_fade_seconds, 0.0), particle_lifetime_seconds * 0.5);
+	float lifecycle_fade = 1.0;
+	if (fade_duration > 0.001) {
+		float particle_age_seconds = max(TIME - CUSTOM.w, 0.0);
+		float fade_in = smoothstep(0.0, fade_duration, particle_age_seconds);
+		float fade_out_start = particle_lifetime_seconds - fade_duration;
+		float fade_out = 1.0 - smoothstep(fade_out_start, particle_lifetime_seconds, particle_age_seconds);
+		lifecycle_fade = fade_in * fade_out;
+	}
+	TRANSFORM[2][2] = lifecycle_fade;
 	if (!RESTART) {
 		if (distance(TRANSFORM[3].xyz, camera_position_world) > max_particle_distance_m) {
 			ACTIVE = false;
 		} else {
-			float phase = CUSTOM.w + TIME * (0.12 + particle_hash(CUSTOM.w + 40.0) * 0.10);
+			float phase_seed = float(INDEX) + layer_seed * 97.0;
+			float phase = particle_hash(phase_seed + 23.0) * 6.2831853
+				+ TIME * (0.12 + particle_hash(phase_seed + 40.0) * 0.10);
 			vec3 gentle_variation = vec3(
 				sin(phase),
 				0.35 * sin(phase * 0.71 + 1.7),

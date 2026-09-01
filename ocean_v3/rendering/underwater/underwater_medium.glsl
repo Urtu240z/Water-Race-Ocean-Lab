@@ -5,8 +5,9 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D scene_depth;
+layout(set = 0, binding = 2) uniform sampler2D sunrays_pattern_texture;
 
-layout(set = 0, binding = 2, std140) uniform Params {
+layout(set = 0, binding = 3, std140) uniform Params {
 	mat4 inverse_view_projection;
 	vec4 viewport;
 	vec4 camera; // xyz, binary underwater state
@@ -14,6 +15,11 @@ layout(set = 0, binding = 2, std140) uniform Params {
 	vec4 absorption; // rgb, scattering strength
 	vec4 scattering; // rgb, scattering density
 	vec4 state; // underwater factor, debug mode, enabled, unused
+	vec4 sun; // direction from the water toward the sun, energy
+	vec4 sun_color; // rgb, unused
+	vec4 sunrays; // enabled, strength, anisotropy, density
+	vec4 sunrays_pattern; // scale, contrast, animation speed, time
+	vec4 sunrays_extra; // maximum distance, unused
 } params;
 
 const float EPSILON = 0.00001;
@@ -68,6 +74,45 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv) {
 	return camera_below ? surface_distance : ray_length - surface_distance;
 }
 
+bool surface_intersection_world(vec3 camera_world, vec3 ray_direction, float sea_level,
+		out vec3 surface_world) {
+	bool surface_hit;
+	float surface_distance = distance_to_plane(camera_world, ray_direction, sea_level, surface_hit);
+	if (!surface_hit) return false;
+	surface_world = camera_world + ray_direction * surface_distance;
+	return finite_vec3(surface_world);
+}
+
+float sunrays_phase_response(vec3 view_dir_world, vec3 sun_direction_world) {
+	// HG keeps the directional lobe cheap while the extra gate makes the back
+	// side effectively dark enough for underwater gameplay.
+	float cos_theta = clamp(dot(view_dir_world, -sun_direction_world), -1.0, 1.0);
+	float g = clamp(params.sunrays.z, 0.0, 0.95);
+	float denom = 1.0 + g * g - 2.0 * g * cos_theta;
+	float phase = (1.0 - g * g) / max(pow(denom, 1.5), 0.001);
+	float forward_denom = 1.0 + g * g - 2.0 * g;
+	float forward_phase = (1.0 - g * g) / max(pow(forward_denom, 1.5), 0.001);
+	float forward_gate = smoothstep(-0.15, 0.35, cos_theta);
+	return clamp(phase / max(forward_phase, 0.001) * forward_gate, 0.0, 1.0);
+}
+
+float sunrays_pattern(vec3 surface_world) {
+	if (params.state.w < 0.5 || params.sunrays_pattern.y <= EPSILON) return 0.5;
+	float scale = max(params.sunrays_pattern.x, 0.01);
+	float time = params.sunrays_pattern.w * params.sunrays_pattern.z;
+	vec2 surface_xz = surface_world.xz;
+	// Both lobes use the existing caustics texture, but different world scales
+	// and slow directions keep the breakup broad, soft, and non-grid-like.
+	vec2 uv_a = surface_xz * (0.006 * scale) + vec2(time * 0.018, -time * 0.011);
+	vec2 uv_b = surface_xz * (0.015 * scale) + vec2(-time * 0.012, time * 0.017);
+	float p1 = texture(sunrays_pattern_texture, uv_a).r;
+	float p2 = texture(sunrays_pattern_texture, uv_b).r;
+	float pattern = mix(p1, p2, 0.35);
+	float shaped = smoothstep(0.38, 0.76, pattern);
+	float contrast = clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
+	return mix(0.5, 0.35 + 0.65 * shaped, contrast);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = ivec2(params.viewport.xy);
@@ -89,6 +134,44 @@ void main() {
 	bool scene_valid = raw_depth > EPSILON && raw_depth <= 1.000001 && reconstruct_world(uv, raw_depth, scene_world);
 	float water_path_m = clamp(water_path_for_scene(scene_world, scene_valid, uv), 0.0, params.medium.z);
 	if (isnan(water_path_m) || isinf(water_path_m)) water_path_m = 0.0;
+	vec3 sample_world = scene_world;
+	vec3 surface_world = vec3(0.0);
+	bool surface_valid = false;
+	float phase_response = 0.0;
+	float depth_response = 0.0;
+	float shaft_pattern = 0.5;
+	vec3 sunray_contribution = vec3(0.0);
+	if (params.sunrays.x > 0.5) {
+		if (!scene_valid) reconstruct_world(uv, 0.0, sample_world);
+		vec3 sample_ray = sample_world - params.camera.xyz;
+		float sample_ray_length = length(sample_ray);
+		bool view_valid = finite_vec3(sample_world) && sample_ray_length > EPSILON
+			&& !isnan(sample_ray_length) && !isinf(sample_ray_length);
+		if (view_valid) {
+			vec3 view_dir_world = normalize(-sample_ray);
+			phase_response = sunrays_phase_response(view_dir_world, normalize(params.sun.xyz));
+			surface_valid = surface_intersection_world(
+				params.camera.xyz, normalize(sample_ray), params.medium.x, surface_world);
+			if (water_path_m > EPSILON) {
+				float path_for_sunrays = min(water_path_m, max(params.sunrays_extra.x, EPSILON));
+				float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * path_for_sunrays);
+				vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0))
+					* max(params.medium.w, 0.0) * path_for_sunrays);
+				float trans_luma = dot(transmittance, vec3(0.2126, 0.7152, 0.0722));
+				float max_sunray_distance = max(params.sunrays_extra.x, EPSILON);
+				float far_fade = 1.0 - smoothstep(max_sunray_distance * 0.35,
+					max_sunray_distance, water_path_m);
+				depth_response = clamp(build_up * trans_luma * far_fade, 0.0, 1.0);
+				shaft_pattern = surface_valid ? sunrays_pattern(surface_world) : 0.5;
+				vec3 sunray_color = params.sun_color.rgb * max(params.sun.w, 0.0)
+					* params.state.x * params.sunrays.y * phase_response
+					* depth_response * shaft_pattern;
+				float sunray_luma = dot(sunray_color, vec3(0.2126, 0.7152, 0.0722));
+				if (sunray_luma > 0.75) sunray_color *= 0.75 / sunray_luma;
+				sunray_contribution = max(sunray_color, vec3(0.0));
+			}
+		}
+	}
 	if (debug_mode == 1) {
 		color.rgb = vec3(water_path_m / max(params.medium.z, EPSILON));
 	} else if (debug_mode == 2) {
@@ -98,10 +181,22 @@ void main() {
 		color.rgb = max(params.scattering.rgb, vec3(0.0)) * response * max(params.absorption.w, 0.0);
 	} else if (debug_mode == 4) {
 		color.rgb = vec3(params.camera.w, params.state.x, 0.0);
+	} else if (debug_mode == 13) {
+		color.rgb = vec3(phase_response);
+	} else if (debug_mode == 14) {
+		color.rgb = vec3(shaft_pattern);
+	} else if (debug_mode == 15) {
+		color.rgb = vec3(depth_response);
+	} else if (debug_mode == 16) {
+		color.rgb = sunray_contribution;
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);
-		color.rgb = color.rgb * transmittance + max(params.scattering.rgb, vec3(0.0)) * scattering_response * max(params.absorption.w, 0.0);
+		// Existing isotropic medium scattering stays intact; sunrays are an
+		// additional directional term and never replace this result.
+		color.rgb = color.rgb * transmittance
+			+ max(params.scattering.rgb, vec3(0.0)) * scattering_response * max(params.absorption.w, 0.0)
+			+ sunray_contribution;
 	}
 	imageStore(color_image, pixel, color);
 }

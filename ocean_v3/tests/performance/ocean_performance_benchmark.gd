@@ -26,6 +26,7 @@ const BASE_PAIRED_TESTS := [
 	"NO_BASE_OPTICS", "NO_BASE_NEAR_SSR", "NO_BASE_CREST_SHAPE",
 	"NO_BASE_SURFACE_DETAIL", "NO_BASE_REFRACTION_WAVE", "NO_BASE_DEBUG_REFLECTION"
 ]
+const SUNRAYS_PRESETS := ["SUNRAYS_OFF", "SUNRAYS_ANALYTIC", "SUNRAYS_FULL"]
 const GPU_TIMING_UNAVAILABLE := "unavailable"
 
 @export_group("Benchmark schedule")
@@ -72,6 +73,7 @@ var _paired_test_index := 0
 var _paired_full_statistics: Dictionary = {}
 var _paired_deltas: Array[Dictionary] = []
 var _caustics_paired := false
+var _sunrays_benchmark := false
 
 
 func _ready() -> void:
@@ -166,6 +168,8 @@ func _read_command_line_overrides() -> void:
 		elif argument == "--ocean-benchmark-base-paired":
 			run_mode = "PAIRED"
 			_paired_baseline_preset = "BASE"
+		elif argument == "--ocean-benchmark-sunrays":
+			_sunrays_benchmark = true
 		elif argument.begins_with("--ocean-benchmark-paired-tests="):
 			_paired_test_filter = PackedStringArray(argument.get_slice("=", 1).split(",", false))
 		elif argument.begins_with("--ocean-benchmark-paired-repetitions="):
@@ -182,7 +186,9 @@ func _read_command_line_overrides() -> void:
 
 func _benchmark_presets() -> Array:
 	if full_only:
-		return ["FULL"]
+		return ["SUNRAYS_FULL"] if _sunrays_benchmark else ["FULL"]
+	if _sunrays_benchmark:
+		return SUNRAYS_PRESETS.duplicate()
 	if run_mode.to_upper() == "PAIRED":
 		return [_paired_baseline_preset] + _paired_tests()
 	var result: Array = CORE_PRESETS.duplicate()
@@ -238,6 +244,14 @@ func _set_clean_benchmark_state() -> void:
 		_clock.reset_simulation(true)
 	_ocean.perf_overlay_enabled = false
 	_ocean.foam_debug_mode = 0
+	_ocean.underwater_enabled = true
+	_ocean.underwater_debug_mode = 0
+	if _sunrays_benchmark:
+		# Keep the benchmark underwater and aimed through a moderate surface path
+		# so all three cases exercise the same existing compositor workload.
+		_camera.global_position = Vector3(0.0, -5.0, 36.0)
+		_camera.look_at(Vector3(0.0, 10.0, -20.0), Vector3.UP)
+		_ocean.caustics_enabled = false
 	# Opt-in P0/P1 workload. Existing benchmark suites preserve their historical
 	# visual baseline unless this explicit paired mode is requested.
 	_ocean.caustics_enabled = _caustics_paired
@@ -248,6 +262,13 @@ func _set_clean_benchmark_state() -> void:
 
 
 func _apply_current_configuration() -> void:
+	if _sunrays_benchmark:
+		_current_preset = String(_benchmark_presets()[_preset_index])
+		_ocean.underwater_sunrays_enabled = _current_preset != "SUNRAYS_OFF"
+		_ocean.underwater_sunrays_strength = 0.35
+		_ocean.underwater_sunrays_pattern_contrast = 0.0 if _current_preset == "SUNRAYS_ANALYTIC" else 1.4
+		print("PERF-SUNRAYS: repetition %d/%d -> %s" % [_repetition_index + 1, repetitions, _current_preset])
+		return
 	if _paired_mode:
 		_current_preset = _paired_baseline_preset if _paired_side_full else String(_paired_tests()[_paired_test_index])
 	else:
@@ -542,13 +563,14 @@ func _build_summary() -> String:
 		lines.append("  Min:       %8.4f ms | Max:    %8.4f ms | Avg FPS: %8.2f" % [aggregate["min_ms"], aggregate["max_ms"], aggregate["avg_fps"]])
 		lines.append("  Run variance: mean %.4f ms | stdev %.4f ms | range %.4f..%.4f ms" % [aggregate["run_mean_ms"], aggregate["run_stdev_ms"], aggregate["run_min_ms"], aggregate["run_max_ms"]])
 		lines.append("  CPU monitors: process=%s ms | physics=%s ms" % [_summary_value(aggregate["process_ms"]), _summary_value(aggregate["physics_ms"])])
-	var full := _aggregate_for(_paired_baseline_preset if _paired_mode else "FULL")
+	var baseline_name := _paired_baseline_preset if _paired_mode else ("SUNRAYS_OFF" if _sunrays_benchmark else "FULL")
+	var full := _aggregate_for(baseline_name)
 	lines.append("")
-	lines.append("ESTIMATED MARGINAL FRAME COST RELATIVE TO %s" % (_paired_baseline_preset if _paired_mode else "FULL"))
+	lines.append("ESTIMATED MARGINAL FRAME COST RELATIVE TO %s" % baseline_name)
 	lines.append("delta_ms = baseline_avg_ms - TEST_avg_ms; interactions are not additive costs")
 	for preset in _benchmark_presets():
 		var name := String(preset)
-		if name == (_paired_baseline_preset if _paired_mode else "FULL"):
+		if name == baseline_name:
 			continue
 		var aggregate := _aggregate_for(name)
 		var delta_ms: float = full["avg_ms"] - aggregate["avg_ms"]

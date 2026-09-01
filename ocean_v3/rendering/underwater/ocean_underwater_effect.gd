@@ -3,7 +3,7 @@ class_name OceanUnderwaterEffect
 extends CompositorEffect
 
 const SHADER_PATH := "res://ocean_v3/rendering/underwater/underwater_medium.glsl"
-const PARAMS_BYTES := 160
+const PARAMS_BYTES := 240
 const THREAD_SIZE := 8
 
 var _rd: RenderingDevice
@@ -24,6 +24,19 @@ var _scattering_strength := 1.0
 var _scattering_density := 0.15
 var _max_distance := 120.0
 var _debug_mode := 0
+var _sun_direction := Vector3(0.0, 1.0, 0.0)
+var _sun_color := Color.WHITE
+var _sun_energy := 0.0
+var _sunrays_enabled := true
+var _sunrays_strength := 0.35
+var _sunrays_anisotropy := 0.72
+var _sunrays_density := 0.08
+var _sunrays_max_distance := 30.0
+var _sunrays_pattern_scale := 1.0
+var _sunrays_pattern_contrast := 1.4
+var _sunrays_animation_speed := 0.12
+var _sunrays_pattern_texture: Texture2D
+var _sunrays_time := 0.0
 var _dispatch_count := 0
 
 func _init() -> void:
@@ -35,7 +48,12 @@ func _init() -> void:
 func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, camera_factor: float,
 		transition_width: float, absorption: Vector3, absorption_scale: float,
 		scattering_color: Color, scattering_strength: float, scattering_density: float,
-		max_distance: float, debug_mode: int) -> void:
+		max_distance: float, debug_mode: int, sun_direction: Vector3, sun_color: Color,
+		sun_energy: float, sunrays_enabled: bool, sunrays_strength: float,
+		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
+		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
+		sunrays_animation_speed: float, sunrays_pattern_texture: Texture2D,
+		sunrays_time: float) -> void:
 	_mutex.lock()
 	_enabled = is_enabled
 	_sea_level = sea_level
@@ -48,9 +66,23 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_scattering_strength = clampf(scattering_strength, 0.0, 4.0)
 	_scattering_density = clampf(scattering_density, 0.0, 2.0)
 	_max_distance = clampf(max_distance, 1.0, 500.0)
-	# The compositor owns only medium diagnostics 0..4. Snell diagnostics are
-	# rendered by the surface material and must not turn this pass into CAMERA_STATE.
-	_debug_mode = debug_mode if debug_mode <= 4 else 0
+	_sun_direction = sun_direction.normalized() if sun_direction.length_squared() > 0.000001 else Vector3(0.0, 1.0, 0.0)
+	_sun_color = sun_color
+	_sun_energy = maxf(sun_energy, 0.0)
+	_sunrays_enabled = sunrays_enabled
+	_sunrays_strength = clampf(sunrays_strength, 0.0, 1.0)
+	_sunrays_anisotropy = clampf(sunrays_anisotropy, 0.0, 0.95)
+	_sunrays_density = clampf(sunrays_density, 0.0, 2.0)
+	_sunrays_max_distance = clampf(sunrays_max_distance, 1.0, 100.0)
+	_sunrays_pattern_scale = clampf(sunrays_pattern_scale, 0.05, 10.0)
+	_sunrays_pattern_contrast = clampf(sunrays_pattern_contrast, 0.0, 4.0)
+	_sunrays_animation_speed = clampf(sunrays_animation_speed, 0.0, 2.0)
+	_sunrays_pattern_texture = sunrays_pattern_texture
+	_sunrays_time = sunrays_time
+	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
+	# are rendered by the surface material and must not turn this pass into a
+	# conflicting compositor visualization.
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 16) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:
@@ -106,6 +138,19 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var scattering_density := _scattering_density
 	var max_distance := _max_distance
 	var debug_mode := _debug_mode
+	var sun_direction := _sun_direction
+	var sun_color := _sun_color
+	var sun_energy := _sun_energy
+	var sunrays_enabled := _sunrays_enabled
+	var sunrays_strength := _sunrays_strength
+	var sunrays_anisotropy := _sunrays_anisotropy
+	var sunrays_density := _sunrays_density
+	var sunrays_max_distance := _sunrays_max_distance
+	var sunrays_pattern_scale := _sunrays_pattern_scale
+	var sunrays_pattern_contrast := _sunrays_pattern_contrast
+	var sunrays_animation_speed := _sunrays_animation_speed
+	var sunrays_pattern_texture := _sunrays_pattern_texture
+	var sunrays_time := _sunrays_time
 	_mutex.unlock()
 	# In normal AIR mode this compositor remains attached but does no GPU work;
 	# debug modes intentionally keep the pass alive so CAMERA_STATE can be seen.
@@ -132,7 +177,15 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(sea_level); params.append(transition_width); params.append(max_distance); params.append(absorption_scale)
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
-	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0); params.append(0.0)
+	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0)
+	params.append(1.0 if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid() else 0.0)
+	params.append(sun_direction.x); params.append(sun_direction.y); params.append(sun_direction.z); params.append(sun_energy)
+	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(0.0)
+	params.append(1.0 if sunrays_enabled and sunrays_strength > 0.0 else 0.0)
+	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
+	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
+	params.append(sunrays_animation_speed); params.append(sunrays_time)
+	params.append(sunrays_max_distance); params.append(0.0); params.append(0.0); params.append(0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -143,11 +196,20 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	depth_uniform.binding = 1
 	depth_uniform.add_id(_sampler)
 	depth_uniform.add_id(depth_texture)
+	var pattern_uniform := RDUniform.new()
+	pattern_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	pattern_uniform.binding = 2
+	pattern_uniform.add_id(_sampler)
+	var pattern_texture_rid := depth_texture
+	if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid():
+		var candidate_rid := RenderingServer.texture_get_rd_texture(sunrays_pattern_texture.get_rid(), true)
+		if candidate_rid.is_valid(): pattern_texture_rid = candidate_rid
+	pattern_uniform.add_id(pattern_texture_rid)
 	var params_uniform := RDUniform.new()
 	params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-	params_uniform.binding = 2
+	params_uniform.binding = 3
 	params_uniform.add_id(_params_buffer)
-	var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, [color_uniform, depth_uniform, params_uniform])
+	var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, [color_uniform, depth_uniform, pattern_uniform, params_uniform])
 	if not uniform_set.is_valid(): return
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, _pipeline)

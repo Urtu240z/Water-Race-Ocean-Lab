@@ -9,9 +9,8 @@ UNDERWATER   -> both GPU layers enabled
 ```
 
 The component is independent of `lab/`, FFT, OceanQuery, bathymetry, water
-height, physics, compositors, SubViewports, and compute shaders. The base
-`ocean_v3.tscn` scene contains two authored `GPUParticles3D` nodes with
-one-quad procedural spatial material each:
+height, physics, compositors, SubViewports, and compute shaders. It creates two
+`GPUParticles3D` nodes with one-quad procedural spatial material each:
 
 | layer | default amount | size range | role |
 | --- | ---: | ---: | --- |
@@ -20,12 +19,11 @@ one-quad procedural spatial material each:
 
 The particle process shader initializes positions in a forward frustum starting
 4 m in front of the camera and reaching 50 m by default, widening to 60 m at
-the far end. It combines per-particle drift, low-frequency vertical variation,
-a small current,
+the far end. It combines per-particle drift, low-frequency vertical variation, a small current,
 and bounded `-camera_velocity * velocity_influence`. The random position is
 emitter-local and is converted with Godot's `EMISSION_TRANSFORM` before it is
 written to the world-space particle transform. Existing particles remain in
-world space (`local_coords=false`) while the authored emitter transform follows
+world space (`local_coords=false`) while only the emitter translation follows
 the active camera. The component never calls `restart()`, so following the
 camera does not reseed or reset the visible population each frame.
 
@@ -45,7 +43,10 @@ The Inspector exposes artist-facing appearance controls under
   `underwater_particles_near_strength` control visibility up to 8x.
 - `underwater_particles_fine_size_scale` and
   `underwater_particles_near_size_scale` enlarge or reduce the particle
-sprites without changing the GPU simulation or particle counts.
+  sprites without changing the GPU simulation or particle counts.
+- `underwater_particles_lifetime_fade_seconds` controls the GPU fade-in and
+  fade-out duration for each particle; the default is 2 seconds at both ends
+  of its lifetime.
 
 The spawn controls are also exposed in the Inspector: near/far distance,
 near/far width and height, plus `underwater_particles_cull_distance_m` (72 m by

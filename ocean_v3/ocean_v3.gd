@@ -388,10 +388,48 @@ var _performance_overlay_label: Label
 		underwater_max_optical_distance_m = clampf(value, 1.0, 500.0)
 		_request_visual_sync()
 
-@export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR") var underwater_debug_mode := 0:
+@export_group("Underwater / Sun Rays")
+@export var underwater_sunrays_enabled := true:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 12)
+		underwater_sunrays_enabled = value
+		_request_visual_sync()
+@export_range(0.0, 1.0, 0.01) var underwater_sunrays_strength := 0.35:
+	set(value):
+		underwater_sunrays_strength = clampf(value, 0.0, 1.0)
+		_request_visual_sync()
+@export_color_no_alpha var underwater_sunrays_color := Color(0.78, 0.95, 1.0, 1.0):
+	set(value):
+		underwater_sunrays_color = value
+		_request_visual_sync()
+@export_range(0.0, 0.95, 0.01) var underwater_sunrays_anisotropy := 0.72:
+	set(value):
+		underwater_sunrays_anisotropy = clampf(value, 0.0, 0.95)
+		_request_visual_sync()
+@export_range(0.0, 2.0, 0.01) var underwater_sunrays_density := 0.08:
+	set(value):
+		underwater_sunrays_density = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+@export_range(1.0, 100.0, 1.0, "suffix: m") var underwater_sunrays_max_distance_m := 30.0:
+	set(value):
+		underwater_sunrays_max_distance_m = clampf(value, 1.0, 100.0)
+		_request_visual_sync()
+@export_range(0.05, 10.0, 0.05, "suffix:x") var underwater_sunrays_pattern_scale := 1.0:
+	set(value):
+		underwater_sunrays_pattern_scale = clampf(value, 0.05, 10.0)
+		_request_visual_sync()
+@export_range(0.0, 4.0, 0.05) var underwater_sunrays_pattern_contrast := 1.4:
+	set(value):
+		underwater_sunrays_pattern_contrast = clampf(value, 0.0, 4.0)
+		_request_visual_sync()
+@export_range(0.0, 2.0, 0.01, "suffix:x") var underwater_sunrays_animation_speed := 0.12:
+	set(value):
+		underwater_sunrays_animation_speed = clampf(value, 0.0, 2.0)
+		_request_visual_sync()
+
+@export_group("Underwater / Debug")
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL") var underwater_debug_mode := 0:
+	set(value):
+		underwater_debug_mode = clampi(value, 0, 16)
 		_request_visual_sync()
 
 @export_group("Underwater / Snell-TIR")
@@ -1384,6 +1422,8 @@ var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
+var _sun_color := Color.WHITE
+var _sun_energy := 0.0
 var _reflection_sspr_manager: Node
 var _caustics_manager: Node
 var _underwater_manager: Node
@@ -1507,6 +1547,19 @@ func _sync_underwater_manager() -> void:
 			"scattering_density": underwater_scattering_density,
 			"max_distance": underwater_max_optical_distance_m,
 			"debug_mode": underwater_debug_mode,
+			"sun_direction": _sun_direction_world,
+			"sun_color": _sun_color * underwater_sunrays_color,
+			"sun_energy": _sun_energy,
+			"sunrays_enabled": underwater_sunrays_enabled,
+			"sunrays_strength": underwater_sunrays_strength,
+			"sunrays_anisotropy": underwater_sunrays_anisotropy,
+			"sunrays_density": underwater_sunrays_density,
+			"sunrays_max_distance": underwater_sunrays_max_distance_m,
+			"sunrays_pattern_scale": underwater_sunrays_pattern_scale,
+			"sunrays_pattern_contrast": underwater_sunrays_pattern_contrast,
+			"sunrays_animation_speed": underwater_sunrays_animation_speed,
+			"sunrays_pattern_texture": _active_caustics_texture(),
+			"sunrays_time": SimulationClock.get_render_time(),
 			"snell_enabled": underwater_snell_enabled,
 			"water_ior": underwater_water_ior,
 			"snell_strength": underwater_snell_strength,
@@ -2002,12 +2055,15 @@ func _sync_sun_direction() -> void:
 		return
 	var lights := scene_root.find_children("*", "DirectionalLight3D", true, false)
 	if lights.is_empty():
+		_sun_energy = 0.0
 		return
 	var sun := lights[0] as DirectionalLight3D
 	if sun != null:
 		# DirectionalLight3D emits along local -Z; the BRDF helper needs the
 		# direction from the surface toward the light.
 		_sun_direction_world = sun.global_transform.basis.z.normalized()
+		_sun_color = sun.light_color
+		_sun_energy = maxf(sun.light_energy, 0.0)
 
 
 func _refresh_sea_state_zones() -> void:
