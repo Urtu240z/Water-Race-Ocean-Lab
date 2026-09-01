@@ -178,6 +178,7 @@ uniform float underwater_snell_wave_distortion : hint_range(0.0, 1.5, 0.01) = 1.
 uniform float underwater_snell_micro_refraction_strength : hint_range(0.0, 2.0, 0.01) = 0.35;
 uniform float underwater_snell_micro_refraction_max_px : hint_range(0.0, 4.0, 0.05) = 1.25;
 uniform float underwater_snell_edge_softness : hint_range(0.0, 3.0, 0.05) = 1.0;
+uniform float underwater_snell_cone_angle_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
 uniform int underwater_debug_mode = 0;
 uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
 uniform vec4 deep_water_color : source_color = vec4(0.004, 0.055, 0.115, 1.0);
@@ -2361,6 +2362,7 @@ void fragment() {
 	float underwater_snell_cos_i = 1.0;
 	float underwater_snell_k = 1.0;
 	float underwater_snell_tir = 0.0;
+	float underwater_snell_artistic_tir = 0.0;
 	float underwater_tir_visual_weight = 0.0;
 	vec3 underwater_snell_normal_world = vec3(0.0, 1.0, 0.0);
 	bool underwater_snell_active = underwater_camera_active && underwater_snell_enabled;
@@ -2381,17 +2383,27 @@ void fragment() {
 		underwater_snell_k = 1.0 - eta_water_air * eta_water_air
 			* (1.0 - underwater_snell_cos_i * underwater_snell_cos_i);
 		underwater_snell_tir = underwater_snell_k < 0.0 ? 1.0 : 0.0;
-		underwater_tir_visual_weight = underwater_snell_tir;
+		// The physical IOR still determines the refracted direction and raw k.
+		// This optional artistic cone can only close the window: it is clamped to
+		// the physical critical angle and never admits angles outside it.
+		float physical_critical_angle = asin(clamp(1.0003 / max(underwater_water_ior, 1.0003), 0.0, 1.0));
+		float effective_critical_angle = min(
+			radians(clamp(underwater_snell_cone_angle_deg, 0.0, 90.0)),
+			physical_critical_angle
+		);
+		float snell_cos_threshold = cos(effective_critical_angle);
+		underwater_snell_artistic_tir = underwater_snell_cos_i < snell_cos_threshold ? 1.0 : 0.0;
+		underwater_tir_visual_weight = underwater_snell_artistic_tir;
 		if (underwater_snell_edge_softness > 0.0) {
 			float edge_width = max(
-				fwidth(underwater_snell_k) * SNELL_EDGE_SCALE
+				fwidth(snell_cos_threshold - underwater_snell_cos_i) * SNELL_EDGE_SCALE
 				* underwater_snell_edge_softness,
 				SNELL_EDGE_MIN_WIDTH
 			);
 			underwater_tir_visual_weight = 1.0 - smoothstep(
 				-edge_width,
 				edge_width,
-				underwater_snell_k
+				snell_cos_threshold - underwater_snell_cos_i
 			);
 		}
 	}
@@ -3286,7 +3298,7 @@ void fragment() {
 				bool refraction_direction_valid = length(refracted_direction_view) > WATER_OPTICS_EPSILON
 					&& !any(isnan(refracted_direction_view))
 					&& !any(isinf(refracted_direction_view))
-					&& !(underwater_snell_active && underwater_snell_tir > 0.5);
+					&& !(underwater_snell_active && underwater_snell_artistic_tir > 0.5);
 				if (refraction_direction_valid && !scene_is_sky && scene_depth_valid && water_depth_valid) {
 					refracted_direction_view = normalize(refracted_direction_view);
 					float target_scene_depth = min(
@@ -3312,23 +3324,6 @@ void fragment() {
 							candidate_position_view, projection_matrix, projection_valid);
 					if (projection_valid) {
 						vec2 candidate_offset_px = (candidate_refracted_uv - SCREEN_UV) * refraction_screen_size;
-						// SHORT slope is deliberately introduced only after physical
-						// Snell/TIR classification. It perturbs transmitted sampling by a
-						// bounded pixel amount and can never create a new TIR island.
-						if (underwater_snell_active
-								&& underwater_snell_tir <= 0.5
-								&& underwater_snell_micro_refraction_strength > 0.0
-								&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
-							vec2 micro_offset_px = vec2(
-								refraction_short_slope.x,
-								-refraction_short_slope.y
-							) * underwater_snell_micro_refraction_strength;
-							float micro_offset_length_px = length(micro_offset_px);
-							if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
-								micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
-							}
-							candidate_offset_px += micro_offset_px;
-						}
 						float candidate_offset_length_px = length(candidate_offset_px);
 							float max_offset_px = max(refraction_max_offset_px, 0.0);
 							if (max_offset_px <= WATER_OPTICS_EPSILON) {
@@ -3408,8 +3403,30 @@ void fragment() {
 						}
 					}
 				}
+				// SHORT slope is deliberately introduced only after physical
+				// Snell/TIR classification. It perturbs transmitted sampling by a
+				// bounded pixel amount and also works when the background is sky, where
+				// no scene/depth candidate exists to validate the base refraction ray.
+				vec2 snell_micro_offset_px = vec2(0.0);
+				if (underwater_snell_active
+						&& underwater_snell_artistic_tir <= 0.5
+						&& underwater_snell_micro_refraction_strength > 0.0
+						&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
+					vec2 micro_slope = vec2(
+						refraction_short_slope.x,
+						-refraction_short_slope.y
+					);
+					// A dimensionless slope is converted to a useful screen amplitude
+					// with a conservative gain, then hard-clamped in pixel space.
+					snell_micro_offset_px = micro_slope
+						* (underwater_snell_micro_refraction_strength * 24.0);
+					float micro_offset_length_px = length(snell_micro_offset_px);
+					if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
+						snell_micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
+					}
+				}
 				vec2 final_refracted_uv = clamp(
-					SCREEN_UV + refraction_final_offset_px / refraction_screen_size,
+					SCREEN_UV + (refraction_final_offset_px + snell_micro_offset_px) / refraction_screen_size,
 					vec2(0.001),
 					vec2(0.999)
 				);

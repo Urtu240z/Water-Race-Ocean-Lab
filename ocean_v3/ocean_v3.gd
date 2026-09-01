@@ -429,6 +429,10 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_snell_edge_softness = clampf(value, 0.0, 3.0)
 		_request_visual_sync()
+@export_range(0.0, 90.0, 0.25, "suffix:°") var underwater_snell_cone_angle_deg := 48.75:
+	set(value):
+		underwater_snell_cone_angle_deg = clampf(value, 0.0, 90.0)
+		_request_visual_sync()
 
 @export_group("Water Optics / View Depth")
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth_above_m: float = 38.0:
@@ -1373,6 +1377,7 @@ var _underwater_surface_snell_wave_distortion := 1.0
 var _underwater_surface_snell_micro_refraction_strength := 0.35
 var _underwater_surface_snell_micro_refraction_max_px := 1.25
 var _underwater_surface_snell_edge_softness := 1.0
+var _underwater_surface_snell_cone_angle_deg := 48.75
 var _underwater_surface_debug_mode := -1
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
@@ -1490,6 +1495,7 @@ func _sync_underwater_manager() -> void:
 			or not is_equal_approx(_underwater_surface_snell_micro_refraction_strength, underwater_snell_micro_refraction_strength) \
 			or not is_equal_approx(_underwater_surface_snell_micro_refraction_max_px, underwater_snell_micro_refraction_max_px) \
 			or not is_equal_approx(_underwater_surface_snell_edge_softness, underwater_snell_edge_softness) \
+			or not is_equal_approx(_underwater_surface_snell_cone_angle_deg, underwater_snell_cone_angle_deg) \
 			or _underwater_surface_debug_mode != underwater_debug_mode
 		if not surface_state_changed:
 			return
@@ -1504,6 +1510,7 @@ func _sync_underwater_manager() -> void:
 		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_strength", underwater_snell_micro_refraction_strength)
 		surface_material.set_shader_parameter(&"underwater_snell_micro_refraction_max_px", underwater_snell_micro_refraction_max_px)
 		surface_material.set_shader_parameter(&"underwater_snell_edge_softness", underwater_snell_edge_softness)
+		surface_material.set_shader_parameter(&"underwater_snell_cone_angle_deg", underwater_snell_cone_angle_deg)
 		surface_material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
 		_underwater_surface_state_initialized = true
 		_underwater_surface_camera_active = _camera_underwater
@@ -1515,6 +1522,7 @@ func _sync_underwater_manager() -> void:
 		_underwater_surface_snell_micro_refraction_strength = underwater_snell_micro_refraction_strength
 		_underwater_surface_snell_micro_refraction_max_px = underwater_snell_micro_refraction_max_px
 		_underwater_surface_snell_edge_softness = underwater_snell_edge_softness
+		_underwater_surface_snell_cone_angle_deg = underwater_snell_cone_angle_deg
 		_underwater_surface_debug_mode = underwater_debug_mode
 
 func set_water_lens_jetski_velocity(velocity: Vector3) -> void:
