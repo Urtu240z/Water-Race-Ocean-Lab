@@ -176,7 +176,7 @@ uniform float underwater_snell_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 uniform float underwater_tir_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 uniform float underwater_snell_wave_distortion : hint_range(0.0, 1.5, 0.01) = 1.0;
 uniform float underwater_snell_micro_refraction_strength : hint_range(0.0, 2.0, 0.01) = 0.35;
-uniform float underwater_snell_micro_refraction_max_px : hint_range(0.0, 4.0, 0.05) = 1.25;
+uniform float underwater_snell_micro_refraction_max_px : hint_range(0.0, 8.0, 0.05) = 1.25;
 uniform float underwater_snell_edge_softness : hint_range(0.0, 3.0, 0.05) = 1.0;
 uniform float underwater_snell_cone_angle_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
 uniform int underwater_debug_mode = 0;
@@ -1802,6 +1802,11 @@ const float BATHYMETRIC_DEEP_FALLBACK_M = 38.0;
 const float WATER_OPTICS_EDGE_FADE_UV = 0.02;
 const float SNELL_EDGE_MIN_WIDTH = 0.0005;
 const float SNELL_EDGE_SCALE = 1.5;
+// Only a small angular fraction of the visual normal is used for micro-warp;
+// the full LONG/MID normal remains the physical Snell interface authority.
+const float SNELL_MICRO_ANGLE_SCALE = 0.03;
+const float SNELL_MICRO_SOURCE_VIS_GAIN = 20.0;
+const float SNELL_MICRO_SAMPLE_DELTA_VIS_GAIN = 8.0;
 const float WATER_OPTICS_FOREGROUND_MARGIN_M = 0.10;
 const float WATER_OPTICS_TOLERANCE_THICKNESS_FACTOR = 0.08;
 const float WATER_OPTICS_SHALLOW_PATH_MULTIPLIER = 1.5;
@@ -2400,7 +2405,7 @@ void fragment() {
 				* underwater_snell_edge_softness,
 				SNELL_EDGE_MIN_WIDTH
 			);
-			underwater_tir_visual_weight = 1.0 - smoothstep(
+			underwater_tir_visual_weight = smoothstep(
 				-edge_width,
 				edge_width,
 				snell_cos_threshold - underwater_snell_cos_i
@@ -3195,6 +3200,12 @@ void fragment() {
 			float refraction_validity = 0.0;
 			vec2 refraction_background_uv = SCREEN_UV;
 			vec3 refraction_background_only = vec3(0.0);
+			// Developer diagnostics for the underwater SHORT contribution. These are
+			// populated in the same branch as the production sample so each mode
+			// exposes the actual source, pixel mapping and sampled-color delta.
+			vec2 snell_micro_offset_px = vec2(0.0);
+			vec2 snell_micro_source_slope = vec2(0.0);
+			vec3 snell_micro_sample_delta = vec3(0.0);
 			vec2 refraction_wave_slope = vec2(0.0);
 			float refraction_wave_depth_factor = 0.0;
 			float refraction_wave_grazing_factor = 0.0;
@@ -3407,22 +3418,37 @@ void fragment() {
 				// Snell/TIR classification. It perturbs transmitted sampling by a
 				// bounded pixel amount and also works when the background is sky, where
 				// no scene/depth candidate exists to validate the base refraction ray.
-				vec2 snell_micro_offset_px = vec2(0.0);
 				if (underwater_snell_active
 						&& underwater_snell_artistic_tir <= 0.5
-						&& underwater_snell_micro_refraction_strength > 0.0
-						&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
+						&& refraction_direction_valid) {
 					vec2 micro_slope = vec2(
 						refraction_short_slope.x,
 						-refraction_short_slope.y
 					);
-					// A dimensionless slope is converted to a useful screen amplitude
-					// with a conservative gain, then hard-clamped in pixel space.
-					snell_micro_offset_px = micro_slope
-						* (underwater_snell_micro_refraction_strength * 24.0);
-					float micro_offset_length_px = length(snell_micro_offset_px);
-					if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
-						snell_micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
+					// Prefer the already sampled fragment micro-normal when available;
+					// otherwise retain the existing SHORT FFT signal (fragment sample or
+					// vertex residual). This adds no texture read or varying.
+					if (surface_detail_enabled && perf_benchmark_surface_detail_enabled
+							&& length(surface_detail_offset_view) > WATER_OPTICS_EPSILON) {
+						micro_slope = vec2(surface_detail_offset_view.x, -surface_detail_offset_view.z);
+					}
+					snell_micro_source_slope = micro_slope;
+					if (underwater_snell_micro_refraction_strength > 0.0
+							&& underwater_snell_micro_refraction_max_px > WATER_OPTICS_EPSILON) {
+						// A small normal slope is an angular perturbation. Convert that angle
+						// to pixels using the active projection focal length, then clamp in
+						// pixel space. No fixed viewport-shaped mask or arbitrary gain is used.
+						vec2 focal_pixels = 0.5 * refraction_screen_size * vec2(
+							abs(projection_matrix[0][0]),
+							abs(projection_matrix[1][1])
+						);
+						snell_micro_offset_px = micro_slope * focal_pixels
+						* SNELL_MICRO_ANGLE_SCALE
+						* underwater_snell_micro_refraction_strength;
+						float micro_offset_length_px = length(snell_micro_offset_px);
+						if (micro_offset_length_px > underwater_snell_micro_refraction_max_px) {
+							snell_micro_offset_px *= underwater_snell_micro_refraction_max_px / micro_offset_length_px;
+						}
 					}
 				}
 				vec2 final_refracted_uv = clamp(
@@ -3430,6 +3456,16 @@ void fragment() {
 					vec2(0.001),
 					vec2(0.999)
 				);
+				if (underwater_debug_mode == 10 && underwater_snell_active) {
+					vec2 micro_base_uv = clamp(
+						SCREEN_UV + refraction_final_offset_px / refraction_screen_size,
+						vec2(0.001),
+						vec2(0.999)
+					);
+					vec3 micro_base_color = textureLod(screen_texture, micro_base_uv, 0.0).rgb;
+					vec3 micro_shifted_color = textureLod(screen_texture, final_refracted_uv, 0.0).rgb;
+					snell_micro_sample_delta = abs(micro_shifted_color - micro_base_color);
+				}
 				refraction_background_uv = final_refracted_uv;
 				if (water_optics_debug_mode == 40) {
 					// Diagnostic only: prove the displaced coordinate reads the real
@@ -3680,6 +3716,39 @@ void fragment() {
 			if (water_optics_debug_mode > 0) {
 				ALBEDO = final_color;
 				EMISSION = final_color;
+				ROUGHNESS = 1.0;
+				SPECULAR = 0.0;
+				RADIANCE = vec4(0.0);
+				ALPHA = 1.0;
+			}
+			if (underwater_camera_active && underwater_debug_mode >= 8 && underwater_debug_mode <= 10) {
+				vec3 diagnostic_color = vec3(0.0);
+				if (underwater_debug_mode == 8) {
+					// Signed SHORT source: RG encodes direction and B is a visible
+					// magnitude heatmap. This mapping does not alter production optics.
+					float source_magnitude = length(snell_micro_source_slope);
+					vec2 source_direction = source_magnitude > WATER_OPTICS_EPSILON
+						? snell_micro_source_slope / source_magnitude
+						: vec2(0.0);
+					diagnostic_color = vec3(
+						source_direction * 0.5 + 0.5,
+						clamp(source_magnitude * SNELL_MICRO_SOURCE_VIS_GAIN, 0.0, 1.0)
+					);
+				} else if (underwater_debug_mode == 9) {
+					// Final displacement: RG is signed direction, B is magnitude
+					// relative to max_px. Strength 0 is exactly zero displacement.
+					float max_micro_px = max(underwater_snell_micro_refraction_max_px, WATER_OPTICS_EPSILON);
+					vec2 normalized_offset = clamp(snell_micro_offset_px / max_micro_px, -1.0, 1.0);
+					diagnostic_color = vec3(
+						normalized_offset * 0.5 + 0.5,
+						clamp(length(snell_micro_offset_px) / max_micro_px, 0.0, 1.0)
+					);
+				} else {
+					// High-contrast scene-color delta caused by the micro shift.
+					diagnostic_color = clamp(snell_micro_sample_delta * SNELL_MICRO_SAMPLE_DELTA_VIS_GAIN, 0.0, 1.0);
+				}
+				ALBEDO = diagnostic_color;
+				EMISSION = diagnostic_color;
 				ROUGHNESS = 1.0;
 				SPECULAR = 0.0;
 				RADIANCE = vec4(0.0);

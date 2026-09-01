@@ -389,9 +389,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 7)
+		underwater_debug_mode = clampi(value, 0, 10)
 		_request_visual_sync()
 
 @export_group("Underwater / Snell-TIR")
@@ -421,9 +421,9 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_snell_micro_refraction_strength = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
-@export_range(0.0, 4.0, 0.05, "suffix:px") var underwater_snell_micro_refraction_max_px := 1.25:
+@export_range(0.0, 8.0, 0.05, "suffix:px") var underwater_snell_micro_refraction_max_px := 1.25:
 	set(value):
-		underwater_snell_micro_refraction_max_px = clampf(value, 0.0, 4.0)
+		underwater_snell_micro_refraction_max_px = clampf(value, 0.0, 8.0)
 		_request_visual_sync()
 @export_range(0.0, 3.0, 0.05) var underwater_snell_edge_softness := 1.0:
 	set(value):
