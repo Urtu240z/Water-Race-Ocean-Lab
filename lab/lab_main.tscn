@@ -163,7 +163,7 @@ seabed_match_tolerance_end_m = 22.85
 shallow_fresnel_depth_end_m = 48.6
 caustics_enabled = true
 caustics_texture = ExtResource("9_35bca")
-caustics_scale = 15.0
+caustics_scale = 46.0
 caustics_strength = 1.44
 caustics_layer_a_speed_multiplier = 0.2999999999999998
 caustics_luma_gradient = ExtResource("10_4qkou")
@@ -214,6 +214,9 @@ surface_foam_micro_detail_enabled = false
 [node name="OceanClipmapSurface" parent="OceanV3Mount/OceanV3/OpenOceanFFT" parent_id_path=PackedInt32Array(1474607840, 396589776) index="0" unique_id=140669600]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 398.43634, 0, 107.41211)
 clipmap_config = SubResource("Resource_ody2a")
+
+[node name="OceanUnderwaterParticles" parent="OceanV3Mount/OceanV3" index="2"]
+top_level = true
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true

@@ -1364,6 +1364,7 @@ var _reflection_sspr_manager: Node
 var _caustics_manager: Node
 var _underwater_manager: Node
 var _water_lens_fx: Node
+var _underwater_particles: Node
 var _camera_underwater := false
 var _underwater_factor := 0.0
 var _camera_water_surface_y := 0.0
@@ -1424,6 +1425,7 @@ func _ready() -> void:
 			_water_lens_fx.name = &"WaterLensFX"
 			add_child(_water_lens_fx)
 		_water_lens_fx.configure(self)
+		_underwater_particles = get_node_or_null(^"OceanUnderwaterParticles")
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -1482,6 +1484,11 @@ func _sync_underwater_manager() -> void:
 			"snell_strength": underwater_snell_strength,
 			"tir_strength": underwater_tir_strength,
 		})
+	if _underwater_particles != null and is_instance_valid(_underwater_particles):
+		# The existing binary camera state is the only activation authority for
+		# suspended particles. The component owns presentation and camera-relative
+		# movement; it never queries the ocean simulation.
+		_underwater_particles.call("set_underwater_state", _camera_underwater)
 	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 	var surface_material := surface.get_surface_material() if surface != null else null
 	if surface_material != null and is_instance_valid(surface_material):

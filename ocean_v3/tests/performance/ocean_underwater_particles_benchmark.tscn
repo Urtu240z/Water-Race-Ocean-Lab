@@ -1,0 +1,28 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://ocean_v3/tests/performance/ocean_underwater_particles_benchmark.gd" id="1_benchmark"]
+[ext_resource type="Script" path="res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd" id="2_particles"]
+
+[sub_resource type="Environment" id="Environment_particles_benchmark"]
+background_mode = 1
+background_color = Color(0.008, 0.025, 0.035, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.20, 0.35, 0.39, 1)
+ambient_light_energy = 0.55
+tonemap_mode = 2
+
+[node name="OceanUnderwaterParticlesBenchmark" type="Node3D"]
+script = ExtResource("1_benchmark")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_particles_benchmark")
+
+[node name="BenchmarkCamera" type="Camera3D" parent="."]
+current = true
+position = Vector3(0, 0, 4)
+fov = 70.0
+near = 0.1
+far = 100.0
+
+[node name="OceanUnderwaterParticles" type="Node3D" parent="."]
+script = ExtResource("2_particles")
