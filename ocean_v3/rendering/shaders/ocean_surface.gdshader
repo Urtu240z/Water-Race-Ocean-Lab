@@ -1,5 +1,9 @@
 shader_type spatial;
+#ifdef OCEAN_WATER_INTERFACE
+render_mode unshaded, cull_disabled, depth_draw_opaque;
+#else
 render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx;
+#endif
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
@@ -179,13 +183,12 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 // Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
-// Underwater Phase 1 uses the existing FFT slope components below.  The
-// compositor owns the water medium; this branch owns only the real interface.
-// The WaterInterface SubViewport uses the same displaced clipmap material, but
-// exits fragment work immediately after encoding its geometric interface.
-// This keeps vertex displacement bit-for-bit aligned with the visible ocean
-// without running foam, optics or reflection shading in the auxiliary pass.
-uniform bool water_interface_buffer_render = false;
+// The compositor owns the water medium; this source is also compiled as a
+// dedicated interface-only variant.  The variant shares the exact vertex path
+// but compiles all production fragment optics out at shader-compile time.
+#ifdef OCEAN_WATER_INTERFACE
+uniform float water_interface_depth_max_m = 500.0;
+#endif
 uniform float underwater_transition_width_m : hint_range(0.01, 1.0, 0.01) = 0.12;
 uniform float underwater_water_ior : hint_range(1.0, 1.6, 0.001) = 1.333;
 uniform float underwater_snell_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
@@ -437,9 +440,9 @@ varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
 varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cresta/valle.
 varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculado por vertex().
-varying float shore_vertical_weight_varying;
-varying float shore_horizontal_weight_varying;
-varying float shore_pre_envelope_height;
+// Packed to save two Forward+ varying locations: x=vertical weight,
+// y=horizontal weight, z=pre-envelope height.
+varying vec3 shore_weights_varying;
 // Refraction V2 in VERTEX mode reuses these already calculated vertex slopes.
 // LONG/MID are packed together to stay within the varying-location budget.
 varying vec4 refraction_vertex_long_mid_slope;
@@ -968,9 +971,7 @@ void vertex() {
 	coastal_warp_delta_m = 0.0;
 	breaking_indices = vec4(0.0);
 	crest_sharpen_mask = 0.0;
-	shore_vertical_weight_varying = 1.0;
-	shore_horizontal_weight_varying = 1.0;
-	shore_pre_envelope_height = 0.0;
+	shore_weights_varying = vec3(1.0, 1.0, 0.0);
 	refraction_vertex_long_mid_slope = vec4(0.0);
 	coastal_field = vec4(0.0);
 	coastal_metrics = vec4(0.0);
@@ -993,7 +994,7 @@ void vertex() {
 	coastal_phase_data = textureLod(coastal_phase_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	vec2 shore_vertical_gradient;
 	shore_stabilization_weights_and_gradients(world_xz, coastal_metrics,
-		shore_vertical_weight_varying, shore_horizontal_weight_varying,
+		shore_weights_varying.x, shore_weights_varying.y,
 		shore_vertical_gradient);
 	bool coast_active = has_coastal_data(coast_uv, coastal_field);
 	bool coast_transform_active = coastal_transform_enabled && coast_active;
@@ -1189,14 +1190,14 @@ void vertex() {
 	// any crest sharpening added above, while keeping the breaker detector on
 	// the pre-stabilized wave. The product rule keeps the vertex normal aligned
 	// with height_final = vertical_weight * height.
-	shore_pre_envelope_height = displacement.y;
-	displacement.xz *= shore_horizontal_weight_varying;
-	displacement.y *= shore_vertical_weight_varying;
-	vec2 shore_final_slope = slope * shore_vertical_weight_varying
-		+ shore_pre_envelope_height * shore_vertical_gradient;
+	shore_weights_varying.z = displacement.y;
+	displacement.xz *= shore_weights_varying.y;
+	displacement.y *= shore_weights_varying.x;
+	vec2 shore_final_slope = slope * shore_weights_varying.x
+		+ shore_weights_varying.z * shore_vertical_gradient;
 	refraction_vertex_long_mid_slope = vec4(
-		long_slope_component * shore_vertical_weight_varying,
-		mid_slope_component * shore_vertical_weight_varying
+		long_slope_component * shore_weights_varying.x,
+		mid_slope_component * shore_weights_varying.x
 	);
 	ocean_normal = !module_enabled ? vec3(0.0, 1.0, 0.0) : normalize(vec3(-shore_final_slope.x, 1.0, -shore_final_slope.y));
 	// Production handoff is deliberately after the shoreline envelope: the
@@ -1348,7 +1349,7 @@ void pixel_ocean_slope_components(
 	vec2 shore_vertical_gradient = shore_weight_gradient_from_fragment(world_xz, shore_vertical_weight);
 	// Same product rule as the vertex path. The horizontal envelope changes
 	// geometry topology, while the normal follows the vertical height envelope.
-	slope = slope * shore_vertical_weight + shore_pre_envelope_height * shore_vertical_gradient;
+	slope = slope * shore_vertical_weight + shore_weights_varying.z * shore_vertical_gradient;
 
 	filtered_slope = slope;
 }
@@ -2048,30 +2049,26 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 
 void fragment() {
-	if (water_interface_buffer_render) {
-		// R/G: octahedral world macro normal, B: positive view-space depth,
-		// A: valid interface. The HDR SubViewport preserves the raw depth.
-		// refraction_vertex_long_mid_slope already carries the post-shore LONG+MID
-		// macro signal. Reusing it avoids exceeding Forward+'s varying limit.
+	#ifdef OCEAN_WATER_INTERFACE
+		// RG = octahedral world macro normal, B = normalized positive view depth,
+		// A = valid coverage plus camera-side encoding (1 air, 0.75 water).
 		vec2 macro_slope = refraction_vertex_long_mid_slope.xy + refraction_vertex_long_mid_slope.zw;
 		vec3 n = normalize(mat3(MODEL_MATRIX) * vec3(-macro_slope.x, 1.0, -macro_slope.y));
 		float l1 = max(abs(n.x) + abs(n.y) + abs(n.z), 0.00001);
 		vec2 oct = n.xy / l1;
-		if (n.z < 0.0) {
-			oct = (vec2(1.0) - abs(oct.yx)) * sign(oct.xy);
-		}
+		if (n.z < 0.0) oct = (vec2(1.0) - abs(oct.yx)) * sign(oct.xy);
 		float view_depth = max(-(VIEW_MATRIX * vec4(ocean_world_position, 1.0)).z, 0.0);
-		ALBEDO = vec3(oct * 0.5 + 0.5, view_depth);
-		EMISSION = ALBEDO;
+		float normalized_depth = clamp(view_depth / max(water_interface_depth_max_m, 1.0), 0.0, 1.0);
+		float camera_side = dot(CAMERA_POSITION_WORLD - ocean_world_position, n);
+		ALBEDO = vec3(oct * 0.5 + 0.5, normalized_depth);
 		ROUGHNESS = 1.0;
 		SPECULAR = 0.0;
-		RADIANCE = vec4(0.0);
-		ALPHA = 1.0;
-	}
+		ALPHA = camera_side >= 0.0 ? 1.0 : 0.75;
+	#else
 	// Routing sentinels intentionally run before foam, depth, screen, bathymetry,
 	// scattering and reflection work. They prove the complete Inspector -> CPU
 	// -> material -> rendered clipmap -> fragment route without any data inputs.
-	else if (water_optics_debug_mode == 24) {
+	if (water_optics_debug_mode == 24) {
 		ALBEDO = vec3(1.0, 0.0, 1.0);
 		EMISSION = vec3(1.0, 0.0, 1.0);
 		ROUGHNESS = 1.0;
@@ -2550,8 +2547,8 @@ void fragment() {
 		else if (coastal_debug_field == 7) value = coastal_field.b;
 		else if (coastal_debug_field == 8) value = coastal_phase_data.a;
 		else if (coastal_debug_field == 9) value = clamp(max(coastal_metrics.r, 0.0) / max(shore_horizontal_depth_range_m.y, 0.001), 0.0, 1.0);
-		else if (coastal_debug_field == 10) value = shore_vertical_weight_varying;
-		else if (coastal_debug_field == 11) value = shore_horizontal_weight_varying;
+		else if (coastal_debug_field == 10) value = shore_weights_varying.x;
+		else if (coastal_debug_field == 11) value = shore_weights_varying.y;
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
 	}
 	if (perf_prebreak_enabled && breaking_debug_mode > 0) {
@@ -3668,6 +3665,7 @@ void fragment() {
 		}
 	}
 	}
+	#endif
 	if (lod_debug_index >= 0.0) {
 		vec3 lod_debug_color = level_color(lod_debug_index);
 		ALBEDO = lod_debug_color;

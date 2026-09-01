@@ -13,8 +13,9 @@ const BASE_WAVE_PRESET_PATHS := [
 const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
 const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocean_caustics_manager.gd")
 const UNDERWATER_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_manager.gd")
-const UNDERWATER_ENTER_MARGIN_M := 0.05
-const UNDERWATER_EXIT_MARGIN_M := 0.05
+# Keep the GPU interface authoritative while the camera is close enough to be
+# intersected by a displaced crest (the CPU guard must not reject that case).
+const UNDERWATER_CROSSING_BAND_M := 2.0
 enum UnderwaterViewerMedium { AIR, WATER, CROSSING }
 const PERF_PRESET_FULL := &"FULL"
 const PERF_PRESET_BASE := &"BASE"
@@ -416,7 +417,7 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "INTERFACE_VALID", "INTERFACE_DEPTH", "INTERFACE_NORMAL", "VIEWER_MEDIUM", "PIXEL_MEDIUM", "SNELL_K", "TIR", "WATERLINE", "FINAL") var underwater_debug_mode := 0:
+@export_enum("OFF", "INTERFACE_VALID", "INTERFACE_DEPTH", "OPAQUE_DEPTH", "INTERFACE_NORMAL", "VIEWER_MEDIUM", "PIXEL_MEDIUM", "SNELL_K", "TIR", "WATERLINE") var underwater_debug_mode := 0:
 	set(value):
 		underwater_debug_mode = clampi(value, 0, 9)
 		_request_visual_sync()
@@ -1409,25 +1410,18 @@ func _update_underwater_camera_state() -> void:
 		_underwater_factor = 0.0
 		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
 		return
-	# WaterInterface V2 permits exactly one existing render-time OceanQuery: it
-	# determines only the local viewer side/hysteresis. The complete projected
-	# interface remains GPU-owned by the auxiliary displaced clipmap viewport.
+	# The render callback owns the displaced, per-pixel interface.  Keep this
+	# CPU guard deliberately coarse: querying FFT here reintroduced a synchronous
+	# render-frame OceanQuery and could not describe the projected waterline.
 	var sampled_height := _surface_sea_level()
 	var sampled_normal := Vector3.UP
-	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
-	if fft_module != null:
-		var sample = fft_module.sample_water(camera.global_position, SimulationClock.get_render_time())
-		if sample != null and sample.valid:
-			sampled_height = sample.height
-			if sample.normal.length_squared() > 0.0001:
-				sampled_normal = sample.normal.normalized()
 	_camera_water_surface_y = sampled_height
 	_camera_water_normal = sampled_normal
 	var signed_surface_distance := (camera.global_position - Vector3(camera.global_position.x, sampled_height, camera.global_position.z)).dot(sampled_normal)
-	if signed_surface_distance > UNDERWATER_EXIT_MARGIN_M:
+	if signed_surface_distance > UNDERWATER_CROSSING_BAND_M:
 		_camera_underwater = false
 		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
-	elif signed_surface_distance < -UNDERWATER_ENTER_MARGIN_M:
+	elif signed_surface_distance < -UNDERWATER_CROSSING_BAND_M:
 		_camera_underwater = true
 		_underwater_viewer_medium = UnderwaterViewerMedium.WATER
 	else:

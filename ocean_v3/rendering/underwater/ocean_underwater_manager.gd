@@ -7,8 +7,10 @@ extends Node
 ## water copy of the scene.
 
 const EFFECT_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_effect.gd")
+const DEPTH_CAPTURE_SCRIPT := preload("res://ocean_v3/rendering/underwater/underwater_opaque_depth_capture.gd")
 
 var _effect: OceanUnderwaterEffect
+var _depth_capture: OceanUnderwaterOpaqueDepthCapture
 var _compositor: Compositor
 var _world_environment: WorldEnvironment
 var _camera: Camera3D
@@ -64,6 +66,8 @@ func _push_settings() -> void:
 		float(_settings.get("max_distance", 120.0)),
 		int(_settings.get("debug_mode", 0))
 	)
+	if _depth_capture != null:
+		_effect.set_opaque_depth_rid(_depth_capture.get_snapshot())
 
 
 func _initialize() -> void:
@@ -73,6 +77,7 @@ func _initialize() -> void:
 		push_warning("OceanUnderwater: WaterInterface buffer could not be initialized.")
 		return
 	_effect = EFFECT_SCRIPT.new()
+	_depth_capture = DEPTH_CAPTURE_SCRIPT.new()
 	_push_settings()
 	var scene := get_tree().current_scene
 	var target := scene.find_child("WorldEnvironment", true, false) if scene != null else null
@@ -92,6 +97,7 @@ func _initialize() -> void:
 			_compositor = Compositor.new()
 			_camera.compositor = _compositor
 	var effects := _compositor.compositor_effects.duplicate()
+	effects.append(_depth_capture)
 	effects.append(_effect)
 	_compositor.compositor_effects = effects
 	_attached = true
@@ -120,8 +126,28 @@ func _create_water_interface_view() -> bool:
 	_interface_camera.current = true
 	_interface_camera.cull_mask = _interface_layer
 	_interface_viewport.add_child(_interface_camera)
+	var neutral_env := Environment.new()
+	neutral_env.background_mode = Environment.BG_CLEAR_COLOR
+	neutral_env.background_color = Color(0.0, 0.0, 0.0, 0.0)
+	neutral_env.ambient_light_source = Environment.AMBIENT_SOURCE_DISABLED
+	if _has_property(_interface_camera, &"environment"):
+		_interface_camera.set(&"environment", neutral_env)
+	if _has_property(_interface_camera, &"attributes"):
+		var neutral_attributes := CameraAttributesPractical.new()
+		neutral_attributes.auto_exposure_enabled = false
+		neutral_attributes.dof_blur_far_enabled = false
+		neutral_attributes.dof_blur_near_enabled = false
+		_interface_camera.set(&"attributes", neutral_attributes)
+	surface.set_water_interface_depth_max(_interface_camera.far)
 	_sync_water_interface_view()
 	return true
+
+
+func _has_property(object: Object, property_name: StringName) -> bool:
+	for property in object.get_property_list():
+		if StringName(property.get("name", "")) == property_name:
+			return true
+	return false
 
 
 func _main_render_size(main_viewport: Viewport) -> Vector2i:
@@ -156,6 +182,9 @@ func _sync_water_interface_view() -> void:
 	_interface_camera.h_offset = camera.h_offset
 	_interface_camera.v_offset = camera.v_offset
 	_interface_camera.cull_mask = _interface_layer
+	var surface := _ocean.get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface if _ocean != null else null
+	if surface != null:
+		surface.set_water_interface_depth_max(_interface_camera.far)
 	var desired_size := _main_render_size(get_viewport())
 	if _interface_viewport.size != desired_size:
 		_interface_viewport.size = desired_size
@@ -173,11 +202,14 @@ func _exit_tree() -> void:
 	if _effect != null:
 		if _compositor != null:
 			var effects := _compositor.compositor_effects.duplicate()
+			effects.erase(_depth_capture)
 			effects.erase(_effect)
 			_compositor.compositor_effects = effects
 		_effect.enabled = false
 		_effect.set_settings(false, null, 0, 0.0, 0.03, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0)
 		RenderingServer.call_on_render_thread(_effect.free_resources)
+	if _depth_capture != null:
+		RenderingServer.call_on_render_thread(_depth_capture.free_resources)
 	if _ocean != null:
 		var surface := _ocean.get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 		if surface != null:
@@ -185,6 +217,7 @@ func _exit_tree() -> void:
 	if _interface_viewport != null:
 		_interface_viewport.queue_free()
 	_effect = null
+	_depth_capture = null
 	_interface_viewport = null
 	_interface_camera = null
 	_attached = false

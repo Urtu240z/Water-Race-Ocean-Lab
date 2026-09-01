@@ -6,6 +6,7 @@ extends Node3D
 const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
 const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
 const BREAKING_DIAGNOSTIC_SHADER_PATH := "res://ocean_v3/rendering/shaders/ocean_surface_debug.gdshader"
+const WATER_INTERFACE_SHADER_PATH := "res://ocean_v3/rendering/shaders/ocean_surface_interface.gdshader"
 # Layer 20 is reserved for the auxiliary WaterInterface SubViewport.  The
 # visible camera removes this bit; the interface camera renders only this bit.
 const WATER_INTERFACE_LAYER := 1 << 19
@@ -176,7 +177,12 @@ func ensure_water_interface_proxy() -> int:
 	if _water_interface_proxy_material == null and _surface_material.shader != null:
 		_water_interface_proxy_material = _surface_material.duplicate() as ShaderMaterial
 		if _water_interface_proxy_material != null:
-			_water_interface_proxy_material.set_shader_parameter(&"water_interface_buffer_render", true)
+			var interface_shader := Shader.new()
+			var interface_source := FileAccess.get_file_as_string(WATER_INTERFACE_SHADER_PATH)
+			interface_source = interface_source.replace("#include \"res://ocean_v3/rendering/shaders/ocean_surface.gdshader\"", FileAccess.get_file_as_string("res://ocean_v3/rendering/shaders/ocean_surface.gdshader"))
+			interface_shader.code = interface_source
+			_water_interface_proxy_material.shader = interface_shader
+			_water_interface_proxy_material.set_shader_parameter(&"water_interface_depth_max_m", 500.0)
 	_rebuild_water_interface_proxy_levels()
 	return WATER_INTERFACE_LAYER
 
@@ -187,6 +193,11 @@ func release_water_interface_proxy() -> void:
 	_water_interface_proxy_root = null
 	_water_interface_proxy_material = null
 	_water_interface_proxy_levels.clear()
+
+
+func set_water_interface_depth_max(max_depth_m: float) -> void:
+	if _water_interface_proxy_material != null:
+		_water_interface_proxy_material.set_shader_parameter(&"water_interface_depth_max_m", maxf(max_depth_m, 1.0))
 
 
 func _rebuild_water_interface_proxy_levels() -> void:

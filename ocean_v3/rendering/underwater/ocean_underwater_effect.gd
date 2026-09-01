@@ -12,6 +12,7 @@ var _pipeline := RID()
 var _sampler := RID()
 var _params_buffer := RID()
 var _interface_texture_rid := RID()
+var _opaque_depth_rid := RID()
 var _mutex := Mutex.new()
 var _enabled := true
 var _viewer_medium := 0
@@ -55,6 +56,11 @@ func set_settings(is_enabled: bool, interface_texture: Texture2D, viewer_medium:
 	_debug_mode = clampi(debug_mode, 0, 9)
 	_mutex.unlock()
 
+func set_opaque_depth_rid(rid: RID) -> void:
+	_mutex.lock()
+	_opaque_depth_rid = rid if rid.is_valid() else RID()
+	_mutex.unlock()
+
 
 func free_resources() -> void:
 	if _rd == null:
@@ -69,6 +75,8 @@ func free_resources() -> void:
 	if _params_buffer.is_valid():
 		_rd.free_rid(_params_buffer)
 	_params_buffer = RID()
+	_interface_texture_rid = RID()
+	_opaque_depth_rid = RID()
 
 
 func _ensure_pipeline() -> bool:
@@ -97,6 +105,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_mutex.lock()
 	var is_enabled := _enabled
 	var interface_texture_rid := _interface_texture_rid
+	var opaque_depth_rid := _opaque_depth_rid
 	var viewer_medium := _viewer_medium
 	var camera_factor := _camera_factor
 	var waterline_feather := _waterline_feather
@@ -110,7 +119,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_mutex.unlock()
 	# The auxiliary ViewportTexture may not have produced its first frame yet.
 	# Never create a uniform set or dispatch until every renderer RID is valid.
-	if not is_enabled or not interface_texture_rid.is_valid() or not _ensure_pipeline():
+	if not is_enabled or not interface_texture_rid.is_valid() or not opaque_depth_rid.is_valid() or not _ensure_pipeline():
 		return
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
@@ -120,8 +129,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if size.x <= 0 or size.y <= 0:
 		return
 	var color_image := buffers.get_color_layer(0)
-	var depth_texture := buffers.get_depth_layer(0)
-	if not color_image.is_valid() or not depth_texture.is_valid():
+	if not color_image.is_valid() or not opaque_depth_rid.is_valid():
 		return
 	var projection: Projection = scene_data.get_view_projection(0)
 	var camera_transform: Transform3D = scene_data.get_cam_transform()
@@ -132,7 +140,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(camera_transform.origin.x); params.append(camera_transform.origin.y); params.append(camera_transform.origin.z); params.append(1.0)
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(absorption_scale)
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_strength)
-	params.append(scattering_density); params.append(max_distance); params.append(waterline_feather); params.append(0.0)
+	params.append(scattering_density); params.append(max_distance); params.append(waterline_feather); params.append(500.0)
 	params.append(float(viewer_medium)); params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0)
 	var camera_forward := -camera_transform.basis.z
 	params.append(camera_forward.x); params.append(camera_forward.y); params.append(camera_forward.z); params.append(0.0)
@@ -145,7 +153,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	depth_uniform.binding = 1
 	depth_uniform.add_id(_sampler)
-	depth_uniform.add_id(depth_texture)
+	depth_uniform.add_id(opaque_depth_rid)
 	var params_uniform := RDUniform.new()
 	params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
 	params_uniform.binding = 2
