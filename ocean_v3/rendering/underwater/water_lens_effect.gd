@@ -19,7 +19,7 @@ func _init() -> void:
 	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
 	access_resolved_color = true
 	_rd = RenderingServer.get_rendering_device()
-	_frame_data.resize(PARAMS_BYTES / 4)
+	_frame_data.resize(PARAMS_BYTES >> 2)
 
 func set_frame_data(data: PackedFloat32Array, active: bool) -> void:
 	_mutex.lock()
