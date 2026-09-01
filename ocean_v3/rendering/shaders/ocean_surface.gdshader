@@ -179,6 +179,7 @@ uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
 // compositor owns the water medium; this branch owns only the real interface.
 uniform bool underwater_camera_active = false;
 uniform float underwater_camera_factor : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float underwater_transition_width_m : hint_range(0.01, 1.0, 0.01) = 0.12;
 uniform float underwater_water_ior : hint_range(1.0, 1.6, 0.001) = 1.333;
 uniform float underwater_snell_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
 uniform float underwater_tir_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
@@ -3393,16 +3394,29 @@ void fragment() {
 			// Water -> air interface.  Use the already available LONG/MID/SHORT
 			// FFT slopes: macro remains authoritative and SHORT is only a bounded
 			// detail perturbation, so no extra FFT samples are introduced here.
-			bool underwater_surface_active = underwater_camera_active
-				&& underwater_camera_factor > WATER_OPTICS_EPSILON;
+			// GPU-local interface classification is the sole authority for Snell/TIR.
+			// It follows the displaced FFT surface at each fragment and cannot retain
+			// a stale CPU camera-state flag after crossing a wave.
+			vec2 underwater_macro_slope = refraction_long_slope + refraction_mid_slope
+				+ refraction_short_slope * clamp(underwater_snell_detail_strength, 0.0, 1.0);
+			vec3 underwater_macro_slope_normal_world = refraction_wave_signal_valid
+				? normalize(vec3(-underwater_macro_slope.x, 1.0, -underwater_macro_slope.y))
+				: sspr_macro_normal_world;
+			vec3 underwater_camera_world_position = INV_VIEW_MATRIX[3].xyz;
+			float underwater_interface_side = dot(
+				underwater_camera_world_position - ocean_world_position,
+				underwater_macro_slope_normal_world
+			);
+			float local_underwater_interface_factor = 1.0 - smoothstep(
+				-max(underwater_transition_width_m, WATER_OPTICS_EPSILON),
+				max(underwater_transition_width_m, WATER_OPTICS_EPSILON),
+				underwater_interface_side
+			);
+			bool underwater_surface_active = local_underwater_interface_factor > WATER_OPTICS_EPSILON;
 			bool underwater_tir = false;
 			bool underwater_refracted_valid = false;
 			if (underwater_surface_active) {
-				vec2 underwater_macro_slope = refraction_long_slope + refraction_mid_slope
-					+ refraction_short_slope * clamp(underwater_snell_detail_strength, 0.0, 1.0);
-				vec3 underwater_macro_normal_world = refraction_wave_signal_valid
-					? normalize(vec3(-underwater_macro_slope.x, 1.0, -underwater_macro_slope.y))
-					: sspr_macro_normal_world;
+				vec3 underwater_macro_normal_world = underwater_macro_slope_normal_world;
 				// Incident points from the underwater camera to the interface.  Flip
 				// the normal to face its incident medium before calling refract().
 				vec3 underwater_incident_world = normalize((INV_VIEW_MATRIX
@@ -3456,7 +3470,7 @@ void fragment() {
 					clamp(underwater_tir_strength, 0.0, 1.0));
 				vec3 underwater_surface = mix(refracted_surface, reflected_surface,
 					clamp(underwater_fresnel, 0.0, 1.0));
-				final_color = mix(final_color, underwater_surface, underwater_camera_factor);
+				final_color = mix(final_color, underwater_surface, local_underwater_interface_factor);
 			}
 			if (water_optics_debug_mode == 1) {
 				final_color = vec3(bounded_view_water_path_m / max(maximum_optical_depth, 0.001));

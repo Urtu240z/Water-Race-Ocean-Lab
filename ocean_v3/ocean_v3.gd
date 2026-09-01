@@ -365,6 +365,10 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_transition_width_m = clampf(value, 0.01, 1.0)
 		_request_visual_sync()
+@export_range(0.0, 0.2, 0.001) var underwater_waterline_feather := 0.03:
+	set(value):
+		underwater_waterline_feather = clampf(value, 0.0, 0.2)
+		_request_visual_sync()
 
 @export_group("Underwater / Medium")
 @export_range(0.0, 4.0, 0.01) var underwater_absorption_scale := 1.0:
@@ -411,9 +415,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("UNDERWATER_OFF", "UNDERWATER_ON", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_WINDOW", "TIR", "FINAL") var underwater_debug_mode := 0:
+@export_enum("UNDERWATER_OFF", "UNDERWATER_ON", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_WINDOW", "TIR", "DEBUG_LOCAL_SURFACE_PLANE", "DEBUG_WATERLINE_MASK", "FINAL") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 8)
+		underwater_debug_mode = clampi(value, 0, 10)
 		_request_visual_sync()
 
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth: float = 38.0:
@@ -1400,12 +1404,11 @@ func _update_underwater_camera_state() -> void:
 		_camera_underwater = false
 		_underwater_factor = 0.0
 		return
+	# Underwater Phase 1 deliberately keeps camera state independent from the
+	# OceanQuery path. A per-frame render-time query can prepare REDUCED GDScript
+	# cascades when SeaStateZone3D is active, which is not acceptable for a visual
+	# transition. The full-screen medium still resolves its own per-pixel segment.
 	var sampled_height := _surface_sea_level()
-	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
-	if fft_module != null:
-		var sample = fft_module.sample_water(camera.global_position, SimulationClock.get_render_time())
-		if sample != null and sample.valid and is_finite(sample.height):
-			sampled_height = sample.height
 	_camera_water_surface_y = sampled_height
 	if _camera_underwater:
 		if camera.global_position.y > sampled_height + UNDERWATER_EXIT_MARGIN_M:
@@ -1429,6 +1432,7 @@ func _sync_underwater_manager() -> void:
 		"camera_underwater": _camera_underwater,
 		"camera_factor": _underwater_factor,
 		"transition_width": underwater_transition_width_m,
+		"waterline_feather": underwater_waterline_feather,
 		"absorption": absorption_coeff_rgb,
 		"absorption_scale": underwater_absorption_scale,
 		"scattering_color": underwater_scattering_color,
@@ -2381,6 +2385,7 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"absorption_coeff_rgb", absorption_coeff_rgb)
 	material.set_shader_parameter(&"underwater_camera_active", _camera_underwater)
 	material.set_shader_parameter(&"underwater_camera_factor", _underwater_factor)
+	material.set_shader_parameter(&"underwater_transition_width_m", underwater_transition_width_m)
 	material.set_shader_parameter(&"underwater_water_ior", underwater_water_ior)
 	material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)
 	material.set_shader_parameter(&"underwater_tir_strength", underwater_tir_strength)
@@ -2429,6 +2434,8 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
 	_sync_caustics_manager()
 	_sync_underwater_manager()
+	if _underwater_manager != null and is_instance_valid(_underwater_manager):
+		_underwater_manager.refresh_surface_probe_sources()
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():

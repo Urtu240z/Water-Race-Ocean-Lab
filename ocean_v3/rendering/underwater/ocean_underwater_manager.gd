@@ -8,11 +8,13 @@ var _effect: OceanUnderwaterEffect
 var _compositor: Compositor
 var _world_environment: WorldEnvironment
 var _camera: Camera3D
+var _ocean: Node
 var _attached := false
 var _settings: Dictionary = {}
 
 
 func configure(ocean: Node) -> void:
+	_ocean = ocean
 	if not is_inside_tree() or Engine.is_editor_hint():
 		return
 	call_deferred(&"_initialize")
@@ -21,6 +23,41 @@ func configure(ocean: Node) -> void:
 func set_settings(settings: Dictionary) -> void:
 	_settings = settings.duplicate()
 	_push_settings()
+
+
+func refresh_surface_probe_sources() -> void:
+	_refresh_surface_probe_sources()
+
+
+func _refresh_surface_probe_sources() -> void:
+	if _effect == null or _ocean == null:
+		return
+	var surface := _ocean.get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface")
+	if surface == null or not surface.has_method(&"get_surface_material"):
+		return
+	var material := surface.call(&"get_surface_material") as ShaderMaterial
+	if material == null:
+		return
+	_effect.set_surface_probe_sources(
+		_rd_texture(material, &"displacement_long_coastal"),
+		_rd_texture(material, &"displacement_long_remainder"),
+		_rd_texture(material, &"displacement_mid"),
+		_rd_texture(material, &"normal_long_coastal"),
+		_rd_texture(material, &"normal_long_remainder"),
+		_rd_texture(material, &"normal_mid"),
+		Vector3(
+			float(material.get_shader_parameter(&"domain_long_coastal_m")),
+			float(material.get_shader_parameter(&"domain_long_remainder_m")),
+			float(material.get_shader_parameter(&"domain_mid_m"))
+		)
+	)
+
+
+func _rd_texture(material: ShaderMaterial, parameter: StringName) -> RID:
+	var texture := material.get_shader_parameter(parameter) as Texture2D
+	if texture == null or not texture.get_rid().is_valid():
+		return RID()
+	return RenderingServer.texture_get_rd_texture(texture.get_rid(), true)
 
 
 func _ready() -> void:
@@ -39,6 +76,7 @@ func _push_settings() -> void:
 		bool(_settings.get("camera_underwater", false)),
 		float(_settings.get("camera_factor", 0.0)),
 		float(_settings.get("transition_width", 0.12)),
+		float(_settings.get("waterline_feather", 0.03)),
 		absorption,
 		float(_settings.get("absorption_scale", 1.0)),
 		scattering_color,
@@ -54,6 +92,8 @@ func _initialize() -> void:
 		return
 	_effect = EFFECT_SCRIPT.new()
 	_push_settings()
+	_refresh_surface_probe_sources()
+	call_deferred(&"_refresh_surface_probe_sources")
 	var scene := get_tree().current_scene
 	var target := scene.find_child("WorldEnvironment", true, false) if scene != null else null
 	if target is WorldEnvironment:
@@ -84,7 +124,7 @@ func _exit_tree() -> void:
 			effects.erase(_effect)
 			_compositor.compositor_effects = effects
 		_effect.enabled = false
-		_effect.set_settings(false, 0.0, false, 0.0, 0.12, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0)
+		_effect.set_settings(false, 0.0, false, 0.0, 0.12, 0.03, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0)
 		RenderingServer.call_on_render_thread(_effect.free_resources)
 	_effect = null
 	_attached = false
