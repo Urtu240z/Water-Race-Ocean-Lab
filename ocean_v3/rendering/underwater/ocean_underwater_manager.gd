@@ -56,7 +56,7 @@ func _push_settings() -> void:
 		float(_settings.get("sunrays_density", 0.08)), float(_settings.get("sunrays_max_distance", 30.0)),
 		float(_settings.get("sunrays_pattern_scale", 1.0)), float(_settings.get("sunrays_pattern_contrast", 1.4)),
 		float(_settings.get("sunrays_animation_speed", 0.12)), pattern_texture,
-		float(_settings.get("sunrays_time", 0.0)))
+		float(_settings.get("sunrays_time", 0.0)), int(_settings.get("sunrays_tap_count", 4)))
 
 func _initialize() -> void:
 	if _attached or Engine.is_editor_hint() or not is_inside_tree(): return
@@ -92,7 +92,7 @@ func _exit_tree() -> void:
 			_compositor.compositor_effects = effects
 		_effect.enabled = false
 		_effect.set_settings(false, 0.0, false, 0.0, 0.12, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0,
-			Vector3(0.0, 1.0, 0.0), Color.WHITE, 0.0, false, 0.0, 0.72, 0.08, 30.0, 1.0, 1.4, 0.12, null, 0.0)
+			Vector3(0.0, 1.0, 0.0), Color.WHITE, 0.0, false, 0.0, 0.72, 0.08, 30.0, 1.0, 1.4, 0.12, null, 0.0, 4)
 		RenderingServer.call_on_render_thread(_effect.free_resources)
 	_effect = null
 	_attached = false

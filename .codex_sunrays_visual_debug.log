@@ -1,0 +1,89 @@
+Godot Engine v4.7.stable.official.5b4e0cb0f - https://godotengine.org
+D3D12 12_0 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce RTX 4070 Laptop GPU
+
+OceanQuery: backend nativo activo (OceanQueryNative).
+OCEAN STARTUP clipmap L0: generate=84 ms validate=0 ms mesh=2 ms instance=0 ms vertices=37249 indices=221184
+OCEAN STARTUP clipmap L1: generate=115 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L2: generate=105 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L3: generate=112 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L4: generate=107 ms validate=0 ms mesh=5 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L5: generate=93 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L6: generate=72 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L7: generate=69 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L8: generate=94 ms validate=0 ms mesh=3 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap L9: generate=78 ms validate=0 ms mesh=2 ms instance=0 ms vertices=28608 indices=167040
+OCEAN STARTUP clipmap total: levels=10 triangles=574848 total=968 ms validation=OFF
+OCEAN STARTUP surface: shader=54 ms materials=0 ms clipmap=968 ms lod_debug=0 total=1023 ms
+OCEAN STARTUP fft: h0=708 ms split=114 ms gpu_submit=924 ms query=246 ms surface=1024 ms total=3018 ms
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+   GDScript backtrace (most recent call first):
+       [0] _make_process_material (res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd:244)
+       [1] _configure_particles (res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd:232)
+       [2] _ensure_particles (res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd:192)
+       [3] _ready (res://ocean_v3/rendering/underwater/ocean_underwater_particles.gd:91)
+OCEAN BANDS: LONG=ON MID=ON SHORT=ON
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+   GDScript backtrace (most recent call first):
+       [0] _create_process_material (res://ocean_v3/rendering/underwater/ocean_sediment_system.gd:260)
+       [1] _ensure_particles (res://ocean_v3/rendering/underwater/ocean_sediment_system.gd:228)
+       [2] configure (res://ocean_v3/rendering/underwater/ocean_sediment_system.gd:88)
+       [3] _ready (res://ocean_v3/ocean_v3.gd:1514)
+PERF-SUNRAYS-V2: repetition 1/1 -> SUNRAYS_4TAP
+OCEAN V3 BENCHMARK: ready; seed=20260820; viewport=(1920, 1080)
+OCEAN V3 BENCHMARK RENDER CONFIG: renderer=forward_plus driver=d3d12 adapter=NVIDIA GeForce RTX 4070 Laptop GPU physical=1920x1080 visible=1920x1080 internal=1920x1080 scale=0.700 scaling_mode=2 vsync=0
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+ERROR: Condition "f.is_null()" is true.
+   at: _save_to_cache (servers/rendering/renderer_rd/shader_rd.cpp:695)
+OCEAN STARTUP root: setup=1698 ms first_stable_frame=9169 ms
+PERF-1B: warm-up 10 frames (SUNRAYS_4TAP)
+PERF-1B: measuring 60 frames (SUNRAYS_4TAP)
+PERF-1B: SUNRAYS_4TAP run 1 avg=6.3703 ms median=5.4110 ms p95=10.3390 ms p99=10.7510 ms
+ERROR: PERF-1B: cannot open CSV result path C:/Users/ehort/AppData/Roaming/Godot/app_userdata/Water Race Ocean Lab/ocean_v3_benchmarks/ocean_v3_benchmark_1788303585.csv
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _write_results (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:528)
+       [1] _finish_suite (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:492)
+       [2] _advance_configuration (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:454)
+       [3] _finish_measurement (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:444)
+       [4] _process (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:125)
+ERROR: PERF-1B: cannot open summary result path C:/Users/ehort/AppData/Roaming/Godot/app_userdata/Water Race Ocean Lab/ocean_v3_benchmarks/ocean_v3_benchmark_1788303585.txt
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _write_results (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:562)
+       [1] _finish_suite (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:492)
+       [2] _advance_configuration (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:454)
+       [3] _finish_measurement (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:444)
+       [4] _process (res://ocean_v3/tests/performance/ocean_performance_benchmark.gd:125)
+============================================================
+OCEAN V3 PERFORMANCE BENCHMARK
+1920x1080 | seed=20260820 | warm-up=10 | measurement=60 | stabilization=5 | repetitions=1
+GPU timing: unavailable in current benchmark instrumentation
+Frame time source: _process delta; CPU source: Godot Performance monitors
+Render configuration: renderer=forward_plus driver=d3d12 adapter=NVIDIA GeForce RTX 4070 Laptop GPU physical=1920x1080 visible=1920x1080 internal=1920x1080 scale=0.700 scaling_mode=2 vsync=0
+============================================================
+SUNRAYS_4TAP | runs=1
+  Avg frame:   6.3703 ms | Median:   5.4110 ms | P95:  10.3390 ms | P99:  10.7510 ms
+  Min:         4.8780 ms | Max:     10.7510 ms | Avg FPS:   156.98
+  Run variance: mean 6.3703 ms | stdev 0.0000 ms | range 6.3703..6.3703 ms
+  CPU monitors: process=8.2510 ms | physics=0.0620 ms
+
+ESTIMATED MARGINAL FRAME COST RELATIVE TO SUNRAYS_OFF
+delta_ms = baseline_avg_ms - TEST_avg_ms; interactions are not additive costs
+SUNRAYS_4TAP              -6.3703 ms |     0.00%
+
+Notes: no GPU sync/readback is used. GPU time is unavailable; do not infer GPU cost from FPS.
+Coastal bake is resident and included; no per-frame bake is performed by the benchmark.
+============================================================
+PERF-1B CSV: user://ocean_v3_benchmarks/ocean_v3_benchmark_1788303585.csv
+PERF-1B SUMMARY: user://ocean_v3_benchmarks/ocean_v3_benchmark_1788303585.txt

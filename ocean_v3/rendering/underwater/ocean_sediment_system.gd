@@ -202,7 +202,7 @@ func _publish_field_binding() -> void:
 	_field_texture.texture_rd_rid = _field.get_texture_rid(_published_read_index)
 	_surface.set_sediment_field(
 		_field_texture,
-		true,
+		sediment_enabled,
 		_field_origin(),
 		_field_extent(),
 		sediment_above_water_optics_strength,

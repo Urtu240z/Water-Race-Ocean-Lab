@@ -428,9 +428,11 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 18)
+		underwater_debug_mode = clampi(value, 0, 22)
+		if underwater_debug_mode != 19:
+			_sun_vector_diagnostic_printed = false
 		_request_visual_sync()
 
 @export_group("Underwater / Snell-TIR")
@@ -1423,8 +1425,11 @@ var _sea_state_zones_dirty := true
 var _sea_state_zone_debug := false
 var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
+var _light_into_water_world := Vector3(0.0, -1.0, 0.0)
 var _sun_color := Color.WHITE
 var _sun_energy := 0.0
+var _sun_vector_diagnostic_printed := false
+var _underwater_sunrays_benchmark_tap_count := 4
 var _reflection_sspr_manager: Node
 var _caustics_manager: Node
 var _underwater_manager: Node
@@ -1573,6 +1578,7 @@ func _sync_underwater_manager() -> void:
 			"sunrays_animation_speed": underwater_sunrays_animation_speed,
 			"sunrays_pattern_texture": _active_caustics_texture(),
 			"sunrays_time": SimulationClock.get_render_time(),
+			"sunrays_tap_count": _underwater_sunrays_benchmark_tap_count,
 			"snell_enabled": underwater_snell_enabled,
 			"water_ior": underwater_water_ior,
 			"snell_strength": underwater_snell_strength,
@@ -1679,6 +1685,13 @@ func set_benchmark_diagnostic_gates(gates: Dictionary) -> void:
 	## Benchmark-only: each false value removes one coherent visual block. This
 	## does not change authored parameters or persist into scene resources.
 	_benchmark_diagnostic_gates = gates.duplicate(true)
+	_request_visual_sync()
+
+
+func set_underwater_sunrays_benchmark_tap_count(tap_count: int) -> void:
+	## Benchmark-only: selects the legacy midpoint or production four-tap path.
+	## It is not exported and always defaults to the production four-tap path.
+	_underwater_sunrays_benchmark_tap_count = 1 if tap_count <= 1 else 4
 	_request_visual_sync()
 
 
@@ -2071,14 +2084,27 @@ func _sync_sun_direction() -> void:
 	var lights := scene_root.find_children("*", "DirectionalLight3D", true, false)
 	if lights.is_empty():
 		_sun_energy = 0.0
+		_sun_direction_world = Vector3(0.0, 1.0, 0.0)
+		_light_into_water_world = -_sun_direction_world
 		return
 	var sun := lights[0] as DirectionalLight3D
 	if sun != null:
-		# DirectionalLight3D emits along local -Z; the BRDF helper needs the
-		# direction from the surface toward the light.
-		_sun_direction_world = sun.global_transform.basis.z.normalized()
+		# Godot 4.7 emits a DirectionalLight3D along global -Z. Therefore +Z is
+		# the direction from the water toward the sun, and -Z is physical light
+		# travel into the water. Keep both meanings explicit at this boundary.
+		var basis_z_world := sun.global_transform.basis.z
+		if basis_z_world.length_squared() > 0.000001:
+			basis_z_world = basis_z_world.normalized()
+		else:
+			basis_z_world = Vector3(0.0, 1.0, 0.0)
+		_sun_direction_world = basis_z_world
+		_light_into_water_world = -_sun_direction_world
 		_sun_color = sun.light_color
 		_sun_energy = maxf(sun.light_energy, 0.0)
+		if underwater_debug_mode == 19 and not _sun_vector_diagnostic_printed:
+			_sun_vector_diagnostic_printed = true
+			print("OCEAN SUNRAYS: basis.z=%s toward_sun_world=%s light_into_water_world=%s" % [
+				basis_z_world, _sun_direction_world, _light_into_water_world])
 
 
 func _refresh_sea_state_zones() -> void:

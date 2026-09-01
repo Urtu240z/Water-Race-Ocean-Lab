@@ -37,6 +37,7 @@ var _sunrays_pattern_contrast := 1.4
 var _sunrays_animation_speed := 0.12
 var _sunrays_pattern_texture: Texture2D
 var _sunrays_time := 0.0
+var _sunrays_tap_count := 4
 var _dispatch_count := 0
 
 func _init() -> void:
@@ -53,7 +54,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
 		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
 		sunrays_animation_speed: float, sunrays_pattern_texture: Texture2D,
-		sunrays_time: float) -> void:
+		sunrays_time: float, sunrays_tap_count: int = 4) -> void:
 	_mutex.lock()
 	_enabled = is_enabled
 	_sea_level = sea_level
@@ -79,10 +80,11 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_animation_speed = clampf(sunrays_animation_speed, 0.0, 2.0)
 	_sunrays_pattern_texture = sunrays_pattern_texture
 	_sunrays_time = sunrays_time
+	_sunrays_tap_count = 1 if sunrays_tap_count <= 1 else 4
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
 	# are rendered by the surface material and must not turn this pass into a
 	# conflicting compositor visualization.
-	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 18) else 0
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 22) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:
@@ -151,6 +153,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_animation_speed := _sunrays_animation_speed
 	var sunrays_pattern_texture := _sunrays_pattern_texture
 	var sunrays_time := _sunrays_time
+	var sunrays_tap_count := _sunrays_tap_count
 	_mutex.unlock()
 	# In normal AIR mode this compositor remains attached but does no GPU work;
 	# debug modes intentionally keep the pass alive so CAMERA_STATE can be seen.
@@ -185,7 +188,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
 	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
 	params.append(sunrays_animation_speed); params.append(sunrays_time)
-	params.append(sunrays_max_distance); params.append(0.0); params.append(0.0); params.append(0.0)
+	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(0.0); params.append(0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE

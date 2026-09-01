@@ -42,4 +42,37 @@ Inspector `Inject Test Sediment` action. Debug modes are OFF, FIELD, SOURCE,
 CLOUDS, and WISPS. `get_debug_state()` reports resource identity, mapping,
 dispatch count, pending injections, and particle counts without a GPU readback.
 
+The intended manual persistence check is:
+
+```text
+inject a strong patch while UNDERWATER
+-> observe SedimentClouds and SedimentWisps
+-> move the camera above the water surface
+-> the same world location becomes locally turbid through the Ocean V3 optics
+-> return UNDERWATER
+-> the patch remains at the same world position
+```
+
+This V1 fully implements the above-water integration and the clean GPU binding;
+it is not a binding-only placeholder. AIR disables only the 3D presentation
+layers. The field is neither cleared nor automatically stopped in AIR, and its
+default AIR update rate is reduced to 5 Hz. The field simulation can therefore
+be consumed by the surface shader while the camera is in AIR and resumes at
+the same persistent state when returning UNDERWATER.
+
+For reproducible frame-time measurements use
+`res://ocean_v3/tests/performance/ocean_sediment_benchmark.tscn`. It runs:
+
+```text
+A_OFF
+B_FIELD_ONLY
+C_FIELD_CLOUDS
+D_FIELD_CLOUDS_WISPS
+```
+
+Each result records average frame time, FPS, P95 frame time, CPU process time,
+field dispatches, field resolution, update rate, and both particle counts.
+GPU milliseconds are intentionally not reported because the benchmark avoids
+GPU synchronization and readback.
+
 No authored texture asset is required.

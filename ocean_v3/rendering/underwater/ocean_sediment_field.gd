@@ -38,11 +38,27 @@ func initialize(
 	if _rd == null:
 		last_error = "RenderingDevice global no disponible para SedimentField."
 		return
-	var shader_file: RDShaderFile = load(COMPUTE_SHADER_PATH)
-	if shader_file == null:
+	var source_code := FileAccess.get_file_as_string(COMPUTE_SHADER_PATH)
+	if source_code.is_empty():
 		last_error = "No se pudo cargar %s" % COMPUTE_SHADER_PATH
 		return
-	_shader = _rd.shader_create_from_spirv(shader_file.get_spirv(), resource_prefix + ".Shader")
+	# Compile directly so a stale/malformed .import resource cannot be used.
+	# #[compute] is an editor importer directive, not GLSL source.
+	if source_code.begins_with("#[compute]"):
+		var first_newline := source_code.find("\n")
+		if first_newline >= 0:
+			source_code = source_code.substr(first_newline + 1)
+	var shader_source := RDShaderSource.new()
+	shader_source.language = RenderingDevice.SHADER_LANGUAGE_GLSL
+	shader_source.source_compute = source_code
+	var spirv := _rd.shader_compile_spirv_from_source(shader_source)
+	if spirv.bytecode_compute.is_empty():
+		last_error = "No se pudo compilar %s: %s" % [
+			COMPUTE_SHADER_PATH,
+			spirv.get_stage_compile_error(RenderingDevice.SHADER_STAGE_COMPUTE)]
+		push_error(last_error)
+		return
+	_shader = _rd.shader_create_from_spirv(spirv, resource_prefix + ".Shader")
 	if not _shader.is_valid():
 		last_error = "No se pudo compilar %s" % COMPUTE_SHADER_PATH
 		return

@@ -27,6 +27,7 @@ const BASE_PAIRED_TESTS := [
 	"NO_BASE_SURFACE_DETAIL", "NO_BASE_REFRACTION_WAVE", "NO_BASE_DEBUG_REFLECTION"
 ]
 const SUNRAYS_PRESETS := ["SUNRAYS_OFF", "SUNRAYS_ANALYTIC", "SUNRAYS_FULL"]
+const SUNRAYS_V2_PRESETS := ["SUNRAYS_OFF", "SUNRAYS_1TAP", "SUNRAYS_4TAP"]
 const GPU_TIMING_UNAVAILABLE := "unavailable"
 
 @export_group("Benchmark schedule")
@@ -74,6 +75,8 @@ var _paired_full_statistics: Dictionary = {}
 var _paired_deltas: Array[Dictionary] = []
 var _caustics_paired := false
 var _sunrays_benchmark := false
+var _sunrays_v2_benchmark := false
+var _sunrays_debug_override := -1
 
 
 func _ready() -> void:
@@ -170,6 +173,11 @@ func _read_command_line_overrides() -> void:
 			_paired_baseline_preset = "BASE"
 		elif argument == "--ocean-benchmark-sunrays":
 			_sunrays_benchmark = true
+		elif argument == "--ocean-benchmark-sunrays-v2":
+			_sunrays_benchmark = true
+			_sunrays_v2_benchmark = true
+		elif argument.begins_with("--ocean-benchmark-sunrays-debug="):
+			_sunrays_debug_override = clampi(int(argument.get_slice("=", 1)), 0, 22)
 		elif argument.begins_with("--ocean-benchmark-paired-tests="):
 			_paired_test_filter = PackedStringArray(argument.get_slice("=", 1).split(",", false))
 		elif argument.begins_with("--ocean-benchmark-paired-repetitions="):
@@ -186,7 +194,11 @@ func _read_command_line_overrides() -> void:
 
 func _benchmark_presets() -> Array:
 	if full_only:
+		if _sunrays_v2_benchmark:
+			return ["SUNRAYS_4TAP"]
 		return ["SUNRAYS_FULL"] if _sunrays_benchmark else ["FULL"]
+	if _sunrays_v2_benchmark:
+		return SUNRAYS_V2_PRESETS.duplicate()
 	if _sunrays_benchmark:
 		return SUNRAYS_PRESETS.duplicate()
 	if run_mode.to_upper() == "PAIRED":
@@ -245,7 +257,8 @@ func _set_clean_benchmark_state() -> void:
 	_ocean.perf_overlay_enabled = false
 	_ocean.foam_debug_mode = 0
 	_ocean.underwater_enabled = true
-	_ocean.underwater_debug_mode = 0
+	_ocean.underwater_debug_mode = _sunrays_debug_override if _sunrays_debug_override >= 0 else 0
+	_ocean.set_underwater_sunrays_benchmark_tap_count(4)
 	if _sunrays_benchmark:
 		# Keep the benchmark underwater and aimed through a moderate surface path
 		# so all three cases exercise the same existing compositor workload.
@@ -262,11 +275,20 @@ func _set_clean_benchmark_state() -> void:
 
 
 func _apply_current_configuration() -> void:
+	if _sunrays_v2_benchmark:
+		_current_preset = String(_benchmark_presets()[_preset_index])
+		_ocean.underwater_sunrays_enabled = _current_preset != "SUNRAYS_OFF"
+		_ocean.underwater_sunrays_strength = 0.35
+		_ocean.underwater_sunrays_pattern_contrast = 2.4
+		_ocean.set_underwater_sunrays_benchmark_tap_count(1 if _current_preset == "SUNRAYS_1TAP" else 4)
+		print("PERF-SUNRAYS-V2: repetition %d/%d -> %s" % [_repetition_index + 1, repetitions, _current_preset])
+		return
 	if _sunrays_benchmark:
 		_current_preset = String(_benchmark_presets()[_preset_index])
 		_ocean.underwater_sunrays_enabled = _current_preset != "SUNRAYS_OFF"
 		_ocean.underwater_sunrays_strength = 0.35
 		_ocean.underwater_sunrays_pattern_contrast = 0.0 if _current_preset == "SUNRAYS_ANALYTIC" else 1.4
+		_ocean.set_underwater_sunrays_benchmark_tap_count(4)
 		print("PERF-SUNRAYS: repetition %d/%d -> %s" % [_repetition_index + 1, repetitions, _current_preset])
 		return
 	if _paired_mode:

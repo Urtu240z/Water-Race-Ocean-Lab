@@ -1,6 +1,9 @@
 #[compute]
 #version 450
 
+// V1 persistent world-space field. Keep this marker so Godot reimports the
+// RDShaderFile after shader ABI changes instead of reusing stale bytecode.
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D previous_field;
@@ -41,8 +44,8 @@ void main() {
 	vec2 slow_flow = normalize(vec2(
 		sin(dot(world_xz, vec2(0.013, 0.009)) + params.current.w * 0.043),
 		cos(dot(world_xz, vec2(-0.008, 0.017)) + params.current.w * 0.037)
-		+ vec2(0.00001, 0.0)
-	) * 0.035;
+		+ 0.00001
+	)) * 0.035;
 	vec2 flow = current_direction * params.simulation.w
 		+ wave_direction * sin(phase) * params.current.z
 		+ slow_flow;
