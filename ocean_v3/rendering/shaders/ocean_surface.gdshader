@@ -1,9 +1,5 @@
 shader_type spatial;
-#ifdef OCEAN_WATER_INTERFACE
-render_mode unshaded, cull_disabled, depth_draw_opaque;
-#else
 render_mode blend_mix, cull_disabled, depth_draw_always, diffuse_burley, specular_schlick_ggx;
-#endif
 
 uniform sampler2D displacement_long_coastal : repeat_enable, filter_linear;
 uniform sampler2D displacement_long_remainder : repeat_enable, filter_linear;
@@ -84,19 +80,14 @@ uniform int breaking_debug_mode = 0;
 // Hs de LONG completo en deep water y fracción de energía del split COASTAL.
 // Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
 uniform float breaking_long_hs_m = 0.50;
-uniform float breaking_coastal_energy_fraction = 0.50;
-#ifdef OCEAN_BREAKING_DIAGNOSTICS
-// OPEN_BREAK is a diagnostic-only path. Keeping its parameters out of the
-// production variant avoids dead uniform bindings without changing the debug
-// shader, which defines OCEAN_BREAKING_DIAGNOSTICS before this source.
 uniform float breaking_mid_hs_m = 0.25;
+uniform float breaking_coastal_energy_fraction = 0.50;
 uniform float breaking_long_min_wavelength_m = 16.0;
 uniform float breaking_long_max_wavelength_m = 128.0;
 uniform float breaking_mid_min_wavelength_m = 4.0;
 uniform float breaking_mid_max_wavelength_m = 20.0;
 uniform vec2 breaking_long_direction_xz = vec2(1.0, 0.0);
 uniform vec2 breaking_mid_direction_xz = vec2(1.0, 0.0);
-#endif
 uniform float breaking_depth_gamma = 0.78;
 uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
 uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
@@ -126,6 +117,7 @@ uniform bool ocean_shape_debug = false;
 // are set only by OceanV3.set_benchmark_diagnostic_gates().
 uniform bool perf_benchmark_crest_shape_enabled = true;
 uniform bool perf_benchmark_surface_detail_enabled = true;
+uniform bool perf_benchmark_debug_reflection_enabled = true;
 uniform bool perf_benchmark_near_ssr_enabled = true;
 uniform bool perf_benchmark_optics_enabled = true;
 uniform bool perf_benchmark_refraction_wave_enabled = true;
@@ -183,19 +175,6 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 // Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
-// The compositor owns the water medium; this source is also compiled as a
-// dedicated interface-only variant.  The variant shares the exact vertex path
-// but compiles all production fragment optics out at shader-compile time.
-#ifdef OCEAN_WATER_INTERFACE
-uniform float water_interface_depth_max_m = 500.0;
-#endif
-uniform float underwater_transition_width_m : hint_range(0.01, 1.0, 0.01) = 0.12;
-uniform float underwater_water_ior : hint_range(1.0, 1.6, 0.001) = 1.333;
-uniform float underwater_snell_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
-uniform float underwater_tir_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
-uniform float underwater_snell_detail_strength : hint_range(0.0, 1.0, 0.01) = 0.20;
-uniform float underwater_surface_projection_distance_m : hint_range(1.0, 500.0, 1.0) = 80.0;
-uniform int underwater_debug_mode = 0;
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
 uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
 uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
@@ -440,9 +419,9 @@ varying vec4 breaking_indices; // depth, steepness, crestness, final prebreak.
 varying float crest_sharpen_mask; // 5R.1C: máscara de sharpening (debug).
 varying float ocean_wave_height; // 5R.3C: altura visual final para tint de cresta/valle.
 varying vec2 surface_foam_displacement_xz; // desplazamiento físico ya calculado por vertex().
-// Packed to save two Forward+ varying locations: x=vertical weight,
-// y=horizontal weight, z=pre-envelope height.
-varying vec3 shore_weights_varying;
+varying float shore_vertical_weight_varying;
+varying float shore_horizontal_weight_varying;
+varying float shore_pre_envelope_height;
 // Refraction V2 in VERTEX mode reuses these already calculated vertex slopes.
 // LONG/MID are packed together to stay within the varying-location budget.
 varying vec4 refraction_vertex_long_mid_slope;
@@ -971,7 +950,9 @@ void vertex() {
 	coastal_warp_delta_m = 0.0;
 	breaking_indices = vec4(0.0);
 	crest_sharpen_mask = 0.0;
-	shore_weights_varying = vec3(1.0, 1.0, 0.0);
+	shore_vertical_weight_varying = 1.0;
+	shore_horizontal_weight_varying = 1.0;
+	shore_pre_envelope_height = 0.0;
 	refraction_vertex_long_mid_slope = vec4(0.0);
 	coastal_field = vec4(0.0);
 	coastal_metrics = vec4(0.0);
@@ -994,7 +975,7 @@ void vertex() {
 	coastal_phase_data = textureLod(coastal_phase_texture, clamp(coast_uv, vec2(0.0), vec2(1.0)), 0.0);
 	vec2 shore_vertical_gradient;
 	shore_stabilization_weights_and_gradients(world_xz, coastal_metrics,
-		shore_weights_varying.x, shore_weights_varying.y,
+		shore_vertical_weight_varying, shore_horizontal_weight_varying,
 		shore_vertical_gradient);
 	bool coast_active = has_coastal_data(coast_uv, coastal_field);
 	bool coast_transform_active = coastal_transform_enabled && coast_active;
@@ -1190,14 +1171,14 @@ void vertex() {
 	// any crest sharpening added above, while keeping the breaker detector on
 	// the pre-stabilized wave. The product rule keeps the vertex normal aligned
 	// with height_final = vertical_weight * height.
-	shore_weights_varying.z = displacement.y;
-	displacement.xz *= shore_weights_varying.y;
-	displacement.y *= shore_weights_varying.x;
-	vec2 shore_final_slope = slope * shore_weights_varying.x
-		+ shore_weights_varying.z * shore_vertical_gradient;
+	shore_pre_envelope_height = displacement.y;
+	displacement.xz *= shore_horizontal_weight_varying;
+	displacement.y *= shore_vertical_weight_varying;
+	vec2 shore_final_slope = slope * shore_vertical_weight_varying
+		+ shore_pre_envelope_height * shore_vertical_gradient;
 	refraction_vertex_long_mid_slope = vec4(
-		long_slope_component * shore_weights_varying.x,
-		mid_slope_component * shore_weights_varying.x
+		long_slope_component * shore_vertical_weight_varying,
+		mid_slope_component * shore_vertical_weight_varying
 	);
 	ocean_normal = !module_enabled ? vec3(0.0, 1.0, 0.0) : normalize(vec3(-shore_final_slope.x, 1.0, -shore_final_slope.y));
 	// Production handoff is deliberately after the shoreline envelope: the
@@ -1349,10 +1330,20 @@ void pixel_ocean_slope_components(
 	vec2 shore_vertical_gradient = shore_weight_gradient_from_fragment(world_xz, shore_vertical_weight);
 	// Same product rule as the vertex path. The horizontal envelope changes
 	// geometry topology, while the normal follows the vertical height envelope.
-	slope = slope * shore_vertical_weight + shore_weights_varying.z * shore_vertical_gradient;
+	slope = slope * shore_vertical_weight + shore_pre_envelope_height * shore_vertical_gradient;
 
 	filtered_slope = slope;
 }
+
+vec3 pixel_ocean_normal(vec2 world_xz) {
+	vec2 long_slope;
+	vec2 mid_slope;
+	vec2 short_slope;
+	vec2 filtered_slope;
+	pixel_ocean_slope_components(world_xz, long_slope, mid_slope, short_slope, filtered_slope);
+	return normalize(vec3(-filtered_slope.x, 1.0, -filtered_slope.y));
+}
+
 
 // Production composition of the high-resolution persistent field. It mirrors
 // the established coastal/open/deep coordinate policy while MID/SHORT provide
@@ -2049,22 +2040,6 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 
 void fragment() {
-	#ifdef OCEAN_WATER_INTERFACE
-		// RG = octahedral world macro normal, B = normalized positive view depth,
-		// A = valid coverage plus camera-side encoding (1 air, 0.75 water).
-		vec2 macro_slope = refraction_vertex_long_mid_slope.xy + refraction_vertex_long_mid_slope.zw;
-		vec3 n = normalize(mat3(MODEL_MATRIX) * vec3(-macro_slope.x, 1.0, -macro_slope.y));
-		float l1 = max(abs(n.x) + abs(n.y) + abs(n.z), 0.00001);
-		vec2 oct = n.xy / l1;
-		if (n.z < 0.0) oct = (vec2(1.0) - abs(oct.yx)) * sign(oct.xy);
-		float view_depth = max(-(VIEW_MATRIX * vec4(ocean_world_position, 1.0)).z, 0.0);
-		float normalized_depth = clamp(view_depth / max(water_interface_depth_max_m, 1.0), 0.0, 1.0);
-		float camera_side = dot(CAMERA_POSITION_WORLD - ocean_world_position, n);
-		ALBEDO = vec3(oct * 0.5 + 0.5, normalized_depth);
-		ROUGHNESS = 1.0;
-		SPECULAR = 0.0;
-		ALPHA = camera_side >= 0.0 ? 1.0 : 0.75;
-	#else
 	// Routing sentinels intentionally run before foam, depth, screen, bathymetry,
 	// scattering and reflection work. They prove the complete Inspector -> CPU
 	// -> material -> rendered clipmap -> fragment route without any data inputs.
@@ -2547,8 +2522,8 @@ void fragment() {
 		else if (coastal_debug_field == 7) value = coastal_field.b;
 		else if (coastal_debug_field == 8) value = coastal_phase_data.a;
 		else if (coastal_debug_field == 9) value = clamp(max(coastal_metrics.r, 0.0) / max(shore_horizontal_depth_range_m.y, 0.001), 0.0, 1.0);
-		else if (coastal_debug_field == 10) value = shore_weights_varying.x;
-		else if (coastal_debug_field == 11) value = shore_weights_varying.y;
+		else if (coastal_debug_field == 10) value = shore_vertical_weight_varying;
+		else if (coastal_debug_field == 11) value = shore_horizontal_weight_varying;
 		color = mix(vec3(0.02, 0.05, 0.12), vec3(0.95, 0.8, 0.18), clamp(value, 0.0, 1.0));
 	}
 	if (perf_prebreak_enabled && breaking_debug_mode > 0) {
@@ -3404,97 +3379,6 @@ void fragment() {
 			final_color = mix(final_color, surface_foam_color.rgb, surface_foam_mask);
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
-
-			// Water -> air interface.  Use the already available LONG/MID/SHORT
-			// FFT slopes: macro remains authoritative and SHORT is only a bounded
-			// detail perturbation, so no extra FFT samples are introduced here.
-			// GPU-local interface classification is the sole authority for Snell/TIR.
-			// It follows the displaced FFT surface at each fragment and cannot retain
-			// a stale CPU camera-state flag after crossing a wave.
-			vec2 underwater_macro_slope = refraction_long_slope + refraction_mid_slope
-				+ refraction_short_slope * clamp(underwater_snell_detail_strength, 0.0, 1.0);
-			vec3 underwater_macro_slope_normal_world = refraction_wave_signal_valid
-				? normalize(vec3(-underwater_macro_slope.x, 1.0, -underwater_macro_slope.y))
-				: sspr_macro_normal_world;
-			vec3 underwater_camera_world_position = INV_VIEW_MATRIX[3].xyz;
-			float underwater_interface_side = dot(
-				underwater_camera_world_position - ocean_world_position,
-				underwater_macro_slope_normal_world
-			);
-			float local_underwater_interface_factor = 1.0 - smoothstep(
-				-max(underwater_transition_width_m, WATER_OPTICS_EPSILON),
-				max(underwater_transition_width_m, WATER_OPTICS_EPSILON),
-				underwater_interface_side
-			);
-			bool underwater_surface_active = local_underwater_interface_factor > WATER_OPTICS_EPSILON;
-			bool underwater_tir = false;
-			float underwater_critical_angle_scalar = 0.0;
-			if (underwater_surface_active) {
-				vec3 underwater_macro_normal_world = underwater_macro_slope_normal_world;
-				// Incident points from the underwater camera to the interface.  Flip
-				// the normal to face its incident medium before calling refract().
-				vec3 underwater_incident_world = normalize((INV_VIEW_MATRIX
-					* vec4(-view_direction, 0.0)).xyz);
-				vec3 underwater_interface_normal = dot(underwater_incident_world,
-					underwater_macro_normal_world) > 0.0
-					? -underwater_macro_normal_world : underwater_macro_normal_world;
-				float water_to_air_eta = max(underwater_water_ior, 1.0);
-				float cos_incident = clamp(-dot(underwater_incident_world,
-					underwater_interface_normal), 0.0, 1.0);
-				// Snell's critical cone is angular: sin(theta_i) <= n_air / n_water.
-				// This never depends on projected screen UV, so its shape follows the
-				// view ray and surface normal rather than the viewport rectangle.
-				float critical_cosine = sqrt(max(1.0 - 1.0 / (water_to_air_eta * water_to_air_eta), 0.0));
-				underwater_critical_angle_scalar = clamp(
-					(cos_incident - critical_cosine) / max(1.0 - critical_cosine, WATER_OPTICS_EPSILON),
-					0.0, 1.0);
-				vec3 refracted_exterior_world = refract(
-					underwater_incident_world, underwater_interface_normal, water_to_air_eta);
-				underwater_tir = cos_incident < critical_cosine
-					|| length(refracted_exterior_world) <= WATER_OPTICS_EPSILON
-					|| any(isnan(refracted_exterior_world)) || any(isinf(refracted_exterior_world));
-				vec3 reflected_exterior_world = reflect(
-					underwater_incident_world, underwater_interface_normal);
-				vec3 reflected_exterior = reflection_radiance;
-				vec3 reflected_target_view = (VIEW_MATRIX * vec4(
-					ocean_world_position + reflected_exterior_world
-						* underwater_surface_projection_distance_m, 1.0)).xyz;
-				vec4 reflected_clip = projection_matrix * vec4(reflected_target_view, 1.0);
-				if (abs(reflected_clip.w) > WATER_OPTICS_EPSILON) {
-					vec2 reflected_uv = reflected_clip.xy / reflected_clip.w * 0.5 + 0.5;
-					if (all(greaterThanEqual(reflected_uv, vec2(0.001)))
-						&& all(lessThanEqual(reflected_uv, vec2(0.999)))) {
-						reflected_exterior = textureLod(screen_texture, reflected_uv, 0.0).rgb;
-					}
-				}
-				// UV bounds only select a color fallback. They must never define the
-				// Snell/TIR classification, or the critical cone becomes rectangular.
-				vec3 refracted_exterior = final_color;
-				if (!underwater_tir) {
-					vec3 refracted_target_view = (VIEW_MATRIX * vec4(
-						ocean_world_position + normalize(refracted_exterior_world)
-							* underwater_surface_projection_distance_m, 1.0)).xyz;
-					vec4 refracted_clip = projection_matrix * vec4(refracted_target_view, 1.0);
-					if (abs(refracted_clip.w) > WATER_OPTICS_EPSILON) {
-						vec2 refracted_uv = refracted_clip.xy / refracted_clip.w * 0.5 + 0.5;
-						if (all(greaterThanEqual(refracted_uv, vec2(0.001)))
-							&& all(lessThanEqual(refracted_uv, vec2(0.999)))) {
-							refracted_exterior = textureLod(screen_texture, refracted_uv, 0.0).rgb;
-						}
-					}
-				}
-				float underwater_f0 = pow((water_to_air_eta - 1.0)
-					/ (water_to_air_eta + 1.0), 2.0);
-				float underwater_fresnel = underwater_tir ? 1.0 : underwater_f0
-					+ (1.0 - underwater_f0) * pow(1.0 - cos_incident, 5.0);
-				vec3 refracted_surface = mix(final_color, refracted_exterior,
-					clamp(underwater_snell_strength, 0.0, 1.0));
-				vec3 reflected_surface = mix(final_color, reflected_exterior,
-					clamp(underwater_tir_strength, 0.0, 1.0));
-				vec3 underwater_surface = mix(refracted_surface, reflected_surface,
-					clamp(underwater_fresnel, 0.0, 1.0));
-				final_color = mix(final_color, underwater_surface, local_underwater_interface_factor);
-			}
 			if (water_optics_debug_mode == 1) {
 				final_color = vec3(bounded_view_water_path_m / max(maximum_optical_depth, 0.001));
 			} else if (water_optics_debug_mode == 2) {
@@ -3619,11 +3503,6 @@ void fragment() {
 				// absorption, scattering, foam, tint, reflection and water shading.
 				final_color = refraction_background_only;
 			}
-			if (underwater_debug_mode == 6) {
-				final_color = vec3(underwater_critical_angle_scalar);
-			} else if (underwater_debug_mode == 7) {
-				final_color = vec3(underwater_tir ? 1.0 : 0.0);
-			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
 			// Water response is established first; foam remains the final authority.
@@ -3665,7 +3544,6 @@ void fragment() {
 		}
 	}
 	}
-	#endif
 	if (lod_debug_index >= 0.0) {
 		vec3 lod_debug_color = level_color(lod_debug_index);
 		ALBEDO = lod_debug_color;

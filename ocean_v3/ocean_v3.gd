@@ -12,11 +12,6 @@ const BASE_WAVE_PRESET_PATHS := [
 ]
 const SSPR_MANAGER_SCRIPT := preload("res://ocean_v3/reflections/ocean_sspr_manager.gd")
 const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocean_caustics_manager.gd")
-const UNDERWATER_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_manager.gd")
-# Keep the GPU interface authoritative while the camera is close enough to be
-# intersected by a displaced crest (the CPU guard must not reject that case).
-const UNDERWATER_CROSSING_BAND_M := 2.0
-enum UnderwaterViewerMedium { AIR, WATER, CROSSING }
 const PERF_PRESET_FULL := &"FULL"
 const PERF_PRESET_BASE := &"BASE"
 const PERF_PRESET_NO_SSPR := &"NO_SSPR"
@@ -355,71 +350,6 @@ var _performance_overlay_label: Label
 			maxf(value.y, 0.0),
 			maxf(value.z, 0.0)
 		)
-		_request_visual_sync()
-
-
-@export_group("Underwater / Main")
-@export var underwater_enabled := true:
-	set(value):
-		underwater_enabled = value
-		_request_visual_sync()
-@export_range(0.01, 1.0, 0.01, "suffix: m") var underwater_transition_width_m := 0.12:
-	set(value):
-		underwater_transition_width_m = clampf(value, 0.01, 1.0)
-		_request_visual_sync()
-@export_range(0.0, 0.2, 0.001) var underwater_waterline_feather := 0.03:
-	set(value):
-		underwater_waterline_feather = clampf(value, 0.0, 0.2)
-		_request_visual_sync()
-
-@export_group("Underwater / Medium")
-@export_range(0.0, 4.0, 0.01) var underwater_absorption_scale := 1.0:
-	set(value):
-		underwater_absorption_scale = clampf(value, 0.0, 4.0)
-		_request_visual_sync()
-@export_color_no_alpha var underwater_scattering_color := Color(0.02, 0.32, 0.42, 1.0):
-	set(value):
-		underwater_scattering_color = value
-		_request_visual_sync()
-@export_range(0.0, 4.0, 0.01) var underwater_scattering_strength := 1.0:
-	set(value):
-		underwater_scattering_strength = clampf(value, 0.0, 4.0)
-		_request_visual_sync()
-@export_range(0.0, 2.0, 0.005) var underwater_scattering_density := 0.15:
-	set(value):
-		underwater_scattering_density = clampf(value, 0.0, 2.0)
-		_request_visual_sync()
-@export_range(1.0, 500.0, 1.0, "suffix: m") var underwater_max_optical_distance_m := 120.0:
-	set(value):
-		underwater_max_optical_distance_m = clampf(value, 1.0, 500.0)
-		_request_visual_sync()
-
-@export_group("Underwater / Surface")
-@export_range(1.0, 1.6, 0.001) var underwater_water_ior := 1.333:
-	set(value):
-		underwater_water_ior = clampf(value, 1.0, 1.6)
-		_request_visual_sync()
-@export_range(0.0, 2.0, 0.01) var underwater_snell_strength := 1.0:
-	set(value):
-		underwater_snell_strength = clampf(value, 0.0, 2.0)
-		_request_visual_sync()
-@export_range(0.0, 2.0, 0.01) var underwater_tir_strength := 1.0:
-	set(value):
-		underwater_tir_strength = clampf(value, 0.0, 2.0)
-		_request_visual_sync()
-@export_range(0.0, 1.0, 0.01) var underwater_snell_detail_strength := 0.20:
-	set(value):
-		underwater_snell_detail_strength = clampf(value, 0.0, 1.0)
-		_request_visual_sync()
-@export_range(1.0, 500.0, 1.0, "suffix: m") var underwater_surface_projection_distance_m := 80.0:
-	set(value):
-		underwater_surface_projection_distance_m = clampf(value, 1.0, 500.0)
-		_request_visual_sync()
-
-@export_group("Underwater / Debug")
-@export_enum("OFF", "INTERFACE_VALID", "INTERFACE_DEPTH", "OPAQUE_DEPTH", "INTERFACE_NORMAL", "VIEWER_MEDIUM", "PIXEL_MEDIUM", "SNELL_K", "TIR", "WATERLINE") var underwater_debug_mode := 0:
-	set(value):
-		underwater_debug_mode = clampi(value, 0, 9)
 		_request_visual_sync()
 
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth: float = 38.0:
@@ -1345,12 +1275,6 @@ var _reflection_debug_mode := 0
 var _sun_direction_world := Vector3(0.0, 0.0, 1.0)
 var _reflection_sspr_manager: Node
 var _caustics_manager: Node
-var _underwater_manager: Node
-var _camera_underwater := false
-var _underwater_factor := 0.0
-var _camera_water_surface_y := 0.0
-var _camera_water_normal := Vector3.UP
-var _underwater_viewer_medium := UnderwaterViewerMedium.AIR
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
 var _startup_stable_frames := 0
@@ -1386,10 +1310,6 @@ func _ready() -> void:
 			caustics_luminance_mask_strength, caustics_sun_strength,
 			caustics_fade_start_depth, caustics_max_depth, _sun_direction_world,
 			caustics_debug_mode)
-		_underwater_manager = UNDERWATER_MANAGER_SCRIPT.new()
-		_underwater_manager.name = &"OceanUnderwaterManager"
-		add_child(_underwater_manager)
-		_underwater_manager.configure(self)
 	_apply_performance_profile()
 	_ensure_performance_overlay()
 	_startup_setup_usec = Time.get_ticks_usec()
@@ -1399,58 +1319,6 @@ func _ready() -> void:
 func _surface_sea_level() -> float:
 	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 	return surface.clipmap_config.sea_level_y if surface != null else 0.0
-
-
-func _update_underwater_camera_state() -> void:
-	var camera := get_viewport().get_camera_3d()
-	if camera == null:
-		_camera_water_surface_y = _surface_sea_level()
-		_camera_water_normal = Vector3.UP
-		_camera_underwater = false
-		_underwater_factor = 0.0
-		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
-		return
-	# The render callback owns the displaced, per-pixel interface.  Keep this
-	# CPU guard deliberately coarse: querying FFT here reintroduced a synchronous
-	# render-frame OceanQuery and could not describe the projected waterline.
-	var sampled_height := _surface_sea_level()
-	var sampled_normal := Vector3.UP
-	_camera_water_surface_y = sampled_height
-	_camera_water_normal = sampled_normal
-	var signed_surface_distance := (camera.global_position - Vector3(camera.global_position.x, sampled_height, camera.global_position.z)).dot(sampled_normal)
-	if signed_surface_distance > UNDERWATER_CROSSING_BAND_M:
-		_camera_underwater = false
-		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
-	elif signed_surface_distance < -UNDERWATER_CROSSING_BAND_M:
-		_camera_underwater = true
-		_underwater_viewer_medium = UnderwaterViewerMedium.WATER
-	else:
-		_underwater_viewer_medium = UnderwaterViewerMedium.CROSSING
-	var half_width := maxf(underwater_transition_width_m, 0.01)
-	_underwater_factor = 1.0 - smoothstep(
-		-half_width,
-		half_width,
-		signed_surface_distance
-	)
-
-
-func _sync_underwater_manager() -> void:
-	if _underwater_manager == null or not is_instance_valid(_underwater_manager):
-		return
-	_underwater_manager.set_settings({
-		"enabled": underwater_enabled,
-		"viewer_medium": _underwater_viewer_medium,
-		"camera_factor": _underwater_factor,
-		"transition_width": underwater_transition_width_m,
-		"waterline_feather": underwater_waterline_feather,
-		"absorption": absorption_coeff_rgb,
-		"absorption_scale": underwater_absorption_scale,
-		"scattering_color": underwater_scattering_color,
-		"scattering_strength": underwater_scattering_strength,
-		"scattering_density": underwater_scattering_density,
-		"max_distance": underwater_max_optical_distance_m,
-		"debug_mode": underwater_debug_mode,
-	})
 
 
 func _configure_coastal_bake_asset() -> void:
@@ -1944,8 +1812,6 @@ func _process(_delta: float) -> void:
 	if not Engine.is_editor_hint():
 		_sync_sun_direction()
 		_sync_caustics_manager()
-		_update_underwater_camera_state()
-		_sync_underwater_manager()
 	if not _startup_reported and not _visual_sync_pending:
 		# Three rendered process frames avoid calling a deferred setup frame
 		# "stable" while retaining zero recurring instrumentation cost.
@@ -2357,6 +2223,7 @@ func _sync_water_visual_parameters() -> void:
 		and surface_warp_texture != null
 	material.set_shader_parameter(&"surface_detail_enabled", detail_ready)
 	material.set_shader_parameter(&"perf_benchmark_surface_detail_enabled", bool(_benchmark_diagnostic_gates.get("surface_detail", true)))
+	material.set_shader_parameter(&"perf_benchmark_debug_reflection_enabled", bool(_benchmark_diagnostic_gates.get("debug_reflection", true)))
 	material.set_shader_parameter(&"perf_benchmark_crest_shape_enabled", bool(_benchmark_diagnostic_gates.get("crest_shape", true)))
 	material.set_shader_parameter(&"perf_benchmark_near_ssr_enabled", bool(_benchmark_diagnostic_gates.get("near_ssr", true)))
 	material.set_shader_parameter(&"perf_benchmark_optics_enabled", bool(_benchmark_diagnostic_gates.get("optics", true)))
@@ -2392,13 +2259,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"trough_tint", trough_tint)
 	material.set_shader_parameter(&"crest_tint", crest_tint)
 	material.set_shader_parameter(&"absorption_coeff_rgb", absorption_coeff_rgb)
-	material.set_shader_parameter(&"underwater_transition_width_m", underwater_transition_width_m)
-	material.set_shader_parameter(&"underwater_water_ior", underwater_water_ior)
-	material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)
-	material.set_shader_parameter(&"underwater_tir_strength", underwater_tir_strength)
-	material.set_shader_parameter(&"underwater_snell_detail_strength", underwater_snell_detail_strength)
-	material.set_shader_parameter(&"underwater_surface_projection_distance_m", underwater_surface_projection_distance_m)
-	material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
 	# Keep the legacy parameter synchronized for old materials/resources; the
 	# shader no longer uses it in the production optics path.
 	material.set_shader_parameter(&"absorption_density", absorption_density)
@@ -2440,7 +2300,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"shallow_fresnel_depth_start_m", shallow_fresnel_depth_start_m)
 	material.set_shader_parameter(&"shallow_fresnel_depth_end_m", shallow_fresnel_depth_end_m)
 	_sync_caustics_manager()
-	_sync_underwater_manager()
 	var bathymetry_sea_level_y := _surface_sea_level()
 	if coastal_bake_asset != null:
 		if Engine.is_editor_hint():
