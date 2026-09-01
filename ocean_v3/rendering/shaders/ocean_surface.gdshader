@@ -175,6 +175,16 @@ uniform vec4 crest_tint : source_color = vec4(0.11, 0.62, 0.68, 1.0);
 // Production water optics use absorption_coeff_rgb.
 uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
+// Underwater Phase 1 uses the existing FFT slope components below.  The
+// compositor owns the water medium; this branch owns only the real interface.
+uniform bool underwater_camera_active = false;
+uniform float underwater_camera_factor : hint_range(0.0, 1.0, 0.01) = 0.0;
+uniform float underwater_water_ior : hint_range(1.0, 1.6, 0.001) = 1.333;
+uniform float underwater_snell_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform float underwater_tir_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
+uniform float underwater_snell_detail_strength : hint_range(0.0, 1.0, 0.01) = 0.20;
+uniform float underwater_surface_projection_distance_m : hint_range(1.0, 500.0, 1.0) = 80.0;
+uniform int underwater_debug_mode = 0;
 uniform float maximum_optical_depth : hint_range(1.0, 100.0, 0.5) = 38.0;
 uniform float water_body_depth_start_m : hint_range(0.0, 20.0, 0.1) = 0.5;
 uniform float water_body_depth_end_m : hint_range(0.1, 50.0, 0.1) = 8.0;
@@ -3379,6 +3389,75 @@ void fragment() {
 			final_color = mix(final_color, surface_foam_color.rgb, surface_foam_mask);
 			final_color = mix(final_color, residual_foam_color, foam_residual_mask);
 			final_color = mix(final_color, foam_fresh_color.rgb, foam_fresh_mask);
+
+			// Water -> air interface.  Use the already available LONG/MID/SHORT
+			// FFT slopes: macro remains authoritative and SHORT is only a bounded
+			// detail perturbation, so no extra FFT samples are introduced here.
+			bool underwater_surface_active = underwater_camera_active
+				&& underwater_camera_factor > WATER_OPTICS_EPSILON;
+			bool underwater_tir = false;
+			bool underwater_refracted_valid = false;
+			if (underwater_surface_active) {
+				vec2 underwater_macro_slope = refraction_long_slope + refraction_mid_slope
+					+ refraction_short_slope * clamp(underwater_snell_detail_strength, 0.0, 1.0);
+				vec3 underwater_macro_normal_world = refraction_wave_signal_valid
+					? normalize(vec3(-underwater_macro_slope.x, 1.0, -underwater_macro_slope.y))
+					: sspr_macro_normal_world;
+				// Incident points from the underwater camera to the interface.  Flip
+				// the normal to face its incident medium before calling refract().
+				vec3 underwater_incident_world = normalize((INV_VIEW_MATRIX
+					* vec4(-view_direction, 0.0)).xyz);
+				vec3 underwater_interface_normal = dot(underwater_incident_world,
+					underwater_macro_normal_world) > 0.0
+					? -underwater_macro_normal_world : underwater_macro_normal_world;
+				float water_to_air_eta = max(underwater_water_ior, 1.0);
+				vec3 refracted_exterior_world = refract(
+					underwater_incident_world, underwater_interface_normal, water_to_air_eta);
+				underwater_tir = length(refracted_exterior_world) <= WATER_OPTICS_EPSILON
+					|| any(isnan(refracted_exterior_world)) || any(isinf(refracted_exterior_world));
+				vec3 reflected_exterior_world = reflect(
+					underwater_incident_world, underwater_interface_normal);
+				vec3 reflected_exterior = reflection_radiance;
+				vec3 reflected_target_view = (VIEW_MATRIX * vec4(
+					ocean_world_position + reflected_exterior_world
+						* underwater_surface_projection_distance_m, 1.0)).xyz;
+				vec4 reflected_clip = projection_matrix * vec4(reflected_target_view, 1.0);
+				if (abs(reflected_clip.w) > WATER_OPTICS_EPSILON) {
+					vec2 reflected_uv = reflected_clip.xy / reflected_clip.w * 0.5 + 0.5;
+					if (all(greaterThanEqual(reflected_uv, vec2(0.001)))
+						&& all(lessThanEqual(reflected_uv, vec2(0.999)))) {
+						reflected_exterior = textureLod(screen_texture, reflected_uv, 0.0).rgb;
+					}
+				}
+				vec3 refracted_exterior = vec3(0.0);
+				if (!underwater_tir) {
+					vec3 refracted_target_view = (VIEW_MATRIX * vec4(
+						ocean_world_position + normalize(refracted_exterior_world)
+							* underwater_surface_projection_distance_m, 1.0)).xyz;
+					vec4 refracted_clip = projection_matrix * vec4(refracted_target_view, 1.0);
+					if (abs(refracted_clip.w) > WATER_OPTICS_EPSILON) {
+						vec2 refracted_uv = refracted_clip.xy / refracted_clip.w * 0.5 + 0.5;
+						if (all(greaterThanEqual(refracted_uv, vec2(0.001)))
+							&& all(lessThanEqual(refracted_uv, vec2(0.999)))) {
+							refracted_exterior = textureLod(screen_texture, refracted_uv, 0.0).rgb;
+							underwater_refracted_valid = true;
+						}
+					}
+				}
+				float cos_incident = clamp(-dot(underwater_incident_world,
+					underwater_interface_normal), 0.0, 1.0);
+				float underwater_f0 = pow((water_to_air_eta - 1.0)
+					/ (water_to_air_eta + 1.0), 2.0);
+				float underwater_fresnel = underwater_tir ? 1.0 : underwater_f0
+					+ (1.0 - underwater_f0) * pow(1.0 - cos_incident, 5.0);
+				vec3 refracted_surface = mix(final_color, refracted_exterior,
+					clamp(underwater_snell_strength, 0.0, 1.0));
+				vec3 reflected_surface = mix(final_color, reflected_exterior,
+					clamp(underwater_tir_strength, 0.0, 1.0));
+				vec3 underwater_surface = mix(refracted_surface, reflected_surface,
+					clamp(underwater_fresnel, 0.0, 1.0));
+				final_color = mix(final_color, underwater_surface, underwater_camera_factor);
+			}
 			if (water_optics_debug_mode == 1) {
 				final_color = vec3(bounded_view_water_path_m / max(maximum_optical_depth, 0.001));
 			} else if (water_optics_debug_mode == 2) {
@@ -3502,6 +3581,11 @@ void fragment() {
 				// Full-resolution real screen color at the displaced UV. This bypasses
 				// absorption, scattering, foam, tint, reflection and water shading.
 				final_color = refraction_background_only;
+			}
+			if (underwater_debug_mode == 6) {
+				final_color = vec3(underwater_refracted_valid ? 1.0 : 0.0);
+			} else if (underwater_debug_mode == 7) {
+				final_color = vec3(underwater_tir ? 1.0 : 0.0);
 			}
 			ALBEDO = final_color;
 			EMISSION = vec3(0.0);
