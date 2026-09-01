@@ -1,63 +1,65 @@
-# Ocean V3 — Underwater Phase 1
+# Ocean V3 — Underwater V2 / Water Interface Buffer
 
-## Scope
+## Authority and cost
 
-Underwater optics are split into two deliberately separate responsibilities:
+`OceanUnderwaterManager` owns exactly one `WaterInterfaceBuffer` `SubViewport`.
+It shares the main `World3D`, synchronizes its camera transform, projection,
+FOV, near/far planes, aspect policy and frustum offsets with the active camera,
+and renders only the dedicated interface layer. The main camera explicitly
+excludes that layer.
 
-- `OceanUnderwaterDepthCaptureEffect` snapshots resolved depth at
-  `PRE_TRANSPARENT`. `OceanUnderwaterEffect` runs at `POST_TRANSPARENT`,
-  compares that snapshot with final depth, then reconstructs the per-pixel
-  scene ray and applies Beer-Lambert absorption and single-pass scattering.
-- `ocean_surface.gdshader` remains the visual interface authority.  When the
-  actual displaced FFT surface puts a fragment on the water-to-air side, it
-  uses its already-evaluated FFT slope data to construct the Snell/TIR branch.
-  The branch is classified per fragment on GPU; the CPU camera state is not an
-  optical authority and no FFT textures are sampled again for this purpose.
+`OceanClipmapSurface` creates proxy `MeshInstance3D`s that share the production
+clipmap meshes and a duplicate of the production material. The proxy material
+sets `water_interface_buffer_render`; the shared shader therefore executes the
+identical FFT/coastal/shore/breaker vertex displacement as the visible ocean,
+then exits at the first fragment instructions. Its HDR color target packs:
 
-The compositor is installed while Ocean V3 is active. A camera clearly above
-`sea_level + underwater_transition_width_m` returns the resolved 3D image
-unchanged; above-water transmission remains solely the responsibility of the
-ocean surface shader.
+- `RG`: octahedral world macro normal;
+- `B`: positive view-space interface depth;
+- `A`: valid interface coverage.
 
-## Camera state
+No second FFT simulation, full-screen raymarch, GPU-to-CPU readback, or second
+air/water scene render is introduced. The buffer is allocated at the main
+render-target size (not a 1×1 probe).
 
-`OceanV3` uses its existing `_surface_sea_level()` only for camera state,
-hysteresis and the smooth interface factor. Entering requires the camera to be
-0.05 m below that level; exiting requires it to be 0.05 m above it.
+## Viewer and pixel media
 
-No OceanQuery is run from `_process()` for underwater state. The retained
-transition factor only selects the clearly-above and clearly-below fast paths.
-Inside the crossing band it cannot classify the whole frame: the depth-derived
-water mask decides every pixel.
+`OceanV3` calls the existing `OpenOceanFFT.sample_water()` exactly once per
+render frame at the camera XZ and render time. Its displaced height and normal
+produce hysteretic `AIR`, `WATER`, or `CROSSING` state. This is only a local
+viewer-side decision; it is never the screen-wide waterline authority.
 
-## Per-pixel medium approximation
+The compositor samples the interface `ViewportTexture`. `AIR` stays air,
+`WATER` stays water even when a seabed fills the depth buffer, and `CROSSING`
+uses the local query side plus the actual per-pixel interface coverage. Optical
+path estimates use the buffer interface depth and scene depth; no path is
+intersected with mean sea level.
 
-The compositor no longer consumes cached FFT `RID`s. Those resources are
-published and replaced on the render thread, so caching them across solver
-initialization/rebuilds can bind a stale non-null RID. The depth pair is owned
-by the same renderer callbacks and is checked before any uniform set or
-dispatch is created.
+The former pre/post transparent-depth comparison and the old cached FFT RID
+probe were removed. Before a compute uniform set is created, the color image,
+scene depth, and current `ViewportTexture` RD RID are all validated; unavailable
+first-frame input deterministically skips the pass, producing no
+`RenderingDevice` calls with null/stale resources.
 
-For a camera clearly above the interface, the medium mask is zero; clearly
-below it is one. In the crossing band, a pixel belongs to water only when the
-post-transparent reversed-Z depth is nearer than the pre-transparent snapshot.
-The surface has already written its real displaced FFT/coastal depth, so this
-preserves the visible waterline without a full-screen FFT raymarch, CPU
-readback, OceanQuery-per-pixel, or second ocean simulation. The pre-transparent
-depth remains the opaque-scene endpoint behind water for optical distance.
+## Snell / TIR diagnostics
 
-`DEBUG_OCEAN_DEPTH_WRITE` shows pixels where transparent depth changed and
-`DEBUG_WATERLINE_MASK` shows the final medium mask.
+The compositor decodes the buffer macro normal and classifies each view ray
+with `eta = 1.333 / 1.0003` and:
 
-## Surface interface
+```text
+cos_i = abs(dot(view_ray, macro_normal))
+k = 1 - eta² * (1 - cos_i²)
+TIR = k < 0
+```
 
-The underwater branch derives its normal from existing LONG + MID slopes and a
-configurable, bounded SHORT contribution. It classifies the view direction by
-the physical critical cone: `sin(theta_i) <= n_air / n_water`. The debug
-`SNELL_CRITICAL_ANGLE` is only that scalar angular classification. Projected
-screen UV bounds can choose a color fallback but never classify Snell/TIR, so
-the cone cannot become viewport-shaped.
+This is angular, not a screen-UV rectangle, so its geometry is independent of
+viewport aspect ratio. Debug choices are `INTERFACE_VALID`, `INTERFACE_DEPTH`,
+`INTERFACE_NORMAL`, `VIEWER_MEDIUM`, `PIXEL_MEDIUM`, `SNELL_K`, `TIR`, and
+`WATERLINE`.
 
-For Phase 1, refracted and reflected directions are projected to the available
-screen background.  A failed reflected projection falls back to the already
-computed reflection radiance; no second SSR raymarch is added.
+## Validation still required
+
+Automated validation checks shader/script loading and RenderingDevice silence.
+Visual acceptance remains required for above, below, calm crossing, steep FFT
+crossing, strongly tilted surface, multiple aspect ratios, and every buffer /
+Snell debug view. Do not commit or push until that report is accepted.

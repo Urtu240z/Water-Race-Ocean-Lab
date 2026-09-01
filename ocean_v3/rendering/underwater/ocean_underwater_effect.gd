@@ -3,7 +3,7 @@ class_name OceanUnderwaterEffect
 extends CompositorEffect
 
 const SHADER_PATH := "res://ocean_v3/rendering/underwater/underwater_medium.glsl"
-const PARAMS_BYTES := 160
+const PARAMS_BYTES := 192
 const THREAD_SIZE := 8
 
 var _rd: RenderingDevice
@@ -11,12 +11,11 @@ var _shader := RID()
 var _pipeline := RID()
 var _sampler := RID()
 var _params_buffer := RID()
-var _depth_capture
+var _interface_texture_rid := RID()
 var _mutex := Mutex.new()
 var _enabled := true
-var _sea_level := 0.0
+var _viewer_medium := 0
 var _camera_factor := 0.0
-var _transition_width := 0.12
 var _waterline_feather := 0.03
 var _absorption := Vector3(0.35, 0.14, 0.10)
 var _absorption_scale := 1.0
@@ -34,21 +33,18 @@ func _init() -> void:
 	_rd = RenderingServer.get_rendering_device()
 
 
-func set_depth_capture(capture) -> void:
-	_mutex.lock()
-	_depth_capture = capture
-	_mutex.unlock()
-
-
-func set_settings(is_enabled: bool, sea_level: float, _camera_underwater: bool, camera_factor: float,
-		transition_width: float, waterline_feather: float, absorption: Vector3, absorption_scale: float,
-		scattering_color: Color, scattering_strength: float, scattering_density: float,
-		max_distance: float, debug_mode: int) -> void:
+func set_settings(is_enabled: bool, interface_texture: Texture2D, viewer_medium: int,
+		camera_factor: float, waterline_feather: float, absorption: Vector3,
+		absorption_scale: float, scattering_color: Color, scattering_strength: float,
+		scattering_density: float, max_distance: float, debug_mode: int) -> void:
+	var texture_rid := RID()
+	if interface_texture != null and interface_texture.get_rid().is_valid():
+		texture_rid = RenderingServer.texture_get_rd_texture(interface_texture.get_rid(), true)
 	_mutex.lock()
 	_enabled = is_enabled
-	_sea_level = sea_level
+	_interface_texture_rid = texture_rid
+	_viewer_medium = clampi(viewer_medium, 0, 2) # AIR, WATER, CROSSING
 	_camera_factor = clampf(camera_factor, 0.0, 1.0)
-	_transition_width = maxf(transition_width, 0.01)
 	_waterline_feather = clampf(waterline_feather, 0.0, 0.2)
 	_absorption = Vector3(maxf(absorption.x, 0.0), maxf(absorption.y, 0.0), maxf(absorption.z, 0.0))
 	_absorption_scale = clampf(absorption_scale, 0.0, 4.0)
@@ -56,7 +52,7 @@ func set_settings(is_enabled: bool, sea_level: float, _camera_underwater: bool, 
 	_scattering_strength = clampf(scattering_strength, 0.0, 4.0)
 	_scattering_density = clampf(scattering_density, 0.0, 2.0)
 	_max_distance = clampf(max_distance, 1.0, 500.0)
-	_debug_mode = clampi(debug_mode, 0, 10)
+	_debug_mode = clampi(debug_mode, 0, 9)
 	_mutex.unlock()
 
 
@@ -100,9 +96,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 		return
 	_mutex.lock()
 	var is_enabled := _enabled
-	var sea_level := _sea_level
+	var interface_texture_rid := _interface_texture_rid
+	var viewer_medium := _viewer_medium
 	var camera_factor := _camera_factor
-	var transition_width := _transition_width
 	var waterline_feather := _waterline_feather
 	var absorption := _absorption
 	var absorption_scale := _absorption_scale
@@ -111,9 +107,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var scattering_density := _scattering_density
 	var max_distance := _max_distance
 	var debug_mode := _debug_mode
-	var depth_capture: Variant = _depth_capture
 	_mutex.unlock()
-	if not is_enabled or depth_capture == null or not _ensure_pipeline():
+	# The auxiliary ViewportTexture may not have produced its first frame yet.
+	# Never create a uniform set or dispatch until every renderer RID is valid.
+	if not is_enabled or not interface_texture_rid.is_valid() or not _ensure_pipeline():
 		return
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
@@ -123,10 +120,8 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if size.x <= 0 or size.y <= 0:
 		return
 	var color_image := buffers.get_color_layer(0)
-	var post_depth := buffers.get_depth_layer(0)
-	var pre_depth: RID = depth_capture.get_depth_snapshot(size)
-	# Never create/bind a set until all four renderer-owned inputs are usable.
-	if not color_image.is_valid() or not post_depth.is_valid() or not pre_depth.is_valid():
+	var depth_texture := buffers.get_depth_layer(0)
+	if not color_image.is_valid() or not depth_texture.is_valid():
 		return
 	var projection: Projection = scene_data.get_view_projection(0)
 	var camera_transform: Transform3D = scene_data.get_cam_transform()
@@ -135,31 +130,33 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	_append_projection(params, inverse_view_projection)
 	params.append(float(size.x)); params.append(float(size.y)); params.append(0.0); params.append(0.0)
 	params.append(camera_transform.origin.x); params.append(camera_transform.origin.y); params.append(camera_transform.origin.z); params.append(1.0)
-	params.append(sea_level); params.append(transition_width); params.append(max_distance); params.append(absorption_scale)
-	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
-	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
-	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0); params.append(waterline_feather)
+	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(absorption_scale)
+	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_strength)
+	params.append(scattering_density); params.append(max_distance); params.append(waterline_feather); params.append(0.0)
+	params.append(float(viewer_medium)); params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0)
+	var camera_forward := -camera_transform.basis.z
+	params.append(camera_forward.x); params.append(camera_forward.y); params.append(camera_forward.z); params.append(0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 	color_uniform.binding = 0
 	color_uniform.add_id(color_image)
-	var post_depth_uniform := RDUniform.new()
-	post_depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	post_depth_uniform.binding = 1
-	post_depth_uniform.add_id(_sampler)
-	post_depth_uniform.add_id(post_depth)
+	var depth_uniform := RDUniform.new()
+	depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	depth_uniform.binding = 1
+	depth_uniform.add_id(_sampler)
+	depth_uniform.add_id(depth_texture)
 	var params_uniform := RDUniform.new()
 	params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
 	params_uniform.binding = 2
 	params_uniform.add_id(_params_buffer)
-	var pre_depth_uniform := RDUniform.new()
-	pre_depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	pre_depth_uniform.binding = 3
-	pre_depth_uniform.add_id(_sampler)
-	pre_depth_uniform.add_id(pre_depth)
+	var interface_uniform := RDUniform.new()
+	interface_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	interface_uniform.binding = 3
+	interface_uniform.add_id(_sampler)
+	interface_uniform.add_id(interface_texture_rid)
 	var uniform_set := UniformSetCacheRD.get_cache(_shader, 0,
-		[color_uniform, post_depth_uniform, params_uniform, pre_depth_uniform])
+		[color_uniform, depth_uniform, params_uniform, interface_uniform])
 	if not uniform_set.is_valid():
 		return
 	var list := _rd.compute_list_begin()

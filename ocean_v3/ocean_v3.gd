@@ -15,6 +15,7 @@ const CAUSTICS_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/caustics/ocea
 const UNDERWATER_MANAGER_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_underwater_manager.gd")
 const UNDERWATER_ENTER_MARGIN_M := 0.05
 const UNDERWATER_EXIT_MARGIN_M := 0.05
+enum UnderwaterViewerMedium { AIR, WATER, CROSSING }
 const PERF_PRESET_FULL := &"FULL"
 const PERF_PRESET_BASE := &"BASE"
 const PERF_PRESET_NO_SSPR := &"NO_SSPR"
@@ -415,9 +416,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("UNDERWATER_OFF", "UNDERWATER_ON", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_CRITICAL_ANGLE", "TIR", "DEBUG_OCEAN_DEPTH_WRITE", "DEBUG_WATERLINE_MASK", "FINAL") var underwater_debug_mode := 0:
+@export_enum("OFF", "INTERFACE_VALID", "INTERFACE_DEPTH", "INTERFACE_NORMAL", "VIEWER_MEDIUM", "PIXEL_MEDIUM", "SNELL_K", "TIR", "WATERLINE", "FINAL") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 10)
+		underwater_debug_mode = clampi(value, 0, 9)
 		_request_visual_sync()
 
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth: float = 38.0:
@@ -1347,6 +1348,8 @@ var _underwater_manager: Node
 var _camera_underwater := false
 var _underwater_factor := 0.0
 var _camera_water_surface_y := 0.0
+var _camera_water_normal := Vector3.UP
+var _underwater_viewer_medium := UnderwaterViewerMedium.AIR
 var _startup_started_usec := 0
 var _startup_setup_usec := 0
 var _startup_stable_frames := 0
@@ -1401,25 +1404,39 @@ func _update_underwater_camera_state() -> void:
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
 		_camera_water_surface_y = _surface_sea_level()
+		_camera_water_normal = Vector3.UP
 		_camera_underwater = false
 		_underwater_factor = 0.0
+		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
 		return
-	# Underwater Phase 1 deliberately keeps camera state independent from the
-	# OceanQuery path. A per-frame render-time query can prepare REDUCED GDScript
-	# cascades when SeaStateZone3D is active, which is not acceptable for a visual
-	# transition. The full-screen medium still resolves its own per-pixel segment.
+	# WaterInterface V2 permits exactly one existing render-time OceanQuery: it
+	# determines only the local viewer side/hysteresis. The complete projected
+	# interface remains GPU-owned by the auxiliary displaced clipmap viewport.
 	var sampled_height := _surface_sea_level()
+	var sampled_normal := Vector3.UP
+	var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
+	if fft_module != null:
+		var sample = fft_module.sample_water(camera.global_position, SimulationClock.get_render_time())
+		if sample != null and sample.valid:
+			sampled_height = sample.height
+			if sample.normal.length_squared() > 0.0001:
+				sampled_normal = sample.normal.normalized()
 	_camera_water_surface_y = sampled_height
-	if _camera_underwater:
-		if camera.global_position.y > sampled_height + UNDERWATER_EXIT_MARGIN_M:
-			_camera_underwater = false
-	elif camera.global_position.y < sampled_height - UNDERWATER_ENTER_MARGIN_M:
+	_camera_water_normal = sampled_normal
+	var signed_surface_distance := (camera.global_position - Vector3(camera.global_position.x, sampled_height, camera.global_position.z)).dot(sampled_normal)
+	if signed_surface_distance > UNDERWATER_EXIT_MARGIN_M:
+		_camera_underwater = false
+		_underwater_viewer_medium = UnderwaterViewerMedium.AIR
+	elif signed_surface_distance < -UNDERWATER_ENTER_MARGIN_M:
 		_camera_underwater = true
+		_underwater_viewer_medium = UnderwaterViewerMedium.WATER
+	else:
+		_underwater_viewer_medium = UnderwaterViewerMedium.CROSSING
 	var half_width := maxf(underwater_transition_width_m, 0.01)
 	_underwater_factor = 1.0 - smoothstep(
-		sampled_height - half_width,
-		sampled_height + half_width,
-		camera.global_position.y
+		-half_width,
+		half_width,
+		signed_surface_distance
 	)
 
 
@@ -1428,8 +1445,7 @@ func _sync_underwater_manager() -> void:
 		return
 	_underwater_manager.set_settings({
 		"enabled": underwater_enabled,
-		"sea_level": _surface_sea_level(),
-		"camera_underwater": _camera_underwater,
+		"viewer_medium": _underwater_viewer_medium,
 		"camera_factor": _underwater_factor,
 		"transition_width": underwater_transition_width_m,
 		"waterline_feather": underwater_waterline_feather,
@@ -2347,7 +2363,6 @@ func _sync_water_visual_parameters() -> void:
 		and surface_warp_texture != null
 	material.set_shader_parameter(&"surface_detail_enabled", detail_ready)
 	material.set_shader_parameter(&"perf_benchmark_surface_detail_enabled", bool(_benchmark_diagnostic_gates.get("surface_detail", true)))
-	material.set_shader_parameter(&"perf_benchmark_debug_reflection_enabled", bool(_benchmark_diagnostic_gates.get("debug_reflection", true)))
 	material.set_shader_parameter(&"perf_benchmark_crest_shape_enabled", bool(_benchmark_diagnostic_gates.get("crest_shape", true)))
 	material.set_shader_parameter(&"perf_benchmark_near_ssr_enabled", bool(_benchmark_diagnostic_gates.get("near_ssr", true)))
 	material.set_shader_parameter(&"perf_benchmark_optics_enabled", bool(_benchmark_diagnostic_gates.get("optics", true)))
@@ -2383,8 +2398,6 @@ func _sync_water_visual_parameters() -> void:
 	material.set_shader_parameter(&"trough_tint", trough_tint)
 	material.set_shader_parameter(&"crest_tint", crest_tint)
 	material.set_shader_parameter(&"absorption_coeff_rgb", absorption_coeff_rgb)
-	material.set_shader_parameter(&"underwater_camera_active", _camera_underwater)
-	material.set_shader_parameter(&"underwater_camera_factor", _underwater_factor)
 	material.set_shader_parameter(&"underwater_transition_width_m", underwater_transition_width_m)
 	material.set_shader_parameter(&"underwater_water_ior", underwater_water_ior)
 	material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)

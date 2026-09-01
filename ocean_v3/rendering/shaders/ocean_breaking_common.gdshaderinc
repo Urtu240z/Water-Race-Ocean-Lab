@@ -147,6 +147,10 @@ float long_height_at(vec2 world_xz) {
 	return (coastal_height + remainder_height) * local_long_amplitude;
 }
 
+// Steps 2–4 are research diagnostics only.  They are intentionally excluded
+// from the normal ocean shader program; ocean_surface_debug.gdshader defines
+// this symbol before including the shared surface implementation.
+#ifdef OCEAN_BREAKING_DIAGNOSTICS
 float mid_height_at(vec2 world_xz) {
 	return textureLod(displacement_mid, spectrum_uv(world_xz, domain_mid_m), 0.0).y;
 }
@@ -155,10 +159,6 @@ float breaking_reference_wavelength(float min_wavelength_m, float max_wavelength
 	return sqrt(max(min_wavelength_m, 0.05) * max(max_wavelength_m, min_wavelength_m));
 }
 
-// Steps 2–4 are research diagnostics only.  They are intentionally excluded
-// from the normal ocean shader program; ocean_surface_debug.gdshader defines
-// this symbol before including the shared surface implementation.
-#ifdef OCEAN_BREAKING_DIAGNOSTICS
 // Returns crestness, the measured face slope and local crest elevation of one
 // actual FFT band. The crest elevation is eta_center minus the two-sided local
 // neighbourhood, so it is a local measured quantity rather than Hs.
@@ -366,9 +366,11 @@ vec4 depth_break_indices_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 
 	return vec4(depth_pressure, steepness_pressure, crestness, prebreak);
 }
 
+#ifdef OCEAN_BREAKING_DIAGNOSTICS
 float depth_break_at(vec2 world_xz, vec2 coast_uv, vec4 field_data, vec4 metrics_data, vec4 phase_data) {
 	return depth_break_indices_at(world_xz, coast_uv, field_data, metrics_data, phase_data).w;
 }
+#endif
 
 // Legacy Phase 4A API retained for the existing PREBREAK debug and force-lip
 // diagnostics. Its fourth component is now explicitly DEPTH_BREAK.

@@ -6,6 +6,9 @@ extends Node3D
 const MeshBuilder := preload("res://ocean_v3/rendering/ocean_clipmap_mesh_builder.gd")
 const ClipmapConfigScript := preload("res://ocean_v3/rendering/ocean_clipmap_config.gd")
 const BREAKING_DIAGNOSTIC_SHADER_PATH := "res://ocean_v3/rendering/shaders/ocean_surface_debug.gdshader"
+# Layer 20 is reserved for the auxiliary WaterInterface SubViewport.  The
+# visible camera removes this bit; the interface camera renders only this bit.
+const WATER_INTERFACE_LAYER := 1 << 19
 
 enum DebugMode {
 	FULL_DISPLACEMENT,
@@ -80,6 +83,9 @@ var _breaking_diagnostic_shader: Shader
 # intentional: each entry is a complete ShaderMaterial with all ocean uniforms.
 var _lod_debug_materials: Array[ShaderMaterial] = []
 var _levels: Array[MeshInstance3D] = []
+var _water_interface_proxy_root: Node3D
+var _water_interface_proxy_material: ShaderMaterial
+var _water_interface_proxy_levels: Array[MeshInstance3D] = []
 var _debug_mode: int = DebugMode.FULL_DISPLACEMENT
 var _module_enabled := true
 var _lod_debug := false
@@ -98,6 +104,16 @@ var _band_mid_enabled := true
 var _band_short_enabled := true
 var _tracking_camera: Camera3D
 var _triangle_count := 0
+var _breaking_open_model: Dictionary = {
+	&"breaking_long_hs_m": 0.50,
+	&"breaking_mid_hs_m": 0.25,
+	&"breaking_long_min_wavelength_m": 16.0,
+	&"breaking_long_max_wavelength_m": 128.0,
+	&"breaking_mid_min_wavelength_m": 4.0,
+	&"breaking_mid_max_wavelength_m": 20.0,
+	&"breaking_long_direction_xz": Vector2.RIGHT,
+	&"breaking_mid_direction_xz": Vector2.RIGHT,
+}
 
 
 func _ready() -> void:
@@ -149,6 +165,53 @@ func get_surface_material() -> ShaderMaterial:
 	return _surface_material
 
 
+func ensure_water_interface_proxy() -> int:
+	## Shares the production meshes and all dynamic material inputs.  Only the
+	## proxy material's fragment path differs: it encodes interface data and
+	## returns before the visual water shading work.
+	if _water_interface_proxy_root == null:
+		_water_interface_proxy_root = Node3D.new()
+		_water_interface_proxy_root.name = &"WaterInterfaceProxy"
+		add_child(_water_interface_proxy_root)
+	if _water_interface_proxy_material == null and _surface_material.shader != null:
+		_water_interface_proxy_material = _surface_material.duplicate() as ShaderMaterial
+		if _water_interface_proxy_material != null:
+			_water_interface_proxy_material.set_shader_parameter(&"water_interface_buffer_render", true)
+	_rebuild_water_interface_proxy_levels()
+	return WATER_INTERFACE_LAYER
+
+
+func release_water_interface_proxy() -> void:
+	if _water_interface_proxy_root != null:
+		_water_interface_proxy_root.queue_free()
+	_water_interface_proxy_root = null
+	_water_interface_proxy_material = null
+	_water_interface_proxy_levels.clear()
+
+
+func _rebuild_water_interface_proxy_levels() -> void:
+	if _water_interface_proxy_root == null or _water_interface_proxy_material == null:
+		return
+	for level in _water_interface_proxy_levels:
+		if is_instance_valid(level):
+			level.queue_free()
+	_water_interface_proxy_levels.clear()
+	for level_index in _levels.size():
+		var source := _levels[level_index]
+		if source == null or source.mesh == null:
+			continue
+		var proxy := MeshInstance3D.new()
+		proxy.name = "InterfaceLevel%d" % level_index
+		proxy.mesh = source.mesh
+		proxy.material_override = _water_interface_proxy_material
+		proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		proxy.extra_cull_margin = source.extra_cull_margin
+		proxy.layers = WATER_INTERFACE_LAYER
+		proxy.set_instance_shader_parameter(&"clipmap_level", float(level_index))
+		_water_interface_proxy_root.add_child(proxy)
+		_water_interface_proxy_levels.append(proxy)
+
+
 func set_surface_shader_parameter(parameter: StringName, value: Variant) -> void:
 	_set_surface_material_shader_parameter(parameter, value)
 
@@ -164,6 +227,8 @@ func sync_lod_debug_materials_from_surface() -> void:
 
 func _surface_materials() -> Array[ShaderMaterial]:
 	var materials: Array[ShaderMaterial] = [_surface_material]
+	if _water_interface_proxy_material != null:
+		materials.append(_water_interface_proxy_material)
 	if _breaking_diagnostic_active() and _breaking_debug_material != null:
 		materials.append(_breaking_debug_material)
 	if _lod_debug:
@@ -227,6 +292,7 @@ func _ensure_breaking_debug_material() -> void:
 		return
 	var shader_assignment_started_usec := Time.get_ticks_usec()
 	_breaking_debug_material.shader = _breaking_diagnostic_shader
+	_apply_breaking_open_model(_breaking_debug_material)
 	print("OCEAN BREAKING DEBUG activation: resource_load=%d ms shader_assignment=%d ms total=%d ms" % [
 		int(float(shader_load_usec) / 1000.0),
 		int(float(Time.get_ticks_usec() - shader_assignment_started_usec) / 1000.0),
@@ -502,15 +568,27 @@ func set_breaking_open_model(long_hs_m: float, mid_hs_m: float,
 	## no hay readback ni nueva textura. MID/LONG siguen siendo la única entrada.
 	var safe_long_direction := long_direction_xz.normalized() if long_direction_xz.length_squared() > 1.0e-8 else Vector2.RIGHT
 	var safe_mid_direction := mid_direction_xz.normalized() if mid_direction_xz.length_squared() > 1.0e-8 else safe_long_direction
+	_breaking_open_model = {
+		&"breaking_long_hs_m": maxf(long_hs_m, 0.0),
+		&"breaking_mid_hs_m": maxf(mid_hs_m, 0.0),
+		&"breaking_long_min_wavelength_m": maxf(long_min_wavelength_m, 0.05),
+		&"breaking_long_max_wavelength_m": maxf(long_max_wavelength_m, long_min_wavelength_m),
+		&"breaking_mid_min_wavelength_m": maxf(mid_min_wavelength_m, 0.05),
+		&"breaking_mid_max_wavelength_m": maxf(mid_max_wavelength_m, mid_min_wavelength_m),
+		&"breaking_long_direction_xz": safe_long_direction,
+		&"breaking_mid_direction_xz": safe_mid_direction,
+	}
+	if _breaking_debug_material != null:
+		_apply_breaking_open_model(_breaking_debug_material)
 	for material in _all_materials():
-		material.set_shader_parameter(&"breaking_long_hs_m", maxf(long_hs_m, 0.0))
-		material.set_shader_parameter(&"breaking_mid_hs_m", maxf(mid_hs_m, 0.0))
-		material.set_shader_parameter(&"breaking_long_min_wavelength_m", maxf(long_min_wavelength_m, 0.05))
-		material.set_shader_parameter(&"breaking_long_max_wavelength_m", maxf(long_max_wavelength_m, long_min_wavelength_m))
-		material.set_shader_parameter(&"breaking_mid_min_wavelength_m", maxf(mid_min_wavelength_m, 0.05))
-		material.set_shader_parameter(&"breaking_mid_max_wavelength_m", maxf(mid_max_wavelength_m, mid_min_wavelength_m))
-		material.set_shader_parameter(&"breaking_long_direction_xz", safe_long_direction)
-		material.set_shader_parameter(&"breaking_mid_direction_xz", safe_mid_direction)
+		material.set_shader_parameter(&"breaking_long_hs_m", _breaking_open_model[&"breaking_long_hs_m"])
+
+
+func _apply_breaking_open_model(material: ShaderMaterial) -> void:
+	if material == null:
+		return
+	for parameter_key in _breaking_open_model:
+		material.set_shader_parameter(StringName(parameter_key), _breaking_open_model[parameter_key])
 
 
 func breaking_debug_name() -> String:
@@ -550,6 +628,16 @@ func final_half_extent_m() -> float:
 func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Array[Texture2DRD], normals: Array[Texture2DRD], foams: Array[Texture2DRD], surface_foam: Texture2DRD, surface_foam_field_domain_m: float) -> void:
 	# 3B.2B: índices de render -> LONG_COASTAL=0, LONG_REMAINDER=1, MID=2, SHORT=3.
 	var ids := ["long_coastal", "long_remainder", "mid", "short"]
+	_breaking_open_model = {
+		&"breaking_long_hs_m": configs[0].target_hs_m,
+		&"breaking_mid_hs_m": configs[2].target_hs_m,
+		&"breaking_long_min_wavelength_m": configs[0].min_wavelength_m,
+		&"breaking_long_max_wavelength_m": configs[0].max_wavelength_m,
+		&"breaking_mid_min_wavelength_m": configs[2].min_wavelength_m,
+		&"breaking_mid_max_wavelength_m": configs[2].max_wavelength_m,
+		&"breaking_long_direction_xz": configs[0].wind_direction.normalized(),
+		&"breaking_mid_direction_xz": configs[2].wind_direction.normalized(),
+	}
 	for material in _all_materials():
 		material.set_shader_parameter(&"module_enabled", _module_enabled)
 		material.set_shader_parameter(&"perf_spectral_enabled", true)
@@ -574,13 +662,6 @@ func _configure_materials(configs: Array[OpenOceanFFTConfig], displacements: Arr
 		material.set_shader_parameter(&"coastal_cell_size_m", 1.0)
 		material.set_shader_parameter(&"breaking_debug_mode", BreakingDebug.OFF)
 		material.set_shader_parameter(&"breaking_long_hs_m", configs[0].target_hs_m)
-		material.set_shader_parameter(&"breaking_mid_hs_m", configs[2].target_hs_m)
-		material.set_shader_parameter(&"breaking_long_min_wavelength_m", configs[0].min_wavelength_m)
-		material.set_shader_parameter(&"breaking_long_max_wavelength_m", configs[0].max_wavelength_m)
-		material.set_shader_parameter(&"breaking_mid_min_wavelength_m", configs[2].min_wavelength_m)
-		material.set_shader_parameter(&"breaking_mid_max_wavelength_m", configs[2].max_wavelength_m)
-		material.set_shader_parameter(&"breaking_long_direction_xz", configs[0].wind_direction.normalized())
-		material.set_shader_parameter(&"breaking_mid_direction_xz", configs[2].wind_direction.normalized())
 		material.set_shader_parameter(&"breaking_coastal_energy_fraction", 0.5)
 		material.set_shader_parameter(&"coastal_warp_enabled", false)
 		material.set_shader_parameter(&"coastal_composition_debug", CoastalCompositionDebug.FULL)
@@ -658,6 +739,7 @@ func _rebuild_levels() -> void:
 		_levels.size(), _triangle_count, int(float(Time.get_ticks_usec() - rebuild_started_usec) / 1000.0),
 		"ON" if validate_mesh_geometry_on_build else "OFF",
 	])
+	_rebuild_water_interface_proxy_levels()
 
 
 func _apply_debug_mode() -> void:

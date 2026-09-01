@@ -80,14 +80,19 @@ uniform int breaking_debug_mode = 0;
 // Hs de LONG completo en deep water y fracción de energía del split COASTAL.
 // Se derivan de SeaStateConfig + H0 split; no son altura instantánea.
 uniform float breaking_long_hs_m = 0.50;
-uniform float breaking_mid_hs_m = 0.25;
 uniform float breaking_coastal_energy_fraction = 0.50;
+#ifdef OCEAN_BREAKING_DIAGNOSTICS
+// OPEN_BREAK is a diagnostic-only path. Keeping its parameters out of the
+// production variant avoids dead uniform bindings without changing the debug
+// shader, which defines OCEAN_BREAKING_DIAGNOSTICS before this source.
+uniform float breaking_mid_hs_m = 0.25;
 uniform float breaking_long_min_wavelength_m = 16.0;
 uniform float breaking_long_max_wavelength_m = 128.0;
 uniform float breaking_mid_min_wavelength_m = 4.0;
 uniform float breaking_mid_max_wavelength_m = 20.0;
 uniform vec2 breaking_long_direction_xz = vec2(1.0, 0.0);
 uniform vec2 breaking_mid_direction_xz = vec2(1.0, 0.0);
+#endif
 uniform float breaking_depth_gamma = 0.78;
 uniform vec2 breaking_depth_ratio_range = vec2(0.55, 1.0);
 uniform vec2 breaking_steepness_range = vec2(0.28, 0.42);
@@ -117,7 +122,6 @@ uniform bool ocean_shape_debug = false;
 // are set only by OceanV3.set_benchmark_diagnostic_gates().
 uniform bool perf_benchmark_crest_shape_enabled = true;
 uniform bool perf_benchmark_surface_detail_enabled = true;
-uniform bool perf_benchmark_debug_reflection_enabled = true;
 uniform bool perf_benchmark_near_ssr_enabled = true;
 uniform bool perf_benchmark_optics_enabled = true;
 uniform bool perf_benchmark_refraction_wave_enabled = true;
@@ -177,8 +181,11 @@ uniform float absorption_density : hint_range(0.01, 2.0, 0.01) = 0.13;
 uniform vec3 absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
 // Underwater Phase 1 uses the existing FFT slope components below.  The
 // compositor owns the water medium; this branch owns only the real interface.
-uniform bool underwater_camera_active = false;
-uniform float underwater_camera_factor : hint_range(0.0, 1.0, 0.01) = 0.0;
+// The WaterInterface SubViewport uses the same displaced clipmap material, but
+// exits fragment work immediately after encoding its geometric interface.
+// This keeps vertex displacement bit-for-bit aligned with the visible ocean
+// without running foam, optics or reflection shading in the auxiliary pass.
+uniform bool water_interface_buffer_render = false;
 uniform float underwater_transition_width_m : hint_range(0.01, 1.0, 0.01) = 0.12;
 uniform float underwater_water_ior : hint_range(1.0, 1.6, 0.001) = 1.333;
 uniform float underwater_snell_strength : hint_range(0.0, 2.0, 0.01) = 1.0;
@@ -1346,16 +1353,6 @@ void pixel_ocean_slope_components(
 	filtered_slope = slope;
 }
 
-vec3 pixel_ocean_normal(vec2 world_xz) {
-	vec2 long_slope;
-	vec2 mid_slope;
-	vec2 short_slope;
-	vec2 filtered_slope;
-	pixel_ocean_slope_components(world_xz, long_slope, mid_slope, short_slope, filtered_slope);
-	return normalize(vec3(-filtered_slope.x, 1.0, -filtered_slope.y));
-}
-
-
 // Production composition of the high-resolution persistent field. It mirrors
 // the established coastal/open/deep coordinate policy while MID/SHORT provide
 // a small non-saturating detail contribution.
@@ -2051,10 +2048,30 @@ vec2 foam_gradient_world(vec2 foam_value, vec2 world_xz) {
 
 
 void fragment() {
+	if (water_interface_buffer_render) {
+		// R/G: octahedral world macro normal, B: positive view-space depth,
+		// A: valid interface. The HDR SubViewport preserves the raw depth.
+		// refraction_vertex_long_mid_slope already carries the post-shore LONG+MID
+		// macro signal. Reusing it avoids exceeding Forward+'s varying limit.
+		vec2 macro_slope = refraction_vertex_long_mid_slope.xy + refraction_vertex_long_mid_slope.zw;
+		vec3 n = normalize(mat3(MODEL_MATRIX) * vec3(-macro_slope.x, 1.0, -macro_slope.y));
+		float l1 = max(abs(n.x) + abs(n.y) + abs(n.z), 0.00001);
+		vec2 oct = n.xy / l1;
+		if (n.z < 0.0) {
+			oct = (vec2(1.0) - abs(oct.yx)) * sign(oct.xy);
+		}
+		float view_depth = max(-(VIEW_MATRIX * vec4(ocean_world_position, 1.0)).z, 0.0);
+		ALBEDO = vec3(oct * 0.5 + 0.5, view_depth);
+		EMISSION = ALBEDO;
+		ROUGHNESS = 1.0;
+		SPECULAR = 0.0;
+		RADIANCE = vec4(0.0);
+		ALPHA = 1.0;
+	}
 	// Routing sentinels intentionally run before foam, depth, screen, bathymetry,
 	// scattering and reflection work. They prove the complete Inspector -> CPU
 	// -> material -> rendered clipmap -> fragment route without any data inputs.
-	if (water_optics_debug_mode == 24) {
+	else if (water_optics_debug_mode == 24) {
 		ALBEDO = vec3(1.0, 0.0, 1.0);
 		EMISSION = vec3(1.0, 0.0, 1.0);
 		ROUGHNESS = 1.0;
