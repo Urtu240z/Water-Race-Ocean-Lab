@@ -75,7 +75,7 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid) {
 
 	vec3 ray = scene_world - camera_world;
 	float ray_length = length(ray);
-	if (ray_length <= EPSILON || !isfinite(ray_length)) {
+	if (ray_length <= EPSILON || isnan(ray_length) || isinf(ray_length)) {
 		return 0.0;
 	}
 	vec3 ray_direction = ray / ray_length;
