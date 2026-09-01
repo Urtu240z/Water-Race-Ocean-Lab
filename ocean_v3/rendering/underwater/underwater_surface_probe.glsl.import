@@ -1,0 +1,13 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://byr4evexvfkec"
+path="res://.godot/imported/underwater_surface_probe.glsl-3d371200e2e8f35eab141f804f51838a.res"
+
+[deps]
+
+source_file="res://ocean_v3/rendering/underwater/underwater_surface_probe.glsl"
+dest_files=["res://.godot/imported/underwater_surface_probe.glsl-3d371200e2e8f35eab141f804f51838a.res"]
+
+[params]
