@@ -177,7 +177,7 @@ func _read_command_line_overrides() -> void:
 			_sunrays_benchmark = true
 			_sunrays_v2_benchmark = true
 		elif argument.begins_with("--ocean-benchmark-sunrays-debug="):
-			_sunrays_debug_override = clampi(int(argument.get_slice("=", 1)), 0, 22)
+			_sunrays_debug_override = clampi(int(argument.get_slice("=", 1)), 0, 23)
 		elif argument.begins_with("--ocean-benchmark-paired-tests="):
 			_paired_test_filter = PackedStringArray(argument.get_slice("=", 1).split(",", false))
 		elif argument.begins_with("--ocean-benchmark-paired-repetitions="):

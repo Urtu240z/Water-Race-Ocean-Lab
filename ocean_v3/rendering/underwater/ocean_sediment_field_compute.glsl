@@ -84,7 +84,10 @@ void main() {
 		injected = max(injected, exp(-distance_sq / (radius * radius)) * clamp(injection.w, 0.0, 1.0));
 	}
 
-	float result = diffused + (source + injected) * dt;
+	// Seabed resuspension is a continuous rate, while queued injections are
+	// already concentration-space impulses.  Applying dt to the latter made a
+	// strength 1.0 diagnostic injection only reach about 0.05 at 20 Hz.
+	float result = diffused + source * dt + injected;
 	result *= exp(-max(params.simulation.z, 0.0) * dt);
 	result = clamp(safe_value(result), 0.0, 1.0);
 	imageStore(next_field, pixel, vec4(result, 0.0, 0.0, 1.0));

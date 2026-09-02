@@ -422,15 +422,15 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_sunrays_pattern_contrast = clampf(value, 0.0, 4.0)
 		_request_visual_sync()
-@export_range(0.0, 2.0, 0.01, "suffix:x") var underwater_sunrays_animation_speed := 0.12:
+@export_range(0.0, 2.0, 0.01, "suffix:x") var underwater_sunrays_animation_speed := 0.0:
 	set(value):
 		underwater_sunrays_animation_speed = clampf(value, 0.0, 2.0)
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_PATTERN", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 22)
+		underwater_debug_mode = clampi(value, 0, 23)
 		if underwater_debug_mode != 19:
 			_sun_vector_diagnostic_printed = false
 		_request_visual_sync()
@@ -1576,7 +1576,6 @@ func _sync_underwater_manager() -> void:
 			"sunrays_pattern_scale": underwater_sunrays_pattern_scale,
 			"sunrays_pattern_contrast": underwater_sunrays_pattern_contrast,
 			"sunrays_animation_speed": underwater_sunrays_animation_speed,
-			"sunrays_pattern_texture": _active_caustics_texture(),
 			"sunrays_time": SimulationClock.get_render_time(),
 			"sunrays_tap_count": _underwater_sunrays_benchmark_tap_count,
 			"snell_enabled": underwater_snell_enabled,

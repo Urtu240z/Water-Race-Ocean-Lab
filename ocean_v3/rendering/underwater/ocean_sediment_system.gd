@@ -8,6 +8,11 @@ const FIELD_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_sedimen
 const PARTICLE_PROCESS_SHADER_PATH := "res://ocean_v3/rendering/underwater/ocean_sediment_particles_process.gdshader"
 const PARTICLE_RENDER_SHADER_PATH := "res://ocean_v3/rendering/underwater/ocean_sediment_particles.gdshader"
 const MAX_INJECTIONS := 16
+const TEST_INJECTION_RADIUS_M := 9.0
+const TEST_INJECTION_STRENGTH := 0.90
+const TEST_SEARCH_RADIUS_M := 20.0
+const TEST_PREFERRED_DISTANCE_M := 8.0
+const TEST_MARKER_LIFETIME_S := 6.0
 
 enum DebugMode { OFF, FIELD, SOURCE, CLOUDS, WISPS }
 
@@ -30,6 +35,7 @@ enum DebugMode { OFF, FIELD, SOURCE, CLOUDS, WISPS }
 @export_range(8.0, 80.0, 1.0, "suffix: m") var sediment_render_distance_m := 36.0
 @export_range(0.0, 2.0, 0.01) var sediment_above_water_optics_strength := 1.0
 @export_enum("OFF", "FIELD", "SOURCE", "CLOUDS", "WISPS") var sediment_debug_mode: int = DebugMode.OFF
+@export var sediment_test_marker_enabled := true
 @export_tool_button("Inject Test Sediment", "Burst") var inject_test_sediment_button = inject_test_sediment
 
 var _field: OceanSedimentField
@@ -63,11 +69,14 @@ var _init_reported := false
 var _init_failure_reported := false
 var _render_device_wait_reported := false
 var _runtime_injection_requested := false
-var _runtime_injection_reported := false
 var _runtime_debug_mode_applied := false
 var _initialization_retry_timer := 0.0
 var _bathymetry_wait_elapsed := 0.0
 var _bathymetry_wait_reported := false
+var _test_injection_sequence := 0
+var _last_queued_injection_count := 0
+var _test_marker: MeshInstance3D
+var _test_marker_remaining_s := 0.0
 
 
 func _ready() -> void:
@@ -139,6 +148,7 @@ func _print_bathymetry_wait_diagnostic() -> void:
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _configuration_requested:
 		return
+	_update_test_marker(delta)
 	if not _configured:
 		_bathymetry_wait_elapsed += maxf(delta, 0.0)
 		_refresh_bathymetry_from_ocean()
@@ -197,6 +207,8 @@ func set_camera_underwater(camera_underwater: bool) -> void:
 
 
 func inject_sediment(world_position: Vector3, radius_m: float, strength: float) -> bool:
+	if not _injection_validation(world_position).get("accepted", false):
+		return false
 	var injection := Vector4(world_position.x, world_position.z, maxf(radius_m, 0.05), clampf(strength, 0.0, 1.0))
 	if _pending_injections.size() >= MAX_INJECTIONS:
 		_pending_injections.pop_front()
@@ -210,36 +222,42 @@ func inject_test_sediment() -> void:
 
 
 func _request_test_injection() -> void:
-	if _runtime_injection_reported or not _field_published or _bathymetry == null or not _bathymetry.is_valid():
+	_runtime_injection_requested = false
+	if not _field_published or _bathymetry == null or not _bathymetry.is_valid():
+		print("SEDIMENT TEST FAILED: field is not ready or published.")
 		return
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
+		print("SEDIMENT TEST FAILED: no active camera.")
 		return
-	var sample_position := _find_test_position(camera.global_position)
-	var raw_uv := (Vector2(sample_position.x, sample_position.z) - _field_origin()) / Vector2(
-		maxf(_field_extent().x, 0.001), maxf(_field_extent().y, 0.001))
-	var clamped_uv := raw_uv.clamp(Vector2.ZERO, Vector2.ONE)
-	var inside_field := raw_uv.x >= 0.0 and raw_uv.x <= 1.0 and raw_uv.y >= 0.0 and raw_uv.y <= 1.0
-	var sample: BathymetrySample = _bathymetry.sample_bathymetry(Vector2(sample_position.x, sample_position.z))
-	var accepted := inject_sediment(sample_position, 5.0, 1.0)
-	_runtime_injection_requested = false
-	_runtime_injection_reported = true
-	print("SEDIMENT TEST INJECTION")
-	print("world_position=%s" % sample_position)
-	print("field_uv_raw=%s field_uv_clamped=%s inside_field=%s" % [raw_uv, clamped_uv, inside_field])
-	print("bathymetry_in_bounds=%s water_mask=%s sampled_depth=%.3f" % [sample.in_bounds, sample.is_water, sample.depth_m])
-	print("radius=5.000 strength=1.000 injection_accepted=%s queued_injection_count=%d" % [accepted, _pending_injections.size()])
+	var target := _find_test_position(camera)
+	if target.is_empty():
+		print("SEDIMENT TEST FAILED: no valid water/seabed cell within %.1f metres." % TEST_SEARCH_RADIUS_M)
+		return
+	var sample_position: Vector3 = target["world_position"]
+	var validation := _injection_validation(sample_position)
+	var accepted := inject_sediment(sample_position, TEST_INJECTION_RADIUS_M, TEST_INJECTION_STRENGTH)
+	_test_injection_sequence += 1
+	if accepted:
+		_show_test_marker(sample_position)
+	print("SEDIMENT TEST INJECTION #%d" % _test_injection_sequence)
+	print("camera_world=%s" % camera.global_position)
+	print("target_world=%s distance_from_camera=%.3f" % [sample_position, camera.global_position.distance_to(sample_position)])
+	print("raw_field_uv=%s inside_field=%s" % [validation.get("raw_uv", Vector2.ZERO), validation.get("inside_field", false)])
+	print("bathymetry_in_bounds=%s water=%s depth=%.3f" % [validation.get("bathymetry_in_bounds", false), validation.get("water", false), validation.get("depth_m", 0.0)])
+	print("radius=%.3f strength=%.3f queued=%s pending_queue=%d" % [TEST_INJECTION_RADIUS_M, TEST_INJECTION_STRENGTH, accepted, _pending_injections.size()])
+	print("FIELD DEBUG PROXY: expected_center_after_dispatch=%.3f (GPU impulse, no readback); marker_lifetime_s=%.1f" % [TEST_INJECTION_STRENGTH * exp(-sediment_settling_rate / maxf(sediment_update_hz, 1.0)), TEST_MARKER_LIFETIME_S])
 
 
-func _find_test_position(camera_position: Vector3) -> Vector3:
-	var candidate := camera_position
-	var camera_xz := Vector2(camera_position.x, camera_position.z)
-	var camera_sample: BathymetrySample = _bathymetry.sample_bathymetry(camera_xz)
-	if camera_sample.in_bounds and camera_sample.is_water and camera_sample.depth_m > 0.001:
-		candidate.y = _bathymetry.sea_level_y - camera_sample.depth_m + 0.45
-		return candidate
+func _find_test_position(camera: Camera3D) -> Dictionary:
+	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
+	var forward := -camera.global_transform.basis.z
+	var forward_xz := Vector2(forward.x, forward.z).normalized()
+	if forward_xz.length_squared() <= 0.0001:
+		forward_xz = Vector2(0.0, -1.0)
+	var preferred_xz := camera_xz + forward_xz * TEST_PREFERRED_DISTANCE_M
 	var best_index := -1
-	var best_distance := INF
+	var best_score := INF
 	for index in _bathymetry.cell_count():
 		if _bathymetry.land_water_mask[index] == 0 or _bathymetry.depth_m[index] <= 0.001:
 			continue
@@ -247,16 +265,72 @@ func _find_test_position(camera_position: Vector3) -> Vector3:
 		var z := int(index / _bathymetry.width)
 		var world_xz := _bathymetry.world_origin_xz + Vector2(float(x), float(z)) * _bathymetry.cell_size_m
 		var distance_sq := world_xz.distance_squared_to(camera_xz)
-		if distance_sq < best_distance:
-			best_distance = distance_sq
+		if distance_sq > TEST_SEARCH_RADIUS_M * TEST_SEARCH_RADIUS_M:
+			continue
+		var forward_alignment := (world_xz - camera_xz).normalized().dot(forward_xz)
+		var score := world_xz.distance_squared_to(preferred_xz) + (1.0 - forward_alignment) * 16.0
+		if score < best_score:
+			best_score = score
 			best_index = index
 	if best_index >= 0:
 		var best_x := best_index % _bathymetry.width
 		var best_z := int(best_index / _bathymetry.width)
-		candidate.x = _bathymetry.world_origin_xz.x + float(best_x) * _bathymetry.cell_size_m
-		candidate.z = _bathymetry.world_origin_xz.y + float(best_z) * _bathymetry.cell_size_m
-		candidate.y = _bathymetry.sea_level_y - _bathymetry.depth_m[best_index] + 0.45
-	return candidate
+		var world_xz := _bathymetry.world_origin_xz + Vector2(float(best_x), float(best_z)) * _bathymetry.cell_size_m
+		return {"world_position": Vector3(world_xz.x, _bathymetry.sea_level_y - _bathymetry.depth_m[best_index] + 0.45, world_xz.y)}
+	return {}
+
+
+func _injection_validation(world_position: Vector3) -> Dictionary:
+	var raw_uv := (Vector2(world_position.x, world_position.z) - _field_origin()) / Vector2(
+		maxf(_field_extent().x, 0.001), maxf(_field_extent().y, 0.001))
+	var inside_field := raw_uv.x >= 0.0 and raw_uv.x <= 1.0 and raw_uv.y >= 0.0 and raw_uv.y <= 1.0
+	var bathymetry_ready := _bathymetry != null and _bathymetry.is_valid()
+	var sample = _bathymetry.sample_bathymetry(Vector2(world_position.x, world_position.z)) if bathymetry_ready else null
+	var field_ready := _configured and _field != null and _field.ready and _field.has_valid_rids()
+	var in_bounds := sample != null and sample.in_bounds
+	var water := sample != null and sample.is_water
+	return {
+		"accepted": field_ready and inside_field and in_bounds and water,
+		"field_ready": field_ready,
+		"raw_uv": raw_uv,
+		"inside_field": inside_field,
+		"bathymetry_in_bounds": in_bounds,
+		"water": water,
+		"depth_m": sample.depth_m if sample != null else 0.0,
+	}
+
+
+func _show_test_marker(world_position: Vector3) -> void:
+	if not sediment_test_marker_enabled:
+		return
+	if _test_marker != null and is_instance_valid(_test_marker):
+		_test_marker.queue_free()
+	_test_marker = MeshInstance3D.new()
+	_test_marker.name = "SedimentTestInjectionMarker"
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.35
+	sphere.height = 0.70
+	_test_marker.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_color = Color(1.0, 0.30, 0.04, 0.90)
+	material.emission_enabled = true
+	material.emission = Color(1.0, 0.08, 0.01)
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_test_marker.material_override = material
+	_test_marker.global_position = world_position
+	_test_marker.top_level = true
+	add_child(_test_marker)
+	_test_marker_remaining_s = TEST_MARKER_LIFETIME_S
+
+
+func _update_test_marker(delta: float) -> void:
+	if _test_marker == null or not is_instance_valid(_test_marker):
+		return
+	_test_marker_remaining_s -= maxf(delta, 0.0)
+	if _test_marker_remaining_s <= 0.0:
+		_test_marker.queue_free()
+		_test_marker = null
 
 
 func _has_runtime_injection_trigger() -> bool:
@@ -314,6 +388,7 @@ func get_debug_state() -> Dictionary:
 		"dispatch_count": _dispatch_count,
 		"last_dispatch_period_s": _last_dispatch_period_s,
 		"pending_injections": _pending_injections.size(),
+		"last_queued_injection_count": _last_queued_injection_count,
 		"cloud_amount": _cloud_particles.amount if _cloud_particles != null else 0,
 		"wisp_amount": _wisp_particles.amount if _wisp_particles != null else 0,
 		"cloud_emitting": _cloud_particles.emitting if _cloud_particles != null else false,
@@ -334,7 +409,9 @@ func _dispatch_field(step_delta: float) -> void:
 		injection_floats[index * 4 + 2] = injection.z
 		injection_floats[index * 4 + 3] = injection.w
 	var injection_bytes := injection_floats.to_byte_array()
-	_pending_injections.clear()
+	# Bind captures the packed bytes/count for the render-thread command before
+	# the main-thread queue is released. A subsequent input can therefore queue a
+	# new impulse without racing the dispatch currently in flight.
 	_dispatch_queued = true
 	_last_render_time += step_delta
 	_last_dispatch_period_s = step_delta
@@ -361,6 +438,8 @@ func _dispatch_field(step_delta: float) -> void:
 		_bathymetry != null and _bathymetry.is_valid(),
 		injection_bytes,
 		injection_count))
+	_pending_injections.clear()
+	_last_queued_injection_count = injection_count
 
 
 func _publish_completed_field() -> void:

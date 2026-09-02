@@ -5,9 +5,7 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D scene_depth;
-layout(set = 0, binding = 2) uniform sampler2D sunrays_pattern_texture;
-
-layout(set = 0, binding = 3, std140) uniform Params {
+layout(set = 0, binding = 2, std140) uniform Params {
 	mat4 inverse_view_projection;
 	vec4 viewport;
 	vec4 camera; // xyz, binary underwater state
@@ -91,32 +89,55 @@ float sunrays_phase_response(vec3 view_dir_world, vec3 sun_direction_world) {
 	return clamp(phase / max(forward_phase, 0.001) * forward_gate, 0.0, 1.0);
 }
 
-float sunrays_pattern(vec3 surface_world, bool exaggerated) {
-	if (params.state.w < 0.5 || (!exaggerated && params.sunrays_pattern.y <= EPSILON)) return 0.5;
+bool sunrays_beam_coord(vec3 world_position, vec3 toward_sun, out vec2 beam_coord) {
+	// The physical light direction points into the water.  U/V span only the
+	// transverse plane, so P and P + L * d retain the same beam coordinate.
+	vec3 light_into_water = -normalize(toward_sun);
+	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
+	vec3 reference = abs(light_into_water.y) < 0.98
+		? vec3(0.0, 1.0, 0.0)
+		: vec3(1.0, 0.0, 0.0);
+	vec3 u = cross(reference, light_into_water);
+	if (!finite_vec3(u) || length(u) <= EPSILON) return false;
+	u = normalize(u);
+	vec3 v = cross(light_into_water, u);
+	if (!finite_vec3(v) || length(v) <= EPSILON) return false;
+	v = normalize(v);
+	beam_coord = vec2(dot(world_position, u), dot(world_position, v));
+	return !any(isnan(beam_coord)) && !any(isinf(beam_coord));
+}
+
+float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, bool exaggerated, out vec2 beam_coord) {
+	beam_coord = vec2(0.0);
+	if (!sunrays_beam_coord(sample_world, toward_sun, beam_coord)) return 0.0;
 	float scale = max(params.sunrays_pattern.x, 0.01);
-	float time = params.sunrays_pattern.w * params.sunrays_pattern.z;
-	vec2 surface_xz = surface_world.xz;
-	// Both lobes use the existing caustics texture, but different world scales
-	// and slow directions keep the breakup broad, soft, and non-grid-like.
-	vec2 uv_a = surface_xz * (0.006 * scale) + vec2(time * 0.018, -time * 0.011);
-	vec2 uv_b = surface_xz * (0.015 * scale) + vec2(-time * 0.012, time * 0.017);
-	float p1 = texture(sunrays_pattern_texture, uv_a).r;
-	float p2 = texture(sunrays_pattern_texture, uv_b).r;
-	float pattern = mix(p1, p2, 0.35);
-	float shaped = smoothstep(exaggerated ? 0.30 : 0.38, exaggerated ? 0.68 : 0.76, pattern);
+	// Meter-space ridges: broad 8.7 m shafts, medium 2.9 m shafts, and a
+	// restrained 1.8 m secondary line.  The only warp varies slowly across V.
+	float broad_phase = beam_coord.x * (0.72 * scale)
+		+ sin(beam_coord.y * 0.13) * 0.24;
+	float medium_phase = beam_coord.x * (2.17 * scale)
+		+ beam_coord.y * 0.18 + 1.37;
+	float narrow_phase = beam_coord.x * (3.49 * scale)
+		- beam_coord.y * 0.08 + 0.61;
+	float broad = pow(max(0.0, 0.5 + 0.5 * cos(broad_phase)), 2.1);
+	float medium = pow(max(0.0, 0.5 + 0.5 * sin(medium_phase)), 4.2);
+	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0);
+	float slow_intensity = 0.84 + 0.16 * (0.5 + 0.5 * sin(beam_coord.y * 0.09));
+	float ridges = clamp((broad * 0.82 + medium * 0.30 + narrow * 0.12) * slow_intensity, 0.0, 1.0);
 	float contrast = exaggerated ? 1.0 : clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
-	float low_value = exaggerated ? 0.12 : 0.35;
-	return mix(0.5, low_value + (1.0 - low_value) * shaped, contrast);
+	float low_value = exaggerated ? 0.10 : 0.30;
+	return mix(0.5, low_value + (1.0 - low_value) * ridges, contrast);
 }
 
 bool evaluate_sunray_tap(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
 		float sea_level, vec3 toward_sun, vec3 absorption, float absorption_scale,
 		float tap_fraction, bool exaggerated, out vec3 sample_point, out vec3 light_entry,
-		out vec3 transmittance, out float pattern) {
+		out vec3 transmittance, out float pattern, out vec2 beam_coord) {
 	sample_point = camera_world + view_ray_world * (sunray_segment_m * tap_fraction);
 	light_entry = vec3(0.0);
 	transmittance = vec3(0.0);
 	pattern = 0.0;
+	beam_coord = vec2(0.0);
 	if (sunray_segment_m <= EPSILON || !finite_vec3(sample_point)) return false;
 	float denom = toward_sun.y;
 	if (!finite_vec3(toward_sun) || abs(denom) <= EPSILON) return false;
@@ -129,7 +150,7 @@ bool evaluate_sunray_tap(vec3 camera_world, vec3 view_ray_world, float sunray_se
 	float effective_absorption_scale = max(absorption_scale, 0.0) * (exaggerated ? 0.20 : 1.0);
 	transmittance = exp(-max(absorption, vec3(0.0)) * effective_absorption_scale * sun_water_path);
 	if (!finite_vec3(transmittance)) return false;
-	pattern = sunrays_pattern(light_entry, exaggerated);
+	pattern = sunrays_beam_field(sample_point, toward_sun, exaggerated, beam_coord);
 	return !isnan(pattern) && !isinf(pattern);
 }
 
@@ -172,14 +193,15 @@ void main() {
 	float phase_response = 0.0;
 	float depth_response = 0.0;
 	float pattern_debug = 0.0;
+	vec2 beam_coord_debug = vec2(0.0);
 	vec3 sample_point_debug = vec3(0.0);
 	vec3 light_entry_debug = vec3(0.0);
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 22;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 23;
 	bool exaggerated = debug_mode == 22;
-	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || exaggerated;
+	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode == 23 || exaggerated;
 	int tap_count = int(params.sunrays_extra.y + 0.5);
 	// Only the benchmark may select the legacy midpoint. Production is always
 	// four fixed taps; unknown values fail closed to the production path.
@@ -212,23 +234,24 @@ void main() {
 			vec3 tap_transmittance_0; vec3 tap_transmittance_1;
 			vec3 tap_transmittance_2; vec3 tap_transmittance_3;
 			float tap_pattern_0; float tap_pattern_1; float tap_pattern_2; float tap_pattern_3;
+			vec2 tap_beam_coord_0; vec2 tap_beam_coord_1; vec2 tap_beam_coord_2; vec2 tap_beam_coord_3;
 			bool tap_valid_0 = false; bool tap_valid_1 = false;
 			bool tap_valid_2 = false; bool tap_valid_3 = false;
 			if (sun_direction_valid) {
 				tap_valid_0 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
 						params.medium.x, toward_sun, params.absorption.rgb, params.medium.w,
 						one_tap_benchmark ? 0.5 : TAP_0, force_pattern_debug, tap_point_0, tap_entry_0,
-					tap_transmittance_0, tap_pattern_0);
+					tap_transmittance_0, tap_pattern_0, tap_beam_coord_0);
 				if (!one_tap_benchmark) {
 						tap_valid_1 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
 							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_1,
-							force_pattern_debug, tap_point_1, tap_entry_1, tap_transmittance_1, tap_pattern_1);
+							force_pattern_debug, tap_point_1, tap_entry_1, tap_transmittance_1, tap_pattern_1, tap_beam_coord_1);
 						tap_valid_2 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
 							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_2,
-							force_pattern_debug, tap_point_2, tap_entry_2, tap_transmittance_2, tap_pattern_2);
+							force_pattern_debug, tap_point_2, tap_entry_2, tap_transmittance_2, tap_pattern_2, tap_beam_coord_2);
 						tap_valid_3 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
 							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_3,
-							force_pattern_debug, tap_point_3, tap_entry_3, tap_transmittance_3, tap_pattern_3);
+							force_pattern_debug, tap_point_3, tap_entry_3, tap_transmittance_3, tap_pattern_3, tap_beam_coord_3);
 				}
 			}
 			valid_tap_count = (tap_valid_0 ? 1 : 0) + (tap_valid_1 ? 1 : 0)
@@ -237,30 +260,35 @@ void main() {
 				sample_point_debug += tap_point_0;
 				light_entry_debug += tap_entry_0;
 				pattern_debug += tap_pattern_0;
+				beam_coord_debug += tap_beam_coord_0;
 				shaft_integral += tap_pattern_0 * tap_transmittance_0 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
 			}
 			if (tap_valid_1) {
 				sample_point_debug += tap_point_1;
 				light_entry_debug += tap_entry_1;
 				pattern_debug += tap_pattern_1;
+				beam_coord_debug += tap_beam_coord_1;
 				shaft_integral += tap_pattern_1 * tap_transmittance_1 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
 			}
 			if (tap_valid_2) {
 				sample_point_debug += tap_point_2;
 				light_entry_debug += tap_entry_2;
 				pattern_debug += tap_pattern_2;
+				beam_coord_debug += tap_beam_coord_2;
 				shaft_integral += tap_pattern_2 * tap_transmittance_2 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
 			}
 			if (tap_valid_3) {
 				sample_point_debug += tap_point_3;
 				light_entry_debug += tap_entry_3;
 				pattern_debug += tap_pattern_3;
+				beam_coord_debug += tap_beam_coord_3;
 				shaft_integral += tap_pattern_3 * tap_transmittance_3 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
 			}
 			if (valid_tap_count > 0) {
 				sample_point_debug /= float(valid_tap_count);
 				light_entry_debug /= float(valid_tap_count);
 				pattern_debug /= float(valid_tap_count);
+				beam_coord_debug /= float(valid_tap_count);
 			}
 			float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * sunray_segment_m * (exaggerated ? 0.50 : 0.25));
 			float density_path = max(params.sunrays.w, 0.0) * sunray_segment_m;
@@ -288,7 +316,10 @@ void main() {
 	} else if (debug_mode == 13) {
 		color.rgb = vec3(phase_response);
 	} else if (debug_mode == 14) {
-		color.rgb = vec3(pattern_debug);
+		color.rgb = valid_tap_count > 0
+			? vec3(0.5 + 0.5 * sin(beam_coord_debug.x * 0.72),
+				0.5 + 0.5 * sin(beam_coord_debug.y * 0.72), 1.0)
+			: vec3(0.0);
 	} else if (debug_mode == 15) {
 		color.rgb = vec3(depth_response);
 	} else if (debug_mode == 16) {
@@ -307,6 +338,8 @@ void main() {
 		color.rgb = vec3(1.0) - exp(-max(shaft_integral, vec3(0.0)));
 	} else if (debug_mode == 22) {
 		color.rgb = sunray_contribution;
+	} else if (debug_mode == 23) {
+		color.rgb = vec3(pattern_debug);
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);
