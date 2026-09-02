@@ -69,6 +69,7 @@ var _init_reported := false
 var _init_failure_reported := false
 var _render_device_wait_reported := false
 var _runtime_injection_requested := false
+var _test_injection_wait_reported := false
 var _runtime_debug_mode_applied := false
 var _initialization_retry_timer := 0.0
 var _bathymetry_wait_elapsed := 0.0
@@ -218,25 +219,30 @@ func inject_sediment(world_position: Vector3, radius_m: float, strength: float) 
 
 func inject_test_sediment() -> void:
 	_runtime_injection_requested = true
-	_request_test_injection()
+	_test_injection_wait_reported = false
 
 
 func _request_test_injection() -> void:
-	_runtime_injection_requested = false
 	if not _field_published or _bathymetry == null or not _bathymetry.is_valid():
-		print("SEDIMENT TEST FAILED: field is not ready or published.")
+		if not _test_injection_wait_reported:
+			_test_injection_wait_reported = true
+			print("SEDIMENT TEST WAIT: waiting for the field to publish its first texture.")
 		return
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
-		print("SEDIMENT TEST FAILED: no active camera.")
+		if not _test_injection_wait_reported:
+			_test_injection_wait_reported = true
+			print("SEDIMENT TEST WAIT: waiting for an active camera.")
 		return
 	var target := _find_test_position(camera)
 	if target.is_empty():
+		_runtime_injection_requested = false
 		print("SEDIMENT TEST FAILED: no valid water/seabed cell within %.1f metres." % TEST_SEARCH_RADIUS_M)
 		return
 	var sample_position: Vector3 = target["world_position"]
 	var validation := _injection_validation(sample_position)
 	var accepted := inject_sediment(sample_position, TEST_INJECTION_RADIUS_M, TEST_INJECTION_STRENGTH)
+	_runtime_injection_requested = false
 	_test_injection_sequence += 1
 	if accepted:
 		_show_test_marker(sample_position)
@@ -365,8 +371,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var key_event := event as InputEventKey
 	if key_event.pressed and not key_event.echo and key_event.keycode == KEY_F8:
-		_runtime_injection_requested = true
-		_request_test_injection()
+		inject_test_sediment()
 
 
 func get_debug_state() -> Dictionary:
@@ -391,6 +396,7 @@ func get_debug_state() -> Dictionary:
 		"dispatch_count": _dispatch_count,
 		"last_dispatch_period_s": _last_dispatch_period_s,
 		"pending_injections": _pending_injections.size(),
+		"test_injection_pending": _runtime_injection_requested,
 		"last_queued_injection_count": _last_queued_injection_count,
 		"cloud_amount": _cloud_particles.amount if _cloud_particles != null else 0,
 		"wisp_amount": _wisp_particles.amount if _wisp_particles != null else 0,
