@@ -15,6 +15,9 @@ const PIPELINE_ASSEMBLE := 2
 const PIPELINE_UPDATE := 3
 const PIPELINE_TOPOLOGY := 4
 const PIPELINE_DOWNSAMPLE := 5
+## Keep a slow render step from submitting an unbounded stale solver burst.
+const MAX_PASSES_PER_RENDER_STEP := 24
+const MAX_CATCHUP_SECONDS := 0.10
 
 var ready := false
 var last_error := ""
@@ -164,7 +167,8 @@ func upload_h0(h0_data: PackedByteArray) -> void:
 
 
 func total_job_passes() -> int:
-	return 2 * _config.fft_stage_count() + 3
+	# Evolve + IFFT + assemble + field update + topology base + every topology mip.
+	return 2 * _config.fft_stage_count() + 3 + _topology_mip_count()
 
 
 func advance(frame_delta: float) -> void:
@@ -174,16 +178,18 @@ func advance(frame_delta: float) -> void:
 	_diagnostic_window_s += safe_delta
 	var period := 1.0 / _update_hz
 	_update_accumulator += safe_delta
-	_pass_credit = minf(_pass_credit + total_job_passes() * _update_hz * safe_delta, float(total_job_passes() * 2))
+	# One complete job is enough to finish the active update without retaining
+	# additional stale work after a hitch.
+	_pass_credit = minf(_pass_credit + total_job_passes() * _update_hz * safe_delta, float(total_job_passes()))
 	if not _job_active and _update_accumulator >= period:
 		_job_active = true
 		_job_pass = 0
-		_job_delta = _update_accumulator
+		_job_delta = minf(_update_accumulator, MAX_CATCHUP_SECONDS)
 		_update_accumulator = 0.0
 		_simulation_time += _job_delta
 		_spectral_time += _job_delta * _evolution_speed
 		_job_time = _spectral_time
-	var pass_budget := mini(int(floor(_pass_credit)), 24)
+	var pass_budget := mini(int(floor(_pass_credit)), MAX_PASSES_PER_RENDER_STEP)
 	if pass_budget <= 0 or not _job_active:
 		return
 	_pass_credit -= float(pass_budget)
@@ -268,22 +274,23 @@ func _dispatch_job_pass(list: int, groups: int, foam_groups: int) -> void:
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_ASSEMBLE])
 		_rd.compute_list_bind_uniform_set(list, _assemble_sets[write_jacobian], 0)
 		_rd.compute_list_dispatch(list, groups, groups, 1)
-	else:
+	elif _job_pass == fft_count + 2:
 		var target_jacobian := 1 - _jacobian_read_index
 		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_UPDATE])
 		_rd.compute_list_bind_uniform_set(list, _foam_sets[target_jacobian * 2 + _foam_read_index], 0)
 		_rd.compute_list_dispatch(list, foam_groups, foam_groups, 1)
-		if _job_pass == fft_count + 2:
-			_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_TOPOLOGY])
-			_rd.compute_list_bind_uniform_set(list, _topology_sets[target_jacobian], 0)
-			_rd.compute_list_dispatch(list, ceili(float(_topology_resolution) / 8.0), ceili(float(_topology_resolution) / 8.0), 1)
-			_rd.compute_list_add_barrier(list)
-			for mip in _topology_downsample_sets[target_jacobian].size():
-				_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_DOWNSAMPLE])
-				_rd.compute_list_bind_uniform_set(list, _topology_downsample_sets[target_jacobian][mip], 0)
-				var mip_resolution := maxi(_topology_resolution >> (mip + 1), 1)
-				_rd.compute_list_dispatch(list, ceili(float(mip_resolution) / 8.0), ceili(float(mip_resolution) / 8.0), 1)
-				_rd.compute_list_add_barrier(list)
+	elif _job_pass == fft_count + 3:
+		var target_jacobian := 1 - _jacobian_read_index
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_TOPOLOGY])
+		_rd.compute_list_bind_uniform_set(list, _topology_sets[target_jacobian], 0)
+		_rd.compute_list_dispatch(list, ceili(float(_topology_resolution) / 8.0), ceili(float(_topology_resolution) / 8.0), 1)
+	elif _job_pass > fft_count + 3:
+		var target_jacobian := 1 - _jacobian_read_index
+		var mip := _job_pass - (fft_count + 4)
+		_rd.compute_list_bind_compute_pipeline(list, _pipelines[PIPELINE_DOWNSAMPLE])
+		_rd.compute_list_bind_uniform_set(list, _topology_downsample_sets[target_jacobian][mip], 0)
+		var mip_resolution := maxi(_topology_resolution >> (mip + 1), 1)
+		_rd.compute_list_dispatch(list, ceili(float(mip_resolution) / 8.0), ceili(float(mip_resolution) / 8.0), 1)
 	_job_pass += 1
 	if _job_pass >= total_job_passes():
 		_jacobian_read_index = 1 - _jacobian_read_index
