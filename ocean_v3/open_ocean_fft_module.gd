@@ -8,6 +8,7 @@ const SpectrumScript := preload("res://ocean_v3/core/tessendorf_spectrum.gd")
 const SurfaceFoamConfigScript := preload("res://ocean_v3/core/surface_foam_reference_config.gd")
 const SurfaceFoamSpectrumScript := preload("res://ocean_v3/core/surface_foam_reference_spectrum.gd")
 const SurfaceFoamSolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_spectrum_solver.gd")
+const SurfaceFoamShortSourceSolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_short_source_solver.gd")
 const SurfaceFoamMidHistorySolverScript := preload("res://ocean_v3/rendering/fft/surface_foam_mid_history_solver.gd")
 const SolverScript := preload("res://ocean_v3/rendering/fft/gpu_stockham_fft.gd")
 const SeaStateScript := preload("res://ocean_v3/core/sea_state_config.gd")
@@ -20,6 +21,11 @@ const CoastalEikonalBakerScript := preload("res://ocean_v3/coastal/coastal_eikon
 const WarpBakerScript := preload("res://ocean_v3/coastal/coastal_warp_baker.gd")
 const BreakerPoolScript := preload("res://ocean_v3/breaking/breaker_ribbon_pool.gd")
 const DEFAULT_FOAM_RESOLUTION := 1024
+
+enum SurfaceFoamSourceMode {
+	LEGACY_AUXILIARY_FFT,
+	MAIN_FFT_SHORT,
+}
 
 
 class _WaveTransitionPreparationTask:
@@ -272,6 +278,8 @@ var _surface_foam_directional_spread := 0.0
 var _surface_foam_detail := 1.0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
+var _surface_foam_short_solver = null
+var _surface_foam_source_mode := SurfaceFoamSourceMode.LEGACY_AUXILIARY_FFT
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_jacobian_texture := Texture2DRD.new()
 var _surface_foam_topology_texture := Texture2DRD.new()
@@ -322,6 +330,9 @@ func coastal_render_memory_diagnostics() -> Dictionary:
 func _ready() -> void:
 	var startup_started_usec := Time.get_ticks_usec()
 	add_to_group(&"ocean_fft")
+	var ocean_root := get_parent()
+	if ocean_root != null:
+		_surface_foam_source_mode = clampi(int(ocean_root.get("perf_surface_foam_source_mode")), SurfaceFoamSourceMode.LEGACY_AUXILIARY_FFT, SurfaceFoamSourceMode.MAIN_FFT_SHORT)
 	_sea_state = SeaStateScript.State.RACE
 	_sea_state_initialized = true
 	configs = SeaStateScript.build_cascades(_sea_state)
@@ -352,7 +363,7 @@ func _ready() -> void:
 	_cascades.append(_make_cascade(long_config, split["remainder"], "Ocean2B.LONG_REMAINDER"))
 	for index in [1, 2]:
 		_cascades.append(_make_cascade(configs[index], h0_datas[index], "Ocean2B.%s" % configs[index].id))
-	_initialize_surface_foam_solver()
+	_initialize_surface_foam_source()
 	var gpu_submission_usec := Time.get_ticks_usec()
 
 	_enabled = enabled_on_start
@@ -385,8 +396,8 @@ func _ready() -> void:
 	_apply_crest_sharpen_config()
 	surface.configure(_render_configs(), _textures_for(&"displacement"), _textures_for(&"normal"), _textures_for(&"foam"), _surface_foam_texture, _surface_foam_field_domain_m)
 	var surface_ready_usec := Time.get_ticks_usec()
-	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
-	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_source_domain_m)
+	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_effective_source_domain_m())
+	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_effective_source_domain_m())
 	surface.set_surface_foam_mid_fold_history(_surface_foam_mid_fold_history_texture)
 	# Phase 4B: pool de breakers como hijo del módulo; se configura cuando hay
 	# coastal/warp válidos (rebuild_coastal_propagation). Antes de eso queda
@@ -461,9 +472,12 @@ func _exit_tree() -> void:
 	_surface_foam_mid_fold_history_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
+	if _surface_foam_short_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_short_solver.free_resources)
 	if _surface_foam_mid_history_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.free_resources)
 	_surface_foam_solver = null
+	_surface_foam_short_solver = null
 	_surface_foam_mid_history_solver = null
 	_surface_foam_config = null
 
@@ -487,10 +501,11 @@ func _process(delta: float) -> void:
 				# The solver receives the actual frame delta and converts per-second foam
 				# rates into exponential attack/release and decay. No fixed-FPS assumption.
 				RenderingServer.call_on_render_thread(cascade.solver.dispatch.bind(SimulationClock.get_render_time(), delta, _wave_transition_alpha))
-	if _performance_spectral_enabled and _performance_surface_foam_solver_enabled and _surface_foam_solver != null and _surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
-		# Independent fixed-rate scheduler: the material keeps its last completed
-		# field while this J-only FFT advances in small pass batches.
-		RenderingServer.call_on_render_thread(_surface_foam_solver.advance.bind(delta))
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	if _performance_spectral_enabled and _performance_surface_foam_solver_enabled and active_surface_foam_solver != null and active_surface_foam_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
+		# Independent fixed-rate scheduler: legacy uses its J-only FFT; SHORT
+		# extracts the already-computed main J and keeps the same downstream field.
+		RenderingServer.call_on_render_thread(active_surface_foam_solver.advance.bind(delta))
 	if _performance_spectral_enabled and _performance_mid_fold_history_enabled and _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready and (not SimulationClock.is_paused() or _dispatch_requested):
 		RenderingServer.call_on_render_thread(_surface_foam_mid_history_solver.advance.bind(delta))
 	_dispatch_requested = false
@@ -522,8 +537,9 @@ func set_performance_profile(profile: Dictionary) -> void:
 		_performance_prebreak_enabled,
 		_performance_breakers_enabled
 	)
-	if _surface_foam_solver != null:
-		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	if active_surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(active_surface_foam_solver.set_settings.bind(
 			_surface_foam_enabled and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,
@@ -1760,8 +1776,9 @@ func gpu_memory_bytes() -> int:
 		total += int(solver_state.get("foam_gpu_bytes", 0))
 		total += int(solver_state.get("surface_foam_gpu_bytes", 0))
 		total += int(solver_state.get("previous_displacement_gpu_bytes", 0))
-	if _surface_foam_solver != null and _surface_foam_config != null:
-		var surface_foam_state: Dictionary = _surface_foam_solver.diagnostic_state()
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	if active_surface_foam_solver != null:
+		var surface_foam_state: Dictionary = active_surface_foam_solver.diagnostic_state()
 		total += int(surface_foam_state.get("gpu_bytes", 0))
 	return total
 
@@ -1833,6 +1850,44 @@ func _initialize_surface_foam_solver() -> void:
 	))
 
 
+func _initialize_surface_foam_short_source_solver() -> void:
+	if _cascades.size() <= 3:
+		push_error("No existe la cascada SHORT para Surface Foam.")
+		return
+	var short_cascade: Dictionary = _cascades[3]
+	var short_solver = short_cascade["solver"]
+	var short_config: OpenOceanFFTConfig = short_cascade["config"]
+	if short_solver == null or short_config == null:
+		push_error("La cascada SHORT no está lista para Surface Foam.")
+		return
+	_surface_foam_short_solver = SurfaceFoamShortSourceSolverScript.new()
+	RenderingServer.call_on_render_thread(_surface_foam_short_solver.initialize.bind(
+		short_solver.displacement_rid,
+		short_config.resolution,
+		short_config.domain_size_m,
+		_surface_foam_field_resolution,
+		_surface_foam_topology_resolution,
+		_surface_foam_field_domain_m
+	))
+	RenderingServer.call_on_render_thread(_surface_foam_short_solver.set_settings.bind(
+		_surface_foam_topology_required, _surface_foam_whitecap, _surface_foam_amount,
+		_surface_foam_update_hz,
+		_surface_foam_birth_attack_s,
+		_surface_foam_lifetime_s,
+		_surface_foam_birth_selectivity,
+		_surface_foam_evolution_speed,
+		_surface_foam_crest_whitecap
+	))
+
+
+func _initialize_surface_foam_source() -> void:
+	_surface_foam_config = null
+	if _surface_foam_source_mode == SurfaceFoamSourceMode.MAIN_FFT_SHORT:
+		_initialize_surface_foam_short_source_solver()
+	else:
+		_initialize_surface_foam_solver()
+
+
 func _initialize_surface_foam_mid_history() -> void:
 	if _surface_foam_mid_history_solver != null or _cascades.size() <= 2:
 		return
@@ -1864,11 +1919,14 @@ func _rebuild_surface_foam_solver() -> void:
 	_surface_foam_topology_texture.texture_rd_rid = RID()
 	if _surface_foam_solver != null:
 		RenderingServer.call_on_render_thread(_surface_foam_solver.free_resources)
+	if _surface_foam_short_solver != null:
+		RenderingServer.call_on_render_thread(_surface_foam_short_solver.free_resources)
 	_surface_foam_solver = null
-	_initialize_surface_foam_solver()
+	_surface_foam_short_solver = null
+	_initialize_surface_foam_source()
 	surface.set_surface_foam_spectrum(_surface_foam_texture, _surface_foam_field_domain_m)
-	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_source_domain_m)
-	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_source_domain_m)
+	surface.set_surface_foam_jacobian(_surface_foam_jacobian_texture, _surface_foam_effective_source_domain_m())
+	surface.set_surface_foam_topology(_surface_foam_topology_texture, _surface_foam_effective_source_domain_m())
 	_dispatch_requested = true
 
 
@@ -1878,6 +1936,29 @@ func _rebuild_surface_foam_h0(simulation_seed: int) -> void:
 	RenderingServer.call_on_render_thread(_surface_foam_solver.upload_h0.bind(
 		SurfaceFoamSpectrumScript.build_h0_rgba32f(_surface_foam_config as SurfaceFoamReferenceConfig, simulation_seed)
 	))
+
+
+func set_surface_foam_source_mode(mode: int) -> void:
+	var next_mode := clampi(mode, SurfaceFoamSourceMode.LEGACY_AUXILIARY_FFT, SurfaceFoamSourceMode.MAIN_FFT_SHORT)
+	if next_mode == _surface_foam_source_mode:
+		return
+	_surface_foam_source_mode = next_mode
+	if is_inside_tree() and not _cascades.is_empty():
+		_rebuild_surface_foam_solver()
+
+
+func surface_foam_source_mode_name() -> String:
+	return "MAIN FFT SHORT" if _surface_foam_source_mode == SurfaceFoamSourceMode.MAIN_FFT_SHORT else "LEGACY AUXILIARY FFT"
+
+
+func _active_surface_foam_solver():
+	return _surface_foam_short_solver if _surface_foam_source_mode == SurfaceFoamSourceMode.MAIN_FFT_SHORT else _surface_foam_solver
+
+
+func _surface_foam_effective_source_domain_m() -> float:
+	if _surface_foam_source_mode == SurfaceFoamSourceMode.MAIN_FFT_SHORT and _cascades.size() > 3:
+		return float(_cascades[3]["config"].domain_size_m)
+	return _surface_foam_source_domain_m
 
 
 func _textures_for(key: StringName) -> Array[Texture2DRD]:
@@ -1897,10 +1978,11 @@ func _publish_ready_textures() -> void:
 			cascade.displacement.texture_rd_rid = cascade.solver.displacement_rid
 			cascade.normal.texture_rd_rid = cascade.solver.normal_rid
 		cascade.foam.texture_rd_rid = cascade.solver.foam_rid
-	if _surface_foam_solver != null and _surface_foam_solver.ready:
-		_surface_foam_texture.texture_rd_rid = _surface_foam_solver.surface_foam_rid
-		_surface_foam_jacobian_texture.texture_rd_rid = _surface_foam_solver.jacobian_rid
-		_surface_foam_topology_texture.texture_rd_rid = _surface_foam_solver.topology_rid
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	if active_surface_foam_solver != null and active_surface_foam_solver.ready:
+		_surface_foam_texture.texture_rd_rid = active_surface_foam_solver.surface_foam_rid
+		_surface_foam_jacobian_texture.texture_rd_rid = active_surface_foam_solver.jacobian_rid
+		_surface_foam_topology_texture.texture_rd_rid = active_surface_foam_solver.topology_rid
 	_initialize_surface_foam_mid_history()
 	if _surface_foam_mid_history_solver != null and _surface_foam_mid_history_solver.ready:
 		_surface_foam_mid_fold_history_texture.texture_rd_rid = _surface_foam_mid_history_solver.history_rid
@@ -1955,13 +2037,16 @@ func foam_render_diagnostics() -> Dictionary:
 		state["updates_per_second"] = state.get("crest_updates_per_second", 0.0)
 		state["snapshots"] = state.get("crest_snapshot_count", 0)
 		cascades_state.append(state)
-	var surface_state: Dictionary = _surface_foam_solver.diagnostic_state() if _surface_foam_solver != null else {}
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	var surface_state: Dictionary = active_surface_foam_solver.diagnostic_state() if active_surface_foam_solver != null else {}
 	return {
 		"crest": cascades_state,
 		"surface": surface_state,
 		"surface_topology_required": _surface_foam_topology_required,
 		"surface_mid_history_required": _surface_foam_mid_history_required,
-		"surface_fft_resolution": _surface_foam_fft_resolution,
+		"surface_source_mode": surface_foam_source_mode_name(),
+		"surface_fft_resolution": int(surface_state.get("source_resolution", _surface_foam_fft_resolution)),
+		"surface_source_domain_m": _surface_foam_effective_source_domain_m(),
 		"surface_field_resolution": _surface_foam_field_resolution,
 	}
 
@@ -1985,8 +2070,9 @@ func set_surface_foam_settings(enabled: bool, whitecap: float, amount: float, up
 	_surface_foam_evolution_speed = clampf(evolution_speed, 0.0, 1.5)
 	_surface_foam_mid_fold_start = clampf(mid_fold_start, 0.0, 1.0)
 	_surface_foam_mid_fold_end = maxf(mid_fold_end, _surface_foam_mid_fold_start + 0.01)
-	if _surface_foam_solver != null:
-		RenderingServer.call_on_render_thread(_surface_foam_solver.set_settings.bind(
+	var active_surface_foam_solver = _active_surface_foam_solver()
+	if active_surface_foam_solver != null:
+		RenderingServer.call_on_render_thread(active_surface_foam_solver.set_settings.bind(
 			_surface_foam_topology_required and _performance_spectral_enabled and _performance_surface_foam_solver_enabled,
 			_surface_foam_whitecap,
 			_surface_foam_amount,

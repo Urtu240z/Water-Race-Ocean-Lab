@@ -86,6 +86,10 @@ var _performance_overlay_label: Label
 	set(value):
 		perf_enable_surface_foam_solver = value
 		_request_performance_sync()
+@export_enum("Legacy Auxiliary FFT:0", "Main FFT SHORT:1") var perf_surface_foam_source_mode: int = 0:
+	set(value):
+		perf_surface_foam_source_mode = clampi(value, 0, 1)
+		_request_performance_sync()
 @export var perf_enable_mid_fold_history := true:
 	set(value):
 		perf_enable_mid_fold_history = value
@@ -1963,6 +1967,7 @@ func _apply_performance_profile() -> void:
 	# exposes the non-tool child as a placeholder instance, so do not call its
 	# runtime profiling API from the @tool root.
 	if not Engine.is_editor_hint() and fft_module != null and is_instance_valid(fft_module):
+		fft_module.set_surface_foam_source_mode(perf_surface_foam_source_mode)
 		fft_module.set_performance_profile(performance_profile())
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
@@ -2006,6 +2011,7 @@ func _update_performance_overlay() -> void:
 		"COASTAL        %s" % _on_off(profile["coastal"]),
 		"CREST FOAM     %s" % _on_off(profile["crest_foam_solver"]),
 		"FOAM SOLVER    %s" % _on_off(profile["surface_foam_solver"]),
+		"SF_SRC         %s" % ("MAIN FFT SHORT" if perf_surface_foam_source_mode == 1 else "LEGACY AUXILIARY FFT"),
 		"MID HISTORY    %s" % _on_off(profile["mid_fold_history"]),
 		"FOAM RENDER    %s" % _on_off(profile["surface_foam_render"]),
 		"PREBREAK       %s" % _on_off(profile["prebreak"]),
@@ -3034,6 +3040,7 @@ func _sync_water_visual_parameters() -> void:
 	if not Engine.is_editor_hint():
 		var fft_module := get_node_or_null(^"OpenOceanFFT") as OpenOceanFFTModule
 		if fft_module != null:
+			fft_module.set_surface_foam_source_mode(perf_surface_foam_source_mode)
 			fft_module.set_foam_transport_settings(
 				foam_residual_decay_multiplier,
 				foam_deposit_strength,
