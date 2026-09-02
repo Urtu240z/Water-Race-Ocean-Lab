@@ -34,7 +34,11 @@ var _sunrays_density := 0.08
 var _sunrays_max_distance := 30.0
 var _sunrays_pattern_scale := 1.0
 var _sunrays_pattern_contrast := 1.4
-var _sunrays_animation_speed := 0.0
+var _sunrays_animation_speed := 0.35
+var _sunrays_wave_modulation_enabled := true
+var _sunrays_wave_intensity_strength := 0.35
+var _sunrays_wave_width_strength := 0.10
+var _sunrays_wave_depth_fade_m := 15.0
 var _sunrays_time := 0.0
 var _sunrays_tap_count := 4
 var _dispatch_count := 0
@@ -52,7 +56,9 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		sun_energy: float, sunrays_enabled: bool, sunrays_strength: float,
 		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
 		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
-		sunrays_animation_speed: float, sunrays_time: float, sunrays_tap_count: int = 4) -> void:
+		sunrays_animation_speed: float, sunrays_wave_modulation_enabled: bool,
+		sunrays_wave_intensity_strength: float, sunrays_wave_width_strength: float,
+		sunrays_wave_depth_fade_m: float, sunrays_time: float, sunrays_tap_count: int = 4) -> void:
 	_mutex.lock()
 	_enabled = is_enabled
 	_sea_level = sea_level
@@ -76,12 +82,16 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_pattern_scale = clampf(sunrays_pattern_scale, 0.05, 10.0)
 	_sunrays_pattern_contrast = clampf(sunrays_pattern_contrast, 0.0, 4.0)
 	_sunrays_animation_speed = clampf(sunrays_animation_speed, 0.0, 2.0)
+	_sunrays_wave_modulation_enabled = sunrays_wave_modulation_enabled
+	_sunrays_wave_intensity_strength = clampf(sunrays_wave_intensity_strength, 0.0, 0.45)
+	_sunrays_wave_width_strength = clampf(sunrays_wave_width_strength, 0.0, 0.20)
+	_sunrays_wave_depth_fade_m = clampf(sunrays_wave_depth_fade_m, 1.0, 50.0)
 	_sunrays_time = sunrays_time
 	_sunrays_tap_count = 1 if sunrays_tap_count <= 1 else 4
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
 	# are rendered by the surface material and must not turn this pass into a
 	# conflicting compositor visualization.
-	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 23) else 0
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 27) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:
@@ -149,6 +159,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_pattern_scale := _sunrays_pattern_scale
 	var sunrays_pattern_contrast := _sunrays_pattern_contrast
 	var sunrays_animation_speed := _sunrays_animation_speed
+	var sunrays_wave_modulation_enabled := _sunrays_wave_modulation_enabled
+	var sunrays_wave_intensity_strength := _sunrays_wave_intensity_strength
+	var sunrays_wave_width_strength := _sunrays_wave_width_strength
+	var sunrays_wave_depth_fade_m := _sunrays_wave_depth_fade_m
 	var sunrays_time := _sunrays_time
 	var sunrays_tap_count := _sunrays_tap_count
 	_mutex.unlock()
@@ -173,20 +187,20 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var inverse_view_projection := (projection * Projection(camera_transform.affine_inverse())).inverse()
 	var params := PackedFloat32Array()
 	_append_projection(params, inverse_view_projection)
-	params.append(float(size.x)); params.append(float(size.y)); params.append(0.0); params.append(0.0)
+	params.append(float(size.x)); params.append(float(size.y)); params.append(sunrays_wave_depth_fade_m); params.append(0.0)
 	params.append(camera_transform.origin.x); params.append(camera_transform.origin.y); params.append(camera_transform.origin.z); params.append(1.0 if camera_underwater else 0.0)
 	params.append(sea_level); params.append(transition_width); params.append(max_distance); params.append(absorption_scale)
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
 	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0)
-	params.append(1.0)
+	params.append(1.0 if sunrays_wave_modulation_enabled else 0.0)
 	params.append(sun_direction.x); params.append(sun_direction.y); params.append(sun_direction.z); params.append(sun_energy)
-	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(0.0)
+	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(sunrays_wave_intensity_strength)
 	params.append(1.0 if sunrays_enabled and sunrays_strength > 0.0 else 0.0)
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
 	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
 	params.append(sunrays_animation_speed); params.append(sunrays_time)
-	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(0.0); params.append(0.0)
+	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(sunrays_wave_width_strength); params.append(0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE

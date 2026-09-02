@@ -21,6 +21,32 @@ the transverse coordinate and `SUNRAYS_BEAM_FIELD` exposes its shaped ridge
 field. Existing vector, tap-validity, depth, integral, final, and exaggerated
 diagnostics remain available.
 
+Sunrays V3.1 integrates only the intervals where a camera ray crosses fixed
+14 m light-space slabs. A slab is identified by
+`floor(dot(P, light_into_water) / 14 m)` and therefore cannot move with the
+camera. Each of the at-most-four samples is the midpoint of one ray/slab
+overlap and is weighted by that overlap length. Adjacent slab intervals meet
+with zero length at their boundary, so their contribution transitions
+continuously instead of popping. `SUNRAYS_WORLD_SLICE_ID` visualizes the
+weighted slab identity.
+
+## Sunrays V3.2 — wave-driven life
+
+The compositor does not bind an Ocean V3 FFT/slope texture, so V3.2 uses a
+cheap coherent procedural surface proxy instead of adding an FFT sampling path.
+It combines three low-frequency wave terms evaluated only from `light_entry.xz`
+and `SimulationClock` render time. Thus the surface-response phase is world
+anchored and differs naturally between shafts; it has no camera, screen-UV, or
+tap-index phase input.
+
+The stable light-space beam coordinate and world-slice ID remain unchanged.
+The proxy only modulates per-slice energy (default 0.65–1.35 near the surface)
+and ridge exponents for width (default 0.90–1.10), with both effects fading
+smoothly to zero over the default 15 m depth envelope. Set the existing
+`underwater_sunrays_animation_speed` to zero to freeze the modulation in its
+world-space state. The `SUNRAYS_WAVE_FOCUS`, `SUNRAYS_WAVE_WIDTH`, and
+`SUNRAYS_WAVE_MODULATION` diagnostics expose the three resulting signals.
+
 ## Sediment V2 test path
 
 Sediment source remains a continuous, delta-time-scaled rate. Queued test

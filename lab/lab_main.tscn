@@ -79,7 +79,7 @@ environment = SubResource("Environment_lab")
 camera_attributes = SubResource("CameraAttributesPhysical_ody2a")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
-transform = Transform3D(-0.85626704, -0.35881415, 0.37156284, 0, 0.71933967, 0.6946582, -0.51653326, 0.594813, -0.6159468, 0, 0, 0)
+transform = Transform3D(0.85264003, 0.34961972, -0.38829198, 0, 0.7431447, 0.66913044, 0.5224985, -0.5705275, 0.6336349, 0, 0, 0)
 light_temperature = 5800.0
 light_energy = 3.611
 light_angular_distance = 0.5
@@ -147,8 +147,11 @@ trough_tint = Color(0.005060052, 0.04589343, 0.02705579, 1)
 crest_tint = Color(0.022200117, 0.15144762, 0.1125462, 1)
 underwater_absorption_scale = 0.43
 underwater_scattering_color = Color(0.0024315654, 0.09275196, 0.13127226, 1)
-underwater_sunrays_strength = 1.0
-underwater_sunrays_density = 0.51
+underwater_sunrays_strength = 0.97
+underwater_sunrays_max_distance_m = 21.0
+underwater_sunrays_pattern_scale = 1.25
+underwater_sunrays_pattern_contrast = 3.8
+underwater_sunrays_animation_speed = 2.0
 underwater_snell_wave_distortion = 1.5
 underwater_snell_detail_strength = 2.0
 underwater_snell_detail_world_scale = 4.0
@@ -244,6 +247,12 @@ underwater_particles_fine_color = Color(4.770132, 1.866834, 0, 1)
 underwater_particles_near_color = Color(4.5819564, 3.6724234, 0.69980174, 1)
 underwater_particles_fine_size_scale = 2.15
 underwater_particles_near_size_scale = 1.35
+
+[node name="OceanSedimentSystem" parent="OceanV3Mount/OceanV3" index="3"]
+sediment_strength = 4.0
+sediment_shallow_start_m = 0.0
+sediment_shallow_end_m = 8.9
+sediment_wave_resuspension_strength = 4.0
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true

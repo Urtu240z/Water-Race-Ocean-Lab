@@ -7,24 +7,23 @@ layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D scene_depth;
 layout(set = 0, binding = 2, std140) uniform Params {
 	mat4 inverse_view_projection;
-	vec4 viewport;
+	vec4 viewport; // xy viewport size, z wave depth fade, w unused
 	vec4 camera; // xyz, binary underwater state
 	vec4 medium; // sea level, transition width, max distance, absorption scale
 	vec4 absorption; // rgb, scattering strength
 	vec4 scattering; // rgb, scattering density
-	vec4 state; // underwater factor, debug mode, enabled, unused
+	vec4 state; // underwater factor, debug mode, enabled, wave modulation enabled
 	vec4 sun; // direction from the water toward the sun, energy
-	vec4 sun_color; // rgb
+	vec4 sun_color; // rgb, wave intensity strength
 	vec4 sunrays; // enabled, strength, anisotropy, density
 	vec4 sunrays_pattern; // scale, contrast, animation speed, time
-	vec4 sunrays_extra; // maximum distance, benchmark tap count, unused
+	vec4 sunrays_extra; // maximum distance, benchmark tap count, wave width strength, unused
 } params;
 
 const float EPSILON = 0.00001;
-const float TAP_0 = 0.125;
-const float TAP_1 = 0.375;
-const float TAP_2 = 0.625;
-const float TAP_3 = 0.875;
+// Fixed global slabs along light_into_water. At the 30 m production segment
+// (and 40.5 m exaggerated diagnostic segment) at most four slabs can overlap.
+const float SUNRAY_WORLD_SLICE_SPACING_M = 14.0;
 
 bool finite_vec3(vec3 value) {
 	return !any(isnan(value)) && !any(isinf(value));
@@ -107,7 +106,37 @@ bool sunrays_beam_coord(vec3 world_position, vec3 toward_sun, out vec2 beam_coor
 	return !any(isnan(beam_coord)) && !any(isinf(beam_coord));
 }
 
-float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, bool exaggerated, out vec2 beam_coord) {
+float sunrays_wave_focus(vec3 light_entry, float wave_time) {
+	// Cheap coherent surface proxy: fixed world directions and the ocean render
+	// time give each light-entry point its own evolving focus response. It is
+	// deliberately not evaluated from camera position, screen UV, or tap index.
+	float primary = sin(dot(light_entry.xz, vec2(0.31, 0.19)) + wave_time * 0.47);
+	float secondary = sin(dot(light_entry.xz, vec2(-0.17, 0.28)) - wave_time * 0.71 + 1.83);
+	float tertiary = cos(dot(light_entry.xz, vec2(0.09, -0.12)) + wave_time * 0.23 + 0.61);
+	float raw_focus = 0.5 + 0.5 * (primary * 0.52 + secondary * 0.33 + tertiary * 0.15);
+	return smoothstep(0.16, 0.84, clamp(raw_focus, 0.0, 1.0));
+}
+
+void sunrays_wave_modulation(vec3 light_entry, vec3 sample_point, out float wave_focus,
+		out float width_factor, out float intensity_factor) {
+	wave_focus = 0.5;
+	width_factor = 1.0;
+	intensity_factor = 1.0;
+	if (params.state.w < 0.5) return;
+	float wave_time = params.sunrays_pattern.w * max(params.sunrays_pattern.z, 0.0);
+	wave_focus = sunrays_wave_focus(light_entry, wave_time);
+	float depth_fade_m = max(params.viewport.z, EPSILON);
+	float depth_below_surface_m = max(params.medium.x - sample_point.y, 0.0);
+	float depth_envelope = 1.0 - smoothstep(0.0, depth_fade_m, depth_below_surface_m);
+	float centered_focus = wave_focus * 2.0 - 1.0;
+	float intensity_strength = clamp(params.sun_color.w, 0.0, 0.45);
+	float width_strength = clamp(params.sunrays_extra.z, 0.0, 0.20);
+	intensity_factor = clamp(1.0 + centered_focus * intensity_strength * depth_envelope, 0.50, 1.50);
+	width_factor = clamp(1.0 + centered_focus * width_strength * depth_envelope, 0.80, 1.20);
+}
+
+float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, float width_factor,
+		bool exaggerated, out vec2 beam_coord) {
 	beam_coord = vec2(0.0);
 	if (!sunrays_beam_coord(sample_world, toward_sun, beam_coord)) return 0.0;
 	float scale = max(params.sunrays_pattern.x, 0.01);
@@ -119,9 +148,12 @@ float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, bool exaggerated, o
 		+ beam_coord.y * 0.18 + 1.37;
 	float narrow_phase = beam_coord.x * (3.49 * scale)
 		- beam_coord.y * 0.08 + 0.61;
-	float broad = pow(max(0.0, 0.5 + 0.5 * cos(broad_phase)), 2.1);
-	float medium = pow(max(0.0, 0.5 + 0.5 * sin(medium_phase)), 4.2);
-	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0);
+	// Changing ridge exponents breathes each shaft around its stable center;
+	// beam_coord is never offset or translated.
+	float safe_width = max(width_factor, 0.01);
+	float broad = pow(max(0.0, 0.5 + 0.5 * cos(broad_phase)), 2.1 / safe_width);
+	float medium = pow(max(0.0, 0.5 + 0.5 * sin(medium_phase)), 4.2 / safe_width);
+	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0 / safe_width);
 	float slow_intensity = 0.84 + 0.16 * (0.5 + 0.5 * sin(beam_coord.y * 0.09));
 	float ridges = clamp((broad * 0.82 + medium * 0.30 + narrow * 0.12) * slow_intensity, 0.0, 1.0);
 	float contrast = exaggerated ? 1.0 : clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
@@ -129,16 +161,43 @@ float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, bool exaggerated, o
 	return mix(0.5, low_value + (1.0 - low_value) * ridges, contrast);
 }
 
-bool evaluate_sunray_tap(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
-		float sea_level, vec3 toward_sun, vec3 absorption, float absorption_scale,
-		float tap_fraction, bool exaggerated, out vec3 sample_point, out vec3 light_entry,
-		out vec3 transmittance, out float pattern, out vec2 beam_coord) {
-	sample_point = camera_world + view_ray_world * (sunray_segment_m * tap_fraction);
+bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
+		vec3 light_into_water, int slice_id, out float interval_begin_m, out float interval_end_m) {
+	interval_begin_m = 0.0;
+	interval_end_m = 0.0;
+	if (sunray_segment_m <= EPSILON || !finite_vec3(light_into_water)) return false;
+	float longitudinal_at_camera = dot(camera_world, light_into_water);
+	float longitudinal_per_m = dot(view_ray_world, light_into_water);
+	float slice_min = float(slice_id) * SUNRAY_WORLD_SLICE_SPACING_M;
+	float slice_max = slice_min + SUNRAY_WORLD_SLICE_SPACING_M;
+	if (abs(longitudinal_per_m) <= EPSILON) {
+		if (longitudinal_at_camera < slice_min || longitudinal_at_camera > slice_max) return false;
+		interval_end_m = sunray_segment_m;
+		return true;
+	}
+	float t_a = (slice_min - longitudinal_at_camera) / longitudinal_per_m;
+	float t_b = (slice_max - longitudinal_at_camera) / longitudinal_per_m;
+	interval_begin_m = max(0.0, min(t_a, t_b));
+	interval_end_m = min(sunray_segment_m, max(t_a, t_b));
+	return interval_end_m - interval_begin_m > EPSILON;
+}
+
+bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
+		float interval_begin_m, float interval_end_m, float sea_level, vec3 toward_sun,
+		vec3 absorption, float absorption_scale, bool exaggerated, out vec3 sample_point,
+		out vec3 light_entry, out vec3 transmittance, out float pattern, out vec2 beam_coord,
+		out float wave_focus, out float wave_width, out float wave_intensity) {
+	// This midpoint is derived from the ray's overlap with one fixed world slab;
+	// it is not a camera-relative fractional tap placement.
+	sample_point = camera_world + view_ray_world * (0.5 * (interval_begin_m + interval_end_m));
 	light_entry = vec3(0.0);
 	transmittance = vec3(0.0);
 	pattern = 0.0;
 	beam_coord = vec2(0.0);
-	if (sunray_segment_m <= EPSILON || !finite_vec3(sample_point)) return false;
+	wave_focus = 0.5;
+	wave_width = 1.0;
+	wave_intensity = 1.0;
+	if (interval_end_m - interval_begin_m <= EPSILON || !finite_vec3(sample_point)) return false;
 	float denom = toward_sun.y;
 	if (!finite_vec3(toward_sun) || abs(denom) <= EPSILON) return false;
 	float light_distance = (sea_level - sample_point.y) / denom;
@@ -150,7 +209,9 @@ bool evaluate_sunray_tap(vec3 camera_world, vec3 view_ray_world, float sunray_se
 	float effective_absorption_scale = max(absorption_scale, 0.0) * (exaggerated ? 0.20 : 1.0);
 	transmittance = exp(-max(absorption, vec3(0.0)) * effective_absorption_scale * sun_water_path);
 	if (!finite_vec3(transmittance)) return false;
-	pattern = sunrays_beam_field(sample_point, toward_sun, exaggerated, beam_coord);
+	sunrays_wave_modulation(light_entry, sample_point, wave_focus, wave_width, wave_intensity);
+	pattern = sunrays_beam_field(sample_point, toward_sun, wave_width, exaggerated, beam_coord)
+		* wave_intensity;
 	return !isnan(pattern) && !isinf(pattern);
 }
 
@@ -194,14 +255,18 @@ void main() {
 	float depth_response = 0.0;
 	float pattern_debug = 0.0;
 	vec2 beam_coord_debug = vec2(0.0);
+	float world_slice_id_debug = 0.0;
+	float wave_focus_debug = 0.5;
+	float wave_width_debug = 1.0;
+	float wave_modulation_debug = 1.0;
 	vec3 sample_point_debug = vec3(0.0);
 	vec3 light_entry_debug = vec3(0.0);
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 23;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 27;
 	bool exaggerated = debug_mode == 22;
-	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode == 23 || exaggerated;
+	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode >= 23 || exaggerated;
 	int tap_count = int(params.sunrays_extra.y + 0.5);
 	// Only the benchmark may select the legacy midpoint. Production is always
 	// four fixed taps; unknown values fail closed to the production path.
@@ -229,66 +294,55 @@ void main() {
 		float max_sunray_distance = max(params.sunrays_extra.x, EPSILON) * (exaggerated ? 1.35 : 1.0);
 		float sunray_segment_m = min(water_path_m, max_sunray_distance);
 		if (sunray_segment_m > EPSILON) {
-			vec3 tap_point_0; vec3 tap_point_1; vec3 tap_point_2; vec3 tap_point_3;
-			vec3 tap_entry_0; vec3 tap_entry_1; vec3 tap_entry_2; vec3 tap_entry_3;
-			vec3 tap_transmittance_0; vec3 tap_transmittance_1;
-			vec3 tap_transmittance_2; vec3 tap_transmittance_3;
-			float tap_pattern_0; float tap_pattern_1; float tap_pattern_2; float tap_pattern_3;
-			vec2 tap_beam_coord_0; vec2 tap_beam_coord_1; vec2 tap_beam_coord_2; vec2 tap_beam_coord_3;
-			bool tap_valid_0 = false; bool tap_valid_1 = false;
-			bool tap_valid_2 = false; bool tap_valid_3 = false;
+			float integrated_length_m = 0.0;
 			if (sun_direction_valid) {
-				tap_valid_0 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
-						params.medium.x, toward_sun, params.absorption.rgb, params.medium.w,
-						one_tap_benchmark ? 0.5 : TAP_0, force_pattern_debug, tap_point_0, tap_entry_0,
-					tap_transmittance_0, tap_pattern_0, tap_beam_coord_0);
-				if (!one_tap_benchmark) {
-						tap_valid_1 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
-							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_1,
-							force_pattern_debug, tap_point_1, tap_entry_1, tap_transmittance_1, tap_pattern_1, tap_beam_coord_1);
-						tap_valid_2 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
-							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_2,
-							force_pattern_debug, tap_point_2, tap_entry_2, tap_transmittance_2, tap_pattern_2, tap_beam_coord_2);
-						tap_valid_3 = evaluate_sunray_tap(params.camera.xyz, view_ray_world, sunray_segment_m,
-							params.medium.x, toward_sun, params.absorption.rgb, params.medium.w, TAP_3,
-							force_pattern_debug, tap_point_3, tap_entry_3, tap_transmittance_3, tap_pattern_3, tap_beam_coord_3);
+				vec3 light_into_water = -toward_sun;
+				float longitudinal_begin = dot(params.camera.xyz, light_into_water);
+				float longitudinal_end = dot(params.camera.xyz + view_ray_world * sunray_segment_m, light_into_water);
+				int first_slice_id = int(floor(min(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
+				int last_slice_id = int(floor(max(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
+				if (one_tap_benchmark) {
+					first_slice_id = int(floor(0.5 * float(first_slice_id + last_slice_id)));
+					last_slice_id = first_slice_id;
+				}
+				for (int slice_offset = 0; slice_offset < 4; slice_offset++) {
+					int slice_id = first_slice_id + slice_offset;
+					if (slice_id > last_slice_id) break;
+					float interval_begin_m; float interval_end_m;
+					if (!world_slice_interval(params.camera.xyz, view_ray_world, sunray_segment_m,
+							light_into_water, slice_id, interval_begin_m, interval_end_m)) continue;
+					vec3 slice_point; vec3 slice_entry; vec3 slice_transmittance;
+					float slice_pattern; vec2 slice_beam_coord;
+					float slice_wave_focus; float slice_wave_width; float slice_wave_intensity;
+					if (!evaluate_sunray_world_slice(params.camera.xyz, view_ray_world,
+							interval_begin_m, interval_end_m, params.medium.x, toward_sun,
+							params.absorption.rgb, params.medium.w, force_pattern_debug, slice_point,
+							slice_entry, slice_transmittance, slice_pattern, slice_beam_coord,
+							slice_wave_focus, slice_wave_width, slice_wave_intensity)) continue;
+					float slice_length_m = interval_end_m - interval_begin_m;
+					valid_tap_count += 1;
+					integrated_length_m += slice_length_m;
+					sample_point_debug += slice_point * slice_length_m;
+					light_entry_debug += slice_entry * slice_length_m;
+					pattern_debug += slice_pattern * slice_length_m;
+					beam_coord_debug += slice_beam_coord * slice_length_m;
+					world_slice_id_debug += float(slice_id) * slice_length_m;
+					wave_focus_debug += (slice_wave_focus - 0.5) * slice_length_m;
+					wave_width_debug += (slice_wave_width - 1.0) * slice_length_m;
+					wave_modulation_debug += (slice_wave_intensity - 1.0) * slice_length_m;
+					shaft_integral += slice_pattern * slice_transmittance
+						* max(params.sunrays.w, 0.0) * slice_length_m;
 				}
 			}
-			valid_tap_count = (tap_valid_0 ? 1 : 0) + (tap_valid_1 ? 1 : 0)
-				+ (tap_valid_2 ? 1 : 0) + (tap_valid_3 ? 1 : 0);
-			if (tap_valid_0) {
-				sample_point_debug += tap_point_0;
-				light_entry_debug += tap_entry_0;
-				pattern_debug += tap_pattern_0;
-				beam_coord_debug += tap_beam_coord_0;
-				shaft_integral += tap_pattern_0 * tap_transmittance_0 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
-			}
-			if (tap_valid_1) {
-				sample_point_debug += tap_point_1;
-				light_entry_debug += tap_entry_1;
-				pattern_debug += tap_pattern_1;
-				beam_coord_debug += tap_beam_coord_1;
-				shaft_integral += tap_pattern_1 * tap_transmittance_1 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
-			}
-			if (tap_valid_2) {
-				sample_point_debug += tap_point_2;
-				light_entry_debug += tap_entry_2;
-				pattern_debug += tap_pattern_2;
-				beam_coord_debug += tap_beam_coord_2;
-				shaft_integral += tap_pattern_2 * tap_transmittance_2 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
-			}
-			if (tap_valid_3) {
-				sample_point_debug += tap_point_3;
-				light_entry_debug += tap_entry_3;
-				pattern_debug += tap_pattern_3;
-				beam_coord_debug += tap_beam_coord_3;
-				shaft_integral += tap_pattern_3 * tap_transmittance_3 * max(params.sunrays.w, 0.0) * (sunray_segment_m * 0.25);
-			}
-			if (valid_tap_count > 0) {
-				sample_point_debug /= float(valid_tap_count);
-				light_entry_debug /= float(valid_tap_count);
-				pattern_debug /= float(valid_tap_count);
-				beam_coord_debug /= float(valid_tap_count);
+			if (integrated_length_m > EPSILON) {
+				sample_point_debug /= integrated_length_m;
+				light_entry_debug /= integrated_length_m;
+				pattern_debug /= integrated_length_m;
+				beam_coord_debug /= integrated_length_m;
+				world_slice_id_debug /= integrated_length_m;
+				wave_focus_debug = 0.5 + (wave_focus_debug - 0.5) / integrated_length_m;
+				wave_width_debug = 1.0 + (wave_width_debug - 1.0) / integrated_length_m;
+				wave_modulation_debug = 1.0 + (wave_modulation_debug - 1.0) / integrated_length_m;
 			}
 			float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * sunray_segment_m * (exaggerated ? 0.50 : 0.25));
 			float density_path = max(params.sunrays.w, 0.0) * sunray_segment_m;
@@ -340,6 +394,18 @@ void main() {
 		color.rgb = sunray_contribution;
 	} else if (debug_mode == 23) {
 		color.rgb = vec3(pattern_debug);
+	} else if (debug_mode == 24) {
+		// Encodes the fixed light-space slab ID. It changes only when the ray
+		// crosses a world slab boundary, never from a camera-relative tap fraction.
+		color.rgb = valid_tap_count > 0
+			? vec3(fract(world_slice_id_debug * 0.1618034), float(valid_tap_count) / 4.0, 1.0)
+			: vec3(0.0);
+	} else if (debug_mode == 25) {
+		color.rgb = vec3(wave_focus_debug);
+	} else if (debug_mode == 26) {
+		color.rgb = valid_tap_count > 0 ? vec3(0.5 + (wave_width_debug - 1.0) / 0.20) : vec3(0.0);
+	} else if (debug_mode == 27) {
+		color.rgb = valid_tap_count > 0 ? vec3(wave_modulation_debug) : vec3(0.0);
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);
