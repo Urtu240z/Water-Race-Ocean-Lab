@@ -7,6 +7,8 @@ uniform vec2 sediment_field_origin_xz = vec2(0.0);
 uniform vec2 sediment_field_extent_m = vec2(1.0);
 uniform vec4 particle_color : source_color = vec4(0.32, 0.27, 0.16, 0.06);
 uniform float strength = 1.0;
+uniform float alpha_multiplier = 1.0;
+uniform float size_multiplier = 1.0;
 uniform float field_threshold = 0.10;
 uniform float field_contrast = 0.75;
 uniform bool wisps = false;
@@ -25,8 +27,8 @@ float sample_density(vec3 world_position) {
 
 void vertex() {
 	vec3 particle_center_world = MODEL_MATRIX[3].xyz;
-	float particle_width = length(MODEL_MATRIX[0].xyz);
-	float particle_height = length(MODEL_MATRIX[1].xyz);
+	float particle_width = length(MODEL_MATRIX[0].xyz) * max(size_multiplier, 0.01);
+	float particle_height = length(MODEL_MATRIX[1].xyz) * max(size_multiplier, 0.01);
 	vec3 camera_right = normalize(INV_VIEW_MATRIX[0].xyz);
 	vec3 camera_up = normalize(INV_VIEW_MATRIX[1].xyz);
 	vec3 billboard_world = particle_center_world
@@ -67,7 +69,7 @@ void fragment() {
 		float density = smoothstep(field_threshold, 1.0, particle_field_density);
 		density = pow(max(density, 0.0), max(field_contrast, 0.1));
 		float distance_fade = 1.0 - smoothstep(28.0, 42.0, particle_distance_m);
-		float alpha_final = soft_shape * density * distance_fade * particle_color.a * strength;
+		float alpha_final = soft_shape * density * distance_fade * particle_color.a * strength * max(alpha_multiplier, 0.0);
 		if (debug_mode == 3) {
 			// Component views are white with their real value as opacity. This keeps
 			// zero-valued candidates transparent instead of drawing black quads.

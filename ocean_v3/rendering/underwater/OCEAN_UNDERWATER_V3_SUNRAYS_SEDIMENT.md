@@ -102,10 +102,26 @@ from NDC orientation and is currently read without a flip.
 The underwater UBO receives `params.light.xyz` directly as `L =
 light_into_water = -DirectionalLight3D.basis.z`. `L` means photon travel from
 sun to water everywhere: beam basis, world-slab coordinate and slice interval
-all use `L` directly. Only light-entry reconstruction declares the local
+all use `L` directly (the world-slab coordinate is retained only for the
+legacy A/B mode). Only light-entry reconstruction declares the local
 opposite `toward_surface = -L`. HG explicitly uses `L` as incoming light and
 the sample-to-camera vector as outgoing direction. No shader path receives an
 ambiguous `sun_direction` or negates a `params.sun` vector.
+
+## Sunrays V3.7 — transverse world-space quadrature
+
+Production sunrays now sample a maximum of four deterministic intersections
+with fixed world planes `dot(P, A) = k * 3.2 m`, where `A` is the dominant
+transverse axis (`U` or `V`) from one shared `build_light_basis(L)` helper.
+The basis is orthonormal to the physical photon travel vector `L`, so moving
+along `L` leaves `beam_coord(P)` invariant. Near the U/V dominance boundary,
+two samples per axis are blended smoothly; away from it, four samples use the
+dominant axis. Sample weights are local Voronoi intervals and wave/Beer-Lambert
+evaluation still occurs at the exact world-plane point. The legacy 14 m
+longitudinal slabs remain available only through
+`SUNRAYS_LEGACY_LONGITUDINAL_SLABS`; `SUNRAYS_TRANSVERSE_LATTICE` is the
+production A/B mode. New diagnostics expose axis choice, lattice identity,
+blend, and world-anchored sample points.
 
 
 ## Sediment V2 test path

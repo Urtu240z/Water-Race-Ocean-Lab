@@ -51,6 +51,12 @@ enum DebugMode {
 @export_range(0.0, 4.0, 0.01) var sediment_wisp_strength := 1.0
 @export_range(8.0, 80.0, 1.0, "suffix: m") var sediment_render_distance_m := 36.0
 @export_range(0.0, 2.0, 0.01) var sediment_above_water_optics_strength := 1.0
+@export_group("Production Visual Tuning")
+@export_range(0.0, 8.0, 0.05) var sediment_alpha_multiplier := 3.0
+# RGB is used for the particle tint; alpha is controlled by the multiplier above.
+@export var sediment_particle_color := Color(0.52, 0.38, 0.20, 1.0)
+@export_range(0.25, 4.0, 0.05) var sediment_particle_size_multiplier := 1.5
+@export_group("Sediment Debug")
 @export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV", "SEDIMENT ALPHA DENSITY", "SEDIMENT ALPHA SOFT SHAPE", "SEDIMENT ALPHA DISTANCE", "SEDIMENT ALPHA FINAL", "SEDIMENT PRODUCTION EXAGGERATED") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
 # Editor tooling only. Runtime validation must use Ctrl+Shift+J, never this button.
@@ -727,9 +733,11 @@ func _create_render_material(is_wisps: bool) -> ShaderMaterial:
 	material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 	material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 	material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
-	# Stage 4: retain the validated field response but lift only the restrained
-	# production opacity. Wisps stay half as strong as the near-seabed clouds.
-	material.set_shader_parameter(&"particle_color", Color(0.34, 0.29, 0.19, 0.16 if not is_wisps else 0.08))
+	# Stage 4: retain the validated field response. Visual tuning is exposed as
+	# render-only controls; wisps stay half as strong as the near-seabed clouds.
+	material.set_shader_parameter(&"particle_color", _production_particle_color(is_wisps))
+	material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
+	material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
 	material.set_shader_parameter(&"strength", sediment_wisp_strength if is_wisps else sediment_cloud_strength)
 	material.set_shader_parameter(&"field_threshold", 0.10 if is_wisps else 0.15)
 	material.set_shader_parameter(&"field_contrast", 0.80 if is_wisps else 0.68)
@@ -755,17 +763,28 @@ func _update_particles() -> void:
 		_cloud_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 		_cloud_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 		_cloud_material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
+		_cloud_material.set_shader_parameter(&"particle_color", _production_particle_color(false))
+		_cloud_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
+		_cloud_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
 		_cloud_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
 	if _wisp_material != null:
 		_wisp_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 		_wisp_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 		_wisp_material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
+		_wisp_material.set_shader_parameter(&"particle_color", _production_particle_color(true))
+		_wisp_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
+		_wisp_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
 		_wisp_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
 	if _cloud_particles != null:
 		_cloud_particles.visibility_aabb = _particle_visibility_aabb()
 	if _wisp_particles != null:
 		_wisp_particles.visibility_aabb = _particle_visibility_aabb()
 	_apply_particle_visibility()
+
+
+func _production_particle_color(is_wisps: bool) -> Color:
+	var base_alpha := 0.08 if is_wisps else 0.16
+	return Color(sediment_particle_color.r, sediment_particle_color.g, sediment_particle_color.b, base_alpha)
 
 
 func _apply_particle_visibility() -> void:
@@ -840,7 +859,8 @@ func _print_production_alpha_diagnostic() -> void:
 	var wisp_threshold: float = float(_wisp_material.get_shader_parameter(&"field_threshold"))
 	var cloud_contrast: float = float(_cloud_material.get_shader_parameter(&"field_contrast"))
 	var wisp_contrast: float = float(_wisp_material.get_shader_parameter(&"field_contrast"))
-	print("SEDIMENT PRODUCTION ALPHA cloud_color_a=%.3f cloud_strength=%.3f cloud_threshold=%.3f cloud_contrast=%.3f wisp_color_a=%.3f wisp_strength=%.3f wisp_threshold=%.3f wisp_contrast=%.3f" % [
+	print("SEDIMENT PRODUCTION ALPHA color=%s alpha_multiplier=%.3f size_multiplier=%.3f cloud_color_a=%.3f cloud_strength=%.3f cloud_threshold=%.3f cloud_contrast=%.3f wisp_color_a=%.3f wisp_strength=%.3f wisp_threshold=%.3f wisp_contrast=%.3f" % [
+		sediment_particle_color, sediment_alpha_multiplier, sediment_particle_size_multiplier,
 		cloud_color.a, cloud_strength, cloud_threshold, cloud_contrast,
 		wisp_color.a, wisp_strength, wisp_threshold, wisp_contrast,
 	])
@@ -848,8 +868,8 @@ func _print_production_alpha_diagnostic() -> void:
 	var cloud_max := PackedFloat32Array()
 	var wisp_max := PackedFloat32Array()
 	for field_value in field_samples:
-		cloud_max.append(_production_alpha_upper_bound(field_value, cloud_threshold, cloud_contrast, cloud_color.a, cloud_strength))
-		wisp_max.append(_production_alpha_upper_bound(field_value, wisp_threshold, wisp_contrast, wisp_color.a, wisp_strength))
+		cloud_max.append(_production_alpha_upper_bound(field_value, cloud_threshold, cloud_contrast, cloud_color.a, cloud_strength, sediment_alpha_multiplier))
+		wisp_max.append(_production_alpha_upper_bound(field_value, wisp_threshold, wisp_contrast, wisp_color.a, wisp_strength, sediment_alpha_multiplier))
 	print("SEDIMENT PRODUCTION ALPHA UPPER_BOUND soft_shape=1 distance_fade=1 field=[0.15,0.25,0.50,0.90] cloud=%s wisp=%s" % [cloud_max, wisp_max])
 	_print_particle_render_binding_diagnostic()
 
@@ -875,11 +895,11 @@ func _print_particle_render_binding_diagnostic() -> void:
 	])
 
 
-func _production_alpha_upper_bound(field_value: float, threshold: float, contrast: float, color_alpha: float, strength: float) -> float:
+func _production_alpha_upper_bound(field_value: float, threshold: float, contrast: float, color_alpha: float, strength: float, alpha_multiplier: float = 1.0) -> float:
 	var t := clampf((field_value - threshold) / maxf(1.0 - threshold, 0.001), 0.0, 1.0)
 	var shaped := t * t * (3.0 - 2.0 * t)
 	var density := pow(maxf(shaped, 0.0), maxf(contrast, 0.1))
-	return density * maxf(color_alpha, 0.0) * maxf(strength, 0.0)
+	return density * maxf(color_alpha, 0.0) * maxf(strength, 0.0) * maxf(alpha_multiplier, 0.0)
 
 
 func _particle_visibility_aabb() -> AABB:

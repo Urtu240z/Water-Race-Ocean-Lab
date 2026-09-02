@@ -21,9 +21,12 @@ layout(set = 0, binding = 2, std140) uniform Params {
 } params;
 
 const float EPSILON = 0.00001;
-// Fixed global slabs along light_into_water. At the 30 m production segment
-// (and 40.5 m exaggerated diagnostic segment) at most four slabs can overlap.
+// Legacy fixed global slabs along light_into_water, retained for explicit A/B
+// diagnostics. Production uses the transverse lattice below.
 const float SUNRAY_WORLD_SLICE_SPACING_M = 14.0;
+// World-anchored transverse lattice spacing. This resolves the broad (~8.7 m)
+// and medium (~2.9 m) beam frequencies without tying samples to camera UV.
+const float SUNRAY_TRANSVERSE_LATTICE_SPACING_M = 3.2;
 
 bool finite_vec3(vec3 value) {
 	return !any(isnan(value)) && !any(isinf(value));
@@ -96,20 +99,24 @@ float sunrays_phase_response(vec3 view_to_camera_dir, vec3 light_into_water) {
 	return clamp(phase / max(forward_phase, 0.001) * forward_gate, 0.0, 1.0);
 }
 
+bool build_light_basis(vec3 light_into_water, out vec3 u, out vec3 v) {
+	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
+	vec3 l = normalize(light_into_water);
+	vec3 reference = abs(l.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	u = cross(reference, l);
+	if (!finite_vec3(u) || length(u) <= EPSILON) return false;
+	u = normalize(u);
+	v = cross(l, u);
+	if (!finite_vec3(v) || length(v) <= EPSILON) return false;
+	v = normalize(v);
+	return finite_vec3(u) && finite_vec3(v);
+}
+
 bool sunrays_beam_coord(vec3 world_position, vec3 light_into_water, out vec2 beam_coord) {
 	// The physical light direction points into the water.  U/V span only the
 	// transverse plane, so P and P + L * d retain the same beam coordinate.
-	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
-	light_into_water = normalize(light_into_water);
-	vec3 reference = abs(light_into_water.y) < 0.98
-		? vec3(0.0, 1.0, 0.0)
-		: vec3(1.0, 0.0, 0.0);
-	vec3 u = cross(reference, light_into_water);
-	if (!finite_vec3(u) || length(u) <= EPSILON) return false;
-	u = normalize(u);
-	vec3 v = cross(light_into_water, u);
-	if (!finite_vec3(v) || length(v) <= EPSILON) return false;
-	v = normalize(v);
+	vec3 u; vec3 v;
+	if (!build_light_basis(light_into_water, u, v)) return false;
 	beam_coord = vec2(dot(world_position, u), dot(world_position, v));
 	return !any(isnan(beam_coord)) && !any(isinf(beam_coord));
 }
@@ -194,15 +201,39 @@ bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_s
 	return interval_end_m - interval_begin_m > EPSILON;
 }
 
+bool transverse_lattice_plane_t(vec3 camera_world, vec3 view_ray_world, float segment_m,
+		vec3 axis, float spacing_m, int lattice_id, out float t_m) {
+	t_m = 0.0;
+	float denominator = dot(view_ray_world, axis);
+	if (abs(denominator) <= EPSILON) return false;
+	float plane = float(lattice_id) * spacing_m;
+	t_m = (plane - dot(camera_world, axis)) / denominator;
+	return t_m >= 0.0 && t_m <= segment_m && !isnan(t_m) && !isinf(t_m);
+}
+
+float transverse_lattice_weight(vec3 camera_world, vec3 view_ray_world, float segment_m,
+		vec3 axis, float spacing_m, int lattice_id) {
+	float previous_t; float next_t;
+	bool previous_valid = transverse_lattice_plane_t(camera_world, view_ray_world, segment_m,
+		axis, spacing_m, lattice_id - 1, previous_t);
+	bool next_valid = transverse_lattice_plane_t(camera_world, view_ray_world, segment_m,
+		axis, spacing_m, lattice_id + 1, next_t);
+	if (!previous_valid) previous_t = 0.0;
+	if (!next_valid) next_t = segment_m;
+	float half_voronoi = 0.5 * abs(next_t - previous_t);
+	return clamp(half_voronoi, SUNRAY_TRANSVERSE_LATTICE_SPACING_M * 0.02,
+		max(segment_m, SUNRAY_TRANSVERSE_LATTICE_SPACING_M * 0.02));
+}
+
 bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
-		float interval_begin_m, float interval_end_m, float sea_level, vec3 light_into_water,
+		float interval_begin_m, float interval_end_m, float sample_t_m, float sea_level, vec3 light_into_water,
 		vec3 absorption, float absorption_scale, bool exaggerated, out vec3 sample_point,
 		out vec3 light_entry, out vec3 transmittance, out float pattern, out vec2 beam_coord,
 		out float wave_focus, out float wave_width, out float wave_intensity,
 		out float direction_alignment) {
-	// This midpoint is derived from the ray's overlap with one fixed world slab;
-	// it is not a camera-relative fractional tap placement.
-	sample_point = camera_world + view_ray_world * (0.5 * (interval_begin_m + interval_end_m));
+	// Legacy slabs pass their midpoint; transverse lattice samples pass the exact
+	// world-plane intersection while the interval supplies its integration weight.
+	sample_point = camera_world + view_ray_world * sample_t_m;
 	light_entry = vec3(0.0);
 	transmittance = vec3(0.0);
 	pattern = 0.0;
@@ -211,7 +242,7 @@ bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
 	wave_width = 1.0;
 	wave_intensity = 1.0;
 	direction_alignment = -1.0;
-	if (interval_end_m - interval_begin_m <= EPSILON || !finite_vec3(sample_point)) return false;
+	if (interval_end_m - interval_begin_m <= EPSILON || sample_t_m < 0.0 || !finite_vec3(sample_point)) return false;
 	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
 	light_into_water = normalize(light_into_water);
 	vec3 toward_surface = -light_into_water;
@@ -278,6 +309,10 @@ void main() {
 	float pattern_debug = 0.0;
 	vec2 beam_coord_debug = vec2(0.0);
 	float world_slice_id_debug = 0.0;
+	float lattice_id_debug = 0.0;
+	float transverse_axis_u_debug = 0.0;
+	float transverse_axis_v_debug = 0.0;
+	vec3 transverse_sample_point_debug = vec3(0.0);
 	float wave_focus_debug = 0.5;
 	float wave_width_debug = 1.0;
 	float wave_modulation_debug = 1.0;
@@ -289,7 +324,7 @@ void main() {
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 32;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 38;
 	bool exaggerated = debug_mode == 22;
 	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode >= 23 || exaggerated;
 	int tap_count = int(params.sunrays_extra.y + 0.5);
@@ -321,38 +356,116 @@ void main() {
 		if (sunray_segment_m > EPSILON) {
 			float integrated_length_m = 0.0;
 			if (light_direction_valid) {
-				float longitudinal_begin = dot(params.camera.xyz, light_into_water);
-				float longitudinal_end = dot(params.camera.xyz + view_ray_world * sunray_segment_m, light_into_water);
-				int first_slice_id = int(floor(min(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
-				int last_slice_id = int(floor(max(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
-				if (one_tap_benchmark) {
-					first_slice_id = int(floor(0.5 * float(first_slice_id + last_slice_id)));
-					last_slice_id = first_slice_id;
+				// Arrays hold at most four world-anchored samples. Production uses
+				// transverse planes; debug mode 37 exposes the legacy longitudinal A/B.
+				float sample_t[4]; float sample_weight[4]; int sample_axis[4]; int sample_lattice_id[4];
+				int sample_count = 0;
+				float du = 0.0; float dv = 0.0;
+				for (int clear_index = 0; clear_index < 4; clear_index++) {
+					sample_t[clear_index] = 0.0; sample_weight[clear_index] = 0.0;
+					sample_axis[clear_index] = -1; sample_lattice_id[clear_index] = 0;
 				}
-				for (int slice_offset = 0; slice_offset < 4; slice_offset++) {
-					int slice_id = first_slice_id + slice_offset;
-					if (slice_id > last_slice_id) break;
-					float interval_begin_m; float interval_end_m;
-					if (!world_slice_interval(params.camera.xyz, view_ray_world, sunray_segment_m,
-							light_into_water, slice_id, interval_begin_m, interval_end_m)) continue;
+				bool legacy_longitudinal = debug_mode == 24 || debug_mode == 37;
+				if (legacy_longitudinal) {
+					float longitudinal_begin = dot(params.camera.xyz, light_into_water);
+					float longitudinal_end = dot(params.camera.xyz + view_ray_world * sunray_segment_m, light_into_water);
+					int first_slice_id = int(floor(min(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
+					int last_slice_id = int(floor(max(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
+					if (one_tap_benchmark) {
+						first_slice_id = int(floor(0.5 * float(first_slice_id + last_slice_id)));
+						last_slice_id = first_slice_id;
+					}
+					for (int slice_offset = 0; slice_offset < 4; slice_offset++) {
+						int slice_id = first_slice_id + slice_offset;
+						if (slice_id > last_slice_id || sample_count >= 4) break;
+						float interval_begin_m; float interval_end_m;
+						if (!world_slice_interval(params.camera.xyz, view_ray_world, sunray_segment_m,
+								light_into_water, slice_id, interval_begin_m, interval_end_m)) continue;
+						sample_t[sample_count] = 0.5 * (interval_begin_m + interval_end_m);
+						sample_weight[sample_count] = interval_end_m - interval_begin_m;
+						sample_lattice_id[sample_count] = slice_id;
+						sample_count += 1;
+					}
+				} else {
+					vec3 u; vec3 v;
+					if (build_light_basis(light_into_water, u, v)) {
+						du = abs(dot(view_ray_world, u));
+						dv = abs(dot(view_ray_world, v));
+						float dominance = du / max(du + dv, EPSILON);
+						float u_blend = smoothstep(0.38, 0.62, dominance);
+						bool transition = dominance > 0.38 && dominance < 0.62;
+						int u_budget = transition ? 2 : (u_blend > 0.5 ? 4 : 0);
+						int v_budget = transition ? 2 : (u_blend > 0.5 ? 0 : 4);
+						float u_mix = transition ? (1.0 - u_blend) : (u_budget > 0 ? 1.0 : 0.0);
+						float v_mix = transition ? u_blend : (v_budget > 0 ? 1.0 : 0.0);
+						transverse_axis_u_debug = u_mix;
+						transverse_axis_v_debug = v_mix;
+						for (int axis_pass = 0; axis_pass < 2; axis_pass++) {
+							vec3 axis = axis_pass == 0 ? u : v;
+							float axis_mix = axis_pass == 0 ? u_mix : v_mix;
+							int budget = axis_pass == 0 ? u_budget : v_budget;
+							if (budget <= 0 || axis_mix <= EPSILON) continue;
+							float coord_a = dot(params.camera.xyz, axis);
+							float coord_b = dot(params.camera.xyz + view_ray_world * sunray_segment_m, axis);
+							int first_id = int(ceil(min(coord_a, coord_b) / SUNRAY_TRANSVERSE_LATTICE_SPACING_M - 0.000001));
+							int last_id = int(floor(max(coord_a, coord_b) / SUNRAY_TRANSVERSE_LATTICE_SPACING_M + 0.000001));
+							int available = max(last_id - first_id + 1, 0);
+							if (available <= 0) continue;
+							int start_id = first_id;
+							if (budget < available) start_id = int(floor(0.5 * float(first_id + last_id)))
+								- int(floor(0.5 * float(budget - 1)));
+							for (int axis_offset = 0; axis_offset < 4; axis_offset++) {
+								if (axis_offset >= budget || sample_count >= 4) break;
+								int lattice_id = start_id + axis_offset;
+								if (lattice_id > last_id) break;
+								float lattice_t;
+								if (!transverse_lattice_plane_t(params.camera.xyz, view_ray_world, sunray_segment_m,
+										axis, SUNRAY_TRANSVERSE_LATTICE_SPACING_M, lattice_id, lattice_t)) continue;
+								float lattice_weight = transverse_lattice_weight(params.camera.xyz, view_ray_world,
+									sunray_segment_m, axis, SUNRAY_TRANSVERSE_LATTICE_SPACING_M, lattice_id) * axis_mix;
+								sample_t[sample_count] = lattice_t;
+								sample_weight[sample_count] = lattice_weight;
+								sample_axis[sample_count] = axis_pass;
+								sample_lattice_id[sample_count] = lattice_id;
+								sample_count += 1;
+							}
+						}
+					}
+					if (sample_count == 0) {
+						// A short segment or a ray parallel to L can cross no plane;
+						// retain one deterministic midpoint so the beam does not vanish.
+						sample_t[0] = 0.5 * sunray_segment_m;
+						sample_weight[0] = sunray_segment_m;
+						sample_count = 1;
+					}
+				}
+				for (int sample_index = 0; sample_index < 4; sample_index++) {
+					if (sample_index >= sample_count || sample_weight[sample_index] <= EPSILON) continue;
+					float interval_begin_m = max(0.0, sample_t[sample_index] - 0.5 * sample_weight[sample_index]);
+					float interval_end_m = min(sunray_segment_m, sample_t[sample_index] + 0.5 * sample_weight[sample_index]);
 					vec3 slice_point; vec3 slice_entry; vec3 slice_transmittance;
 					float slice_pattern; vec2 slice_beam_coord;
 					float slice_wave_focus; float slice_wave_width; float slice_wave_intensity;
 					float slice_direction_alignment;
 					if (!evaluate_sunray_world_slice(params.camera.xyz, view_ray_world,
-							interval_begin_m, interval_end_m, params.medium.x, light_into_water,
+							interval_begin_m, interval_end_m, sample_t[sample_index], params.medium.x, light_into_water,
 							params.absorption.rgb, params.medium.w, force_pattern_debug, slice_point,
 							slice_entry, slice_transmittance, slice_pattern, slice_beam_coord,
 							slice_wave_focus, slice_wave_width, slice_wave_intensity,
 							slice_direction_alignment)) continue;
-					float slice_length_m = interval_end_m - interval_begin_m;
+					float slice_length_m = sample_weight[sample_index];
 					valid_tap_count += 1;
 					integrated_length_m += slice_length_m;
 					sample_point_debug += slice_point * slice_length_m;
 					light_entry_debug += slice_entry * slice_length_m;
 					pattern_debug += slice_pattern * slice_length_m;
 					beam_coord_debug += slice_beam_coord * slice_length_m;
-					world_slice_id_debug += float(slice_id) * slice_length_m;
+					if (sample_axis[sample_index] < 0) {
+						world_slice_id_debug += float(sample_lattice_id[sample_index]) * slice_length_m;
+					} else {
+						lattice_id_debug += float(sample_lattice_id[sample_index]) * slice_length_m;
+						transverse_sample_point_debug += slice_point * slice_length_m;
+					}
 					wave_focus_debug += (slice_wave_focus - 0.5) * slice_length_m;
 					wave_width_debug += (slice_wave_width - 1.0) * slice_length_m;
 					wave_modulation_debug += (slice_wave_intensity - 1.0) * slice_length_m;
@@ -367,6 +480,8 @@ void main() {
 				pattern_debug /= integrated_length_m;
 				beam_coord_debug /= integrated_length_m;
 				world_slice_id_debug /= integrated_length_m;
+				lattice_id_debug /= integrated_length_m;
+				transverse_sample_point_debug /= integrated_length_m;
 				wave_focus_debug = 0.5 + (wave_focus_debug - 0.5) / integrated_length_m;
 				wave_width_debug = 1.0 + (wave_width_debug - 1.0) / integrated_length_m;
 				wave_modulation_debug = 1.0 + (wave_modulation_debug - 1.0) / integrated_length_m;
@@ -465,6 +580,32 @@ void main() {
 			: vec3(0.0);
 	} else if (debug_mode == 32) {
 		color.rgb = view_ray_debug_valid ? view_ray_debug * 0.5 + 0.5 : vec3(0.0);
+	} else if (debug_mode == 33) {
+		// Red=U-axis contribution, green=V-axis contribution; yellow is the
+		// smooth dominance transition where both transverse quadratures are used.
+		float axis_total = transverse_axis_u_debug + transverse_axis_v_debug;
+		color.rgb = valid_tap_count > 0 && axis_total > EPSILON
+			? vec3(transverse_axis_u_debug / axis_total, transverse_axis_v_debug / axis_total, 0.0)
+			: vec3(0.0);
+	} else if (debug_mode == 34) {
+		color.rgb = valid_tap_count > 0
+			? vec3(fract(lattice_id_debug * 0.1618034), float(valid_tap_count) / 4.0, 1.0)
+			: vec3(0.0);
+	} else if (debug_mode == 35) {
+		float axis_total = transverse_axis_u_debug + transverse_axis_v_debug;
+		color.rgb = valid_tap_count > 0 && axis_total > EPSILON
+			? vec3(transverse_axis_u_debug / axis_total, transverse_axis_v_debug / axis_total, 0.0)
+			: vec3(0.0);
+	} else if (debug_mode == 36) {
+		// World-anchored sample-point encoding; it remains fixed when the camera
+		// moves over the same lattice planes.
+		color.rgb = valid_tap_count > 0
+			? fract(abs(transverse_sample_point_debug) * vec3(0.031, 0.037, 0.043))
+			: vec3(0.0);
+	} else if (debug_mode == 37) {
+		color.rgb = sunray_contribution;
+	} else if (debug_mode == 38) {
+		color.rgb = sunray_contribution;
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);
