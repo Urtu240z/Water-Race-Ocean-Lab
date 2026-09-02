@@ -188,9 +188,9 @@ uniform float underwater_snell_detail_strength : hint_range(0.0, 2.0, 0.01) = 0.
 uniform float underwater_snell_detail_world_scale : hint_range(0.25, 4.0, 0.05) = 1.0;
 uniform float underwater_snell_detail_max_px : hint_range(0.0, 8.0, 0.05) = 2.5;
 uniform float underwater_snell_edge_softness : hint_range(0.0, 3.0, 0.05) = 1.0;
-uniform float underwater_snell_cone_angle_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
-uniform float underwater_snell_release_start_m : hint_range(0.0, 5.0, 0.05) = 1.5;
-uniform float underwater_snell_release_full_m : hint_range(0.0, 2.0, 0.05) = 0.20;
+uniform float underwater_snell_cone_angle_surface_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
+uniform float underwater_snell_cone_angle_deep_deg : hint_range(0.0, 90.0, 0.25) = 48.75;
+uniform float underwater_snell_cone_deep_start_m : hint_range(0.1, 100.0, 0.1) = 10.0;
 uniform float underwater_surface_sea_level_y = 0.0;
 uniform int underwater_debug_mode = 0;
 uniform vec4 shallow_water_color : source_color = vec4(0.035, 0.43, 0.55, 1.0);
@@ -2402,7 +2402,7 @@ void fragment() {
 	float underwater_snell_tir = 0.0;
 	float underwater_snell_artistic_tir = 0.0;
 	float underwater_tir_visual_weight = 0.0;
-	float underwater_snell_release = 0.0;
+	float underwater_snell_depth_blend = 0.0;
 	vec3 underwater_snell_normal_world = vec3(0.0, 1.0, 0.0);
 	bool underwater_snell_active = underwater_camera_active && underwater_snell_enabled;
 	if (underwater_snell_active) {
@@ -2422,32 +2422,27 @@ void fragment() {
 		underwater_snell_k = 1.0 - eta_water_air * eta_water_air
 			* (1.0 - underwater_snell_cos_i * underwater_snell_cos_i);
 		underwater_snell_tir = underwater_snell_k < 0.0 ? 1.0 : 0.0;
-		// The physical IOR still determines the refracted direction and raw k.
-		// This optional artistic cone can only close the window: it is clamped to
-		// the physical critical angle and never admits angles outside it.
-		float physical_critical_angle = asin(clamp(1.0003 / max(underwater_water_ior, 1.0003), 0.0, 1.0));
-		float effective_critical_angle = min(
-			radians(clamp(underwater_snell_cone_angle_deg, 0.0, 90.0)),
-			physical_critical_angle
-		);
 		float camera_depth_m = max(
 			underwater_surface_sea_level_y - CAMERA_POSITION_WORLD.y,
 			0.0
 		);
-		float release_full_m = max(underwater_snell_release_full_m, 0.0);
-		float release_start_m = max(
-			underwater_snell_release_start_m,
-			release_full_m + WATER_OPTICS_EPSILON
-		);
-		underwater_snell_release = 1.0 - smoothstep(
-			release_full_m,
-			release_start_m,
+		underwater_snell_depth_blend = smoothstep(
+			0.0,
+			max(underwater_snell_cone_deep_start_m, WATER_OPTICS_EPSILON),
 			camera_depth_m
 		);
-		effective_critical_angle = mix(
-			effective_critical_angle,
-			physical_critical_angle,
-			underwater_snell_release
+		float authored_cone_angle_deg = mix(
+			underwater_snell_cone_angle_surface_deg,
+			underwater_snell_cone_angle_deep_deg,
+			underwater_snell_depth_blend
+		);
+		// The physical IOR still determines the refracted direction and raw k.
+		// The authored cone can only close the window, never open it beyond the
+		// physical critical angle.
+		float physical_critical_angle = asin(clamp(1.0003 / max(underwater_water_ior, 1.0003), 0.0, 1.0));
+		float effective_critical_angle = min(
+			radians(clamp(authored_cone_angle_deg, 0.0, 90.0)),
+			physical_critical_angle
 		);
 		float snell_cos_threshold = cos(effective_critical_angle);
 		underwater_snell_artistic_tir = underwater_snell_cos_i < snell_cos_threshold ? 1.0 : 0.0;
@@ -2464,9 +2459,6 @@ void fragment() {
 				snell_cos_threshold - underwater_snell_cos_i
 			);
 		}
-		// Release is an artistic production relaxation only. Raw k/TIR above are
-		// intentionally untouched; the compositor still owns camera-medium depth.
-		underwater_tir_visual_weight *= 1.0 - underwater_snell_release;
 	}
 	if (underwater_camera_active && underwater_debug_mode == 5) {
 		color = vec3(underwater_snell_cos_i);
@@ -2476,7 +2468,7 @@ void fragment() {
 	} else if (underwater_camera_active && underwater_debug_mode == 7) {
 		color = vec3(underwater_snell_tir);
 	} else if (underwater_camera_active && underwater_debug_mode == 11) {
-		color = vec3(underwater_snell_release);
+		color = vec3(underwater_snell_depth_blend);
 	} else if (underwater_camera_active && underwater_debug_mode == 12) {
 		color = vec3(underwater_tir_visual_weight);
 	}

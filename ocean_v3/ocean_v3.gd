@@ -17,6 +17,8 @@ const WATER_LENS_SCRIPT := preload("res://ocean_v3/rendering/underwater/water_le
 const SEDIMENT_SYSTEM_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_sediment_system.gd")
 const UNDERWATER_ENTER_MARGIN_M := 0.05
 const UNDERWATER_EXIT_MARGIN_M := 0.05
+const UNDERWATER_SNELL_CONE_DEFAULT_DEG := 48.75
+const UNDERWATER_SNELL_CONE_DEFAULT_DEEP_START_M := 10.0
 const PERF_PRESET_FULL := &"FULL"
 const PERF_PRESET_BASE := &"BASE"
 const PERF_PRESET_NO_SSPR := &"NO_SSPR"
@@ -478,7 +480,7 @@ var _performance_overlay_label: Label
 		underwater_sunrays_direction_proof_camera_offset_m = clampf(value, 1.0, 20.0)
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR", "SUNRAYS_RECONSTRUCTED_WORLD", "SUNRAYS_VIEW_RAY", "SUNRAYS_SHAFT_FIELD", "SUNRAYS_REACH_FACTOR", "SUNRAYS_REACH_ENVELOPE", "SUNRAYS_SHAFT_WITH_REACH", "SUNRAYS_STABLE_SIDE_AXIS", "SUNRAYS_STABLE_IN_PLANE_AXIS", "SUNRAYS_BROAD_RIBBON_ENVELOPE", "SUNRAYS_FINAL_SHAFT_FIELD_BEFORE_REACH", "SUNRAYS_SAMPLE_COUNT", "SUNRAYS_SEGMENT_SOURCE", "SUNRAYS_SEGMENT_DEPTH_DRIVEN", "SUNRAYS_SEGMENT_ANALYTIC_SURFACE", "UNDERWATER MEDIUM TRANSMITTANCE BYPASS", "SUNRAYS_SEGMENT_LENGTH") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_DEPTH_BLEND", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR", "SUNRAYS_RECONSTRUCTED_WORLD", "SUNRAYS_VIEW_RAY", "SUNRAYS_SHAFT_FIELD", "SUNRAYS_REACH_FACTOR", "SUNRAYS_REACH_ENVELOPE", "SUNRAYS_SHAFT_WITH_REACH", "SUNRAYS_STABLE_SIDE_AXIS", "SUNRAYS_STABLE_IN_PLANE_AXIS", "SUNRAYS_BROAD_RIBBON_ENVELOPE", "SUNRAYS_FINAL_SHAFT_FIELD_BEFORE_REACH", "SUNRAYS_SAMPLE_COUNT", "SUNRAYS_SEGMENT_SOURCE", "SUNRAYS_SEGMENT_DEPTH_DRIVEN", "SUNRAYS_SEGMENT_ANALYTIC_SURFACE", "UNDERWATER MEDIUM TRANSMITTANCE BYPASS", "SUNRAYS_SEGMENT_LENGTH") var underwater_debug_mode := 0:
 	set(value):
 		underwater_debug_mode = clampi(value, 0, 46)
 		if underwater_debug_mode != 19:
@@ -536,18 +538,28 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_snell_edge_softness = clampf(value, 0.0, 3.0)
 		_request_visual_sync()
-@export_range(0.0, 90.0, 0.25, "suffix:°") var underwater_snell_cone_angle_deg := 48.75:
+
+@export_range(0.0, 90.0, 0.25, "suffix:°") var underwater_snell_cone_angle_surface_deg := UNDERWATER_SNELL_CONE_DEFAULT_DEG:
 	set(value):
-		underwater_snell_cone_angle_deg = clampf(value, 0.0, 90.0)
+		underwater_snell_cone_angle_surface_deg = clampf(value, 0.0, 90.0)
 		_request_visual_sync()
-@export_range(0.0, 5.0, 0.05, "suffix:m") var underwater_snell_release_start_m := 1.5:
+
+@export_range(0.0, 90.0, 0.25, "suffix:°") var underwater_snell_cone_angle_deep_deg := UNDERWATER_SNELL_CONE_DEFAULT_DEG:
 	set(value):
-		underwater_snell_release_start_m = clampf(value, 0.0, 5.0)
+		underwater_snell_cone_angle_deep_deg = clampf(value, 0.0, 90.0)
 		_request_visual_sync()
-@export_range(0.0, 2.0, 0.05, "suffix:m") var underwater_snell_release_full_m := 0.20:
+
+@export_range(0.1, 100.0, 0.1, "suffix:m") var underwater_snell_cone_deep_start_m := UNDERWATER_SNELL_CONE_DEFAULT_DEEP_START_M:
 	set(value):
-		underwater_snell_release_full_m = clampf(value, 0.0, 2.0)
+		underwater_snell_cone_deep_start_m = clampf(value, 0.1, 100.0)
 		_request_visual_sync()
+
+# Serialized compatibility fields for scenes authored before the depth-based
+# cone controls. The legacy cone is migrated once when the replacement fields
+# are still at their defaults; the old release values have no production effect.
+@export_storage var underwater_snell_cone_angle_deg: float = UNDERWATER_SNELL_CONE_DEFAULT_DEG
+@export_storage var underwater_snell_release_start_m: float = 1.5
+@export_storage var underwater_snell_release_full_m: float = 0.20
 
 @export_group("Water Optics / View Depth")
 @export_range(1.0, 100.0, 0.5) var maximum_optical_depth_above_m: float = 38.0:
@@ -1505,9 +1517,9 @@ var _underwater_surface_snell_detail_strength := 0.5
 var _underwater_surface_snell_detail_world_scale := 1.0
 var _underwater_surface_snell_detail_max_px := 2.5
 var _underwater_surface_snell_edge_softness := 1.0
-var _underwater_surface_snell_cone_angle_deg := 48.75
-var _underwater_surface_snell_release_start_m := 1.5
-var _underwater_surface_snell_release_full_m := 0.20
+var _underwater_surface_snell_cone_angle_surface_deg := UNDERWATER_SNELL_CONE_DEFAULT_DEG
+var _underwater_surface_snell_cone_angle_deep_deg := UNDERWATER_SNELL_CONE_DEFAULT_DEG
+var _underwater_surface_snell_cone_deep_start_m := UNDERWATER_SNELL_CONE_DEFAULT_DEEP_START_M
 var _underwater_surface_sea_level_y := 0.0
 var _underwater_surface_debug_mode := -1
 var _startup_started_usec := 0
@@ -1523,6 +1535,7 @@ func _ready() -> void:
 		if node is OceanSeaStateZone3D:
 			register_sea_state_zone(node)
 	_refresh_sea_state_zones()
+	_migrate_legacy_snell_cone_angle()
 	_visual_sync_pending = true
 	if wave_preset != null:
 		apply_selected_wave_preset()
@@ -1601,6 +1614,21 @@ func _update_underwater_camera_state() -> void:
 	)
 
 
+func _migrate_legacy_snell_cone_angle() -> void:
+	# A non-default legacy value identifies scenes authored before the depth
+	# controls existed. Only migrate while all replacement controls are still at
+	# their defaults, so explicitly authored replacement values remain sovereign.
+	if is_equal_approx(underwater_snell_cone_angle_deg, UNDERWATER_SNELL_CONE_DEFAULT_DEG):
+		return
+	if not is_equal_approx(underwater_snell_cone_angle_surface_deg, UNDERWATER_SNELL_CONE_DEFAULT_DEG) \
+		or not is_equal_approx(underwater_snell_cone_angle_deep_deg, UNDERWATER_SNELL_CONE_DEFAULT_DEG) \
+		or not is_equal_approx(underwater_snell_cone_deep_start_m, UNDERWATER_SNELL_CONE_DEFAULT_DEEP_START_M):
+		return
+	var legacy_cone_angle_deg := clampf(underwater_snell_cone_angle_deg, 0.0, 90.0)
+	underwater_snell_cone_angle_surface_deg = legacy_cone_angle_deg
+	underwater_snell_cone_angle_deep_deg = legacy_cone_angle_deg
+
+
 func _sync_underwater_manager() -> void:
 	if _water_lens_fx != null and is_instance_valid(_water_lens_fx):
 		# The existing binary state is the sole authority. Lens FX only consumes
@@ -1668,9 +1696,9 @@ func _sync_underwater_manager() -> void:
 			or not is_equal_approx(_underwater_surface_snell_detail_world_scale, underwater_snell_detail_world_scale) \
 			or not is_equal_approx(_underwater_surface_snell_detail_max_px, underwater_snell_detail_max_px) \
 			or not is_equal_approx(_underwater_surface_snell_edge_softness, underwater_snell_edge_softness) \
-			or not is_equal_approx(_underwater_surface_snell_cone_angle_deg, underwater_snell_cone_angle_deg) \
-			or not is_equal_approx(_underwater_surface_snell_release_start_m, underwater_snell_release_start_m) \
-			or not is_equal_approx(_underwater_surface_snell_release_full_m, underwater_snell_release_full_m) \
+			or not is_equal_approx(_underwater_surface_snell_cone_angle_surface_deg, underwater_snell_cone_angle_surface_deg) \
+			or not is_equal_approx(_underwater_surface_snell_cone_angle_deep_deg, underwater_snell_cone_angle_deep_deg) \
+			or not is_equal_approx(_underwater_surface_snell_cone_deep_start_m, underwater_snell_cone_deep_start_m) \
 			or not is_equal_approx(_underwater_surface_sea_level_y, _surface_sea_level()) \
 			or _underwater_surface_debug_mode != underwater_debug_mode
 		if not surface_state_changed:
@@ -1687,9 +1715,9 @@ func _sync_underwater_manager() -> void:
 		surface_material.set_shader_parameter(&"underwater_snell_detail_world_scale", underwater_snell_detail_world_scale)
 		surface_material.set_shader_parameter(&"underwater_snell_detail_max_px", underwater_snell_detail_max_px)
 		surface_material.set_shader_parameter(&"underwater_snell_edge_softness", underwater_snell_edge_softness)
-		surface_material.set_shader_parameter(&"underwater_snell_cone_angle_deg", underwater_snell_cone_angle_deg)
-		surface_material.set_shader_parameter(&"underwater_snell_release_start_m", underwater_snell_release_start_m)
-		surface_material.set_shader_parameter(&"underwater_snell_release_full_m", underwater_snell_release_full_m)
+		surface_material.set_shader_parameter(&"underwater_snell_cone_angle_surface_deg", underwater_snell_cone_angle_surface_deg)
+		surface_material.set_shader_parameter(&"underwater_snell_cone_angle_deep_deg", underwater_snell_cone_angle_deep_deg)
+		surface_material.set_shader_parameter(&"underwater_snell_cone_deep_start_m", underwater_snell_cone_deep_start_m)
 		surface_material.set_shader_parameter(&"underwater_surface_sea_level_y", _surface_sea_level())
 		surface_material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
 		_underwater_surface_state_initialized = true
@@ -1703,9 +1731,9 @@ func _sync_underwater_manager() -> void:
 		_underwater_surface_snell_detail_world_scale = underwater_snell_detail_world_scale
 		_underwater_surface_snell_detail_max_px = underwater_snell_detail_max_px
 		_underwater_surface_snell_edge_softness = underwater_snell_edge_softness
-		_underwater_surface_snell_cone_angle_deg = underwater_snell_cone_angle_deg
-		_underwater_surface_snell_release_start_m = underwater_snell_release_start_m
-		_underwater_surface_snell_release_full_m = underwater_snell_release_full_m
+		_underwater_surface_snell_cone_angle_surface_deg = underwater_snell_cone_angle_surface_deg
+		_underwater_surface_snell_cone_angle_deep_deg = underwater_snell_cone_angle_deep_deg
+		_underwater_surface_snell_cone_deep_start_m = underwater_snell_cone_deep_start_m
 		_underwater_surface_sea_level_y = _surface_sea_level()
 		_underwater_surface_debug_mode = underwater_debug_mode
 
