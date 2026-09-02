@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://f5liqtgiotxv"
 path.bptc="res://.godot/imported/aristea_wreck_puresky_4k.hdr-9506a75883f499a3044cddbf49be6c1a.bptc.ctex"
+path.astc="res://.godot/imported/aristea_wreck_puresky_4k.hdr-9506a75883f499a3044cddbf49be6c1a.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://aristea_wreck_puresky_4k.hdr"
-dest_files=["res://.godot/imported/aristea_wreck_puresky_4k.hdr-9506a75883f499a3044cddbf49be6c1a.bptc.ctex"]
+dest_files=["res://.godot/imported/aristea_wreck_puresky_4k.hdr-9506a75883f499a3044cddbf49be6c1a.bptc.ctex", "res://.godot/imported/aristea_wreck_puresky_4k.hdr-9506a75883f499a3044cddbf49be6c1a.astc.ctex"]
 
 [params]
 

@@ -1923,6 +1923,14 @@ func toggle_performance_overlay() -> void:
 	perf_overlay_enabled = not perf_overlay_enabled
 
 
+func set_performance_overlay_enabled(enabled: bool) -> void:
+	perf_overlay_enabled = enabled
+
+
+func performance_overlay_enabled() -> bool:
+	return perf_overlay_enabled
+
+
 func _full_performance_profile() -> Dictionary:
 	return {
 		"spectral": true, "coastal": true, "crest_foam_solver": true,
@@ -2414,7 +2422,8 @@ func _compare_sea_state_zones(a: OceanSeaStateZone3D, b: OceanSeaStateZone3D) ->
 
 
 func _process(_delta: float) -> void:
-	_update_performance_overlay()
+	if perf_overlay_enabled:
+		_update_performance_overlay()
 	# This also covers the editor case where the child material is created after
 	# the root setter ran while the scene was loading.
 	if _visual_sync_pending:

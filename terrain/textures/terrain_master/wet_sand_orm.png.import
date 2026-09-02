@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://cexe4l4551x8v"
 path.bptc="res://.godot/imported/wet_sand_orm.png-c7fbf184b22c82c3352e217f2276f94e.bptc.ctex"
+path.astc="res://.godot/imported/wet_sand_orm.png-c7fbf184b22c82c3352e217f2276f94e.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://terrain/textures/terrain_master/wet_sand_orm.png"
-dest_files=["res://.godot/imported/wet_sand_orm.png-c7fbf184b22c82c3352e217f2276f94e.bptc.ctex"]
+dest_files=["res://.godot/imported/wet_sand_orm.png-c7fbf184b22c82c3352e217f2276f94e.bptc.ctex", "res://.godot/imported/wet_sand_orm.png-c7fbf184b22c82c3352e217f2276f94e.astc.ctex"]
 
 [params]
 

@@ -23,9 +23,11 @@ const MAX_SHIFT_SPEED := 250.0
 @onready var performance_label: Label = %Performance
 @onready var render_scale_label: Label = %RenderScaleLabel
 @onready var sharpness_label: Label = %SharpnessLabel
+@onready var ocean_overlay_check: CheckButton = %OceanOverlay
 
 var _root_viewport: Viewport
 var _free_camera: Camera3D
+var _ocean_v3: OceanV3
 var _defaults: Dictionary
 var _updating := false
 var _initialized := false
@@ -42,14 +44,16 @@ func _ready() -> void:
 	sharpness_slider.value_changed.connect(_on_sharpness_changed)
 	shift_speed_slider.value_changed.connect(_on_shift_speed_changed)
 	slow_speed_slider.value_changed.connect(_on_slow_speed_changed)
+	ocean_overlay_check.toggled.connect(_on_ocean_overlay_toggled)
 	$Center/Panel/Margin/VBox/Buttons/Reset.pressed.connect(_reset_to_defaults)
 	$Center/Panel/Margin/VBox/Buttons/Close.pressed.connect(func() -> void: close_requested.emit())
 
 
-func initialize(free_camera: Camera3D) -> void:
+func initialize(free_camera: Camera3D, ocean_v3: OceanV3) -> void:
 	if _initialized:
 		return
 	_free_camera = free_camera
+	_ocean_v3 = ocean_v3
 	_root_viewport = get_tree().root
 	_capture_project_defaults()
 	_build_resolution_options()
@@ -77,6 +81,7 @@ func _capture_project_defaults() -> void:
 		"fsr_sharpness": _root_viewport.fsr_sharpness,
 		"shift_speed": _free_camera.get_sprint_speed_mps(),
 		"slow_speed": _free_camera.get_slow_speed_mps(),
+		"ocean_overlay_enabled": _ocean_v3.performance_overlay_enabled(),
 	}
 
 
@@ -86,9 +91,9 @@ func _build_resolution_options() -> void:
 	var native_size := _native_screen_size()
 	_resolution_sizes.append(native_size)
 	resolution_option.add_item("Current / Native Screen (%d x %d)" % [native_size.x, native_size.y])
-	for size in FIXED_RESOLUTIONS:
-		_resolution_sizes.append(size)
-		resolution_option.add_item("%d x %d" % [size.x, size.y])
+	for resolution_size in FIXED_RESOLUTIONS:
+		_resolution_sizes.append(resolution_size)
+		resolution_option.add_item("%d x %d" % [resolution_size.x, resolution_size.y])
 
 
 func _apply_user_settings_if_valid() -> void:
@@ -103,6 +108,7 @@ func _apply_user_settings_if_valid() -> void:
 		"sharpness_percent": float(config.get_value(SETTINGS_SECTION, "sharpness_percent", -1.0)),
 		"shift_speed": float(config.get_value(SETTINGS_SECTION, "shift_speed", -1.0)),
 		"slow_speed": float(config.get_value(SETTINGS_SECTION, "slow_speed", -1.0)),
+		"ocean_overlay_enabled": bool(config.get_value(SETTINGS_SECTION, "ocean_v3_performance_overlay", _defaults["ocean_overlay_enabled"])),
 	}
 	if not _valid_user_values(values):
 		_apply_values(_defaults)
@@ -117,7 +123,8 @@ func _valid_user_values(values: Dictionary) -> bool:
 		and values["render_scale"] >= MIN_RENDER_SCALE and values["render_scale"] <= MAX_RENDER_SCALE \
 		and values["sharpness_percent"] >= 0.0 and values["sharpness_percent"] <= 100.0 \
 		and values["shift_speed"] >= _free_camera.movement_speed and values["shift_speed"] <= MAX_SHIFT_SPEED \
-		and values["slow_speed"] >= 0.5 and values["slow_speed"] <= _free_camera.movement_speed
+		and values["slow_speed"] >= 0.5 and values["slow_speed"] <= _free_camera.movement_speed \
+		and typeof(values["ocean_overlay_enabled"]) == TYPE_BOOL
 
 
 func _apply_values(values: Dictionary) -> void:
@@ -126,8 +133,9 @@ func _apply_values(values: Dictionary) -> void:
 	resolution_option.select(resolution_index)
 	_apply_resolution(resolution_index, values.get("resolution_size", _resolution_sizes[resolution_index]))
 	var mode: int = values["scaling_mode"]
-	upscaling_option.select(_mode_to_option(mode))
-	_root_viewport.scaling_3d_mode = mode
+	var scaling_mode := mode as Viewport.Scaling3DMode
+	upscaling_option.select(_mode_to_option(scaling_mode))
+	_root_viewport.scaling_3d_mode = scaling_mode
 	var render_scale := clampf(float(values["render_scale"]), MIN_RENDER_SCALE, MAX_RENDER_SCALE)
 	render_scale_slider.value = render_scale * 100.0
 	_root_viewport.scaling_3d_scale = 1.0 if mode == Viewport.SCALING_3D_MODE_BILINEAR else render_scale
@@ -141,6 +149,8 @@ func _apply_values(values: Dictionary) -> void:
 	slow_speed_slider.value = clampf(float(values["slow_speed"]), 0.5, _free_camera.movement_speed)
 	_free_camera.set_sprint_speed_mps(shift_speed_slider.value)
 	_free_camera.set_slow_speed_mps(slow_speed_slider.value)
+	ocean_overlay_check.button_pressed = bool(values["ocean_overlay_enabled"])
+	_ocean_v3.set_performance_overlay_enabled(ocean_overlay_check.button_pressed)
 	_updating = false
 	_update_labels()
 
@@ -156,10 +166,10 @@ func _apply_resolution(index: int, fallback_size: Variant = null) -> void:
 	if index == 0:
 		_resolution_sizes[0] = _native_screen_size()
 		resolution_option.set_item_text(0, "Current / Native Screen (%d x %d)" % [_resolution_sizes[0].x, _resolution_sizes[0].y])
-	var size: Vector2i = _resolution_sizes[index]
+	var output_size: Vector2i = _resolution_sizes[index]
 	if fallback_size is Vector2i:
-		size = fallback_size
-	get_window().size = size
+		output_size = fallback_size
+	get_window().size = output_size
 
 
 func _on_upscaling_selected(index: int) -> void:
@@ -200,6 +210,13 @@ func _on_slow_speed_changed(value: float) -> void:
 		return
 	_free_camera.set_slow_speed_mps(value)
 	_update_labels()
+	_save_user_settings()
+
+
+func _on_ocean_overlay_toggled(enabled: bool) -> void:
+	if _updating:
+		return
+	_ocean_v3.set_performance_overlay_enabled(enabled)
 	_save_user_settings()
 
 
@@ -245,6 +262,7 @@ func _save_user_settings() -> void:
 	config.set_value(SETTINGS_SECTION, "sharpness_percent", sharpness_slider.value)
 	config.set_value(SETTINGS_SECTION, "shift_speed", shift_speed_slider.value)
 	config.set_value(SETTINGS_SECTION, "slow_speed", slow_speed_slider.value)
+	config.set_value(SETTINGS_SECTION, "ocean_v3_performance_overlay", _ocean_v3.performance_overlay_enabled())
 	config.save(SETTINGS_PATH)
 
 
@@ -252,14 +270,14 @@ func _native_screen_size() -> Vector2i:
 	return DisplayServer.screen_get_size(DisplayServer.window_get_current_screen())
 
 
-func _resolution_index_for_size(size: Vector2i) -> int:
+func _resolution_index_for_size(output_size: Vector2i) -> int:
 	for index in range(FIXED_RESOLUTIONS.size()):
-		if FIXED_RESOLUTIONS[index] == size:
+		if FIXED_RESOLUTIONS[index] == output_size:
 			return index + 1
 	return 0
 
 
-func _option_to_mode(index: int) -> int:
+func _option_to_mode(index: int) -> Viewport.Scaling3DMode:
 	match index:
 		1:
 			return Viewport.SCALING_3D_MODE_FSR
@@ -269,7 +287,7 @@ func _option_to_mode(index: int) -> int:
 			return Viewport.SCALING_3D_MODE_BILINEAR
 
 
-func _mode_to_option(mode: int) -> int:
+func _mode_to_option(mode: Viewport.Scaling3DMode) -> int:
 	if mode == Viewport.SCALING_3D_MODE_FSR:
 		return 1
 	if mode == Viewport.SCALING_3D_MODE_FSR2:

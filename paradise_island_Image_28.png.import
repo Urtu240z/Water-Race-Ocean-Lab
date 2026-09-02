@@ -4,8 +4,9 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://c1x3v835ce8uf"
 path.s3tc="res://.godot/imported/paradise_island_Image_28.png-0336bb54b9d2b25d48f8ee677995b5ec.s3tc.ctex"
+path.etc2="res://.godot/imported/paradise_island_Image_28.png-0336bb54b9d2b25d48f8ee677995b5ec.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
@@ -15,7 +16,7 @@ generator_parameters={
 [deps]
 
 source_file="res://paradise_island_Image_28.png"
-dest_files=["res://.godot/imported/paradise_island_Image_28.png-0336bb54b9d2b25d48f8ee677995b5ec.s3tc.ctex"]
+dest_files=["res://.godot/imported/paradise_island_Image_28.png-0336bb54b9d2b25d48f8ee677995b5ec.s3tc.ctex", "res://.godot/imported/paradise_island_Image_28.png-0336bb54b9d2b25d48f8ee677995b5ec.etc2.ctex"]
 
 [params]
 

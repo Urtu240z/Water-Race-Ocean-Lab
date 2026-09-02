@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://ccasg8oxv3yji"
 path.bptc="res://.godot/imported/rock_orm.png-829a496a14439b1ae60fd85f502d9785.bptc.ctex"
+path.astc="res://.godot/imported/rock_orm.png-829a496a14439b1ae60fd85f502d9785.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://terrain/textures/terrain_master/rock_orm.png"
-dest_files=["res://.godot/imported/rock_orm.png-829a496a14439b1ae60fd85f502d9785.bptc.ctex"]
+dest_files=["res://.godot/imported/rock_orm.png-829a496a14439b1ae60fd85f502d9785.bptc.ctex", "res://.godot/imported/rock_orm.png-829a496a14439b1ae60fd85f502d9785.astc.ctex"]
 
 [params]
 

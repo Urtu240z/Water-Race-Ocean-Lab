@@ -4,8 +4,9 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://df5o5mv0xwafb"
 path.s3tc="res://.godot/imported/paradise_island_palm_billboard_continuous_atlas.png-140984e6890109767a7d13fa8d8f266f.s3tc.ctex"
+path.etc2="res://.godot/imported/paradise_island_palm_billboard_continuous_atlas.png-140984e6890109767a7d13fa8d8f266f.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
@@ -15,7 +16,7 @@ generator_parameters={
 [deps]
 
 source_file="res://paradise_island_palm_billboard_continuous_atlas.png"
-dest_files=["res://.godot/imported/paradise_island_palm_billboard_continuous_atlas.png-140984e6890109767a7d13fa8d8f266f.s3tc.ctex"]
+dest_files=["res://.godot/imported/paradise_island_palm_billboard_continuous_atlas.png-140984e6890109767a7d13fa8d8f266f.s3tc.ctex", "res://.godot/imported/paradise_island_palm_billboard_continuous_atlas.png-140984e6890109767a7d13fa8d8f266f.etc2.ctex"]
 
 [params]
 

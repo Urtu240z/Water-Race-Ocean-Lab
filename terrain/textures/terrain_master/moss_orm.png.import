@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://dw445jkd1svoe"
 path.bptc="res://.godot/imported/moss_orm.png-a991c4b2c9b74093ad0438779578899c.bptc.ctex"
+path.astc="res://.godot/imported/moss_orm.png-a991c4b2c9b74093ad0438779578899c.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://terrain/textures/terrain_master/moss_orm.png"
-dest_files=["res://.godot/imported/moss_orm.png-a991c4b2c9b74093ad0438779578899c.bptc.ctex"]
+dest_files=["res://.godot/imported/moss_orm.png-a991c4b2c9b74093ad0438779578899c.bptc.ctex", "res://.godot/imported/moss_orm.png-a991c4b2c9b74093ad0438779578899c.astc.ctex"]
 
 [params]
 

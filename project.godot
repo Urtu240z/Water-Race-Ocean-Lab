@@ -41,6 +41,7 @@ common/physics_interpolation=true
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+textures/vram_compression/import_etc2_astc=true
 lights_and_shadows/use_physical_light_units=true
 scaling_3d/mode=2
 scaling_3d/scale=0.7

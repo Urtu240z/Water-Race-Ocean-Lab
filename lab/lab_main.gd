@@ -26,7 +26,7 @@ func _ready() -> void:
 	_set_active_camera(false)
 	_settings_menu = SETTINGS_MENU_SCENE.instantiate() as Control
 	add_child(_settings_menu)
-	_settings_menu.call("initialize", free_camera)
+	_settings_menu.call("initialize", free_camera, ocean_v3)
 	_settings_menu.connect("close_requested", _close_settings)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)

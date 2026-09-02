@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://q5yx1piuynov"
 path.bptc="res://.godot/imported/rock_albedo.png-16fbfebb701808839ddf427dc887e24f.bptc.ctex"
+path.astc="res://.godot/imported/rock_albedo.png-16fbfebb701808839ddf427dc887e24f.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://terrain/textures/terrain_master/rock_albedo.png"
-dest_files=["res://.godot/imported/rock_albedo.png-16fbfebb701808839ddf427dc887e24f.bptc.ctex"]
+dest_files=["res://.godot/imported/rock_albedo.png-16fbfebb701808839ddf427dc887e24f.bptc.ctex", "res://.godot/imported/rock_albedo.png-16fbfebb701808839ddf427dc887e24f.astc.ctex"]
 
 [params]
 

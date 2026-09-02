@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://u0a4uawsdt4x"
 path.bptc="res://.godot/imported/moss_albedo.png-fb7aefda45f723e38fb9d3325e38d87c.bptc.ctex"
+path.astc="res://.godot/imported/moss_albedo.png-fb7aefda45f723e38fb9d3325e38d87c.astc.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://terrain/textures/terrain_master/moss_albedo.png"
-dest_files=["res://.godot/imported/moss_albedo.png-fb7aefda45f723e38fb9d3325e38d87c.bptc.ctex"]
+dest_files=["res://.godot/imported/moss_albedo.png-fb7aefda45f723e38fb9d3325e38d87c.bptc.ctex", "res://.godot/imported/moss_albedo.png-fb7aefda45f723e38fb9d3325e38d87c.astc.ctex"]
 
 [params]
 

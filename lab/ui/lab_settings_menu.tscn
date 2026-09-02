@@ -143,6 +143,20 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 16
 text = "Camera"
 
+[node name="InterfaceHeading" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Interface"
+
+[node name="InterfaceSeparator" type="HSeparator" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="OceanOverlay" type="CheckButton" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+text = "Ocean V3 Performance Overlay"
+
 [node name="Separator2" type="HSeparator" parent="Center/Panel/Margin/VBox"]
 layout_mode = 2
 

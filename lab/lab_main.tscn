@@ -18,6 +18,7 @@
 [ext_resource type="Material" uid="uid://dmj6dyip8ab0w" path="res://terrain/materials/sand_02.res" id="13_ody2a"]
 [ext_resource type="Script" uid="uid://didnedvqjuvg1" path="res://ocean_v3/core/ocean_sea_state_zone_3d.gd" id="15_ody2a"]
 [ext_resource type="Script" uid="uid://bgmu6kdgxmpru" path="res://ocean_v3/coastal/coastal_bake_authoring.gd" id="17_4qkou"]
+[ext_resource type="Material" uid="uid://cwtgldc4ahbeu" path="res://terrain/materials/aerial_rocks_02.res" id="17_sw3hm"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_qvnwd"]
 panorama = ExtResource("2_ody2a")
@@ -40,7 +41,6 @@ tonemap_agx_contrast = 1.12
 ssao_enabled = true
 ssao_intensity = 4.0
 ssao_light_affect = 1.0
-ssil_enabled = true
 ssil_intensity = 3.5
 glow_enabled = true
 fog_enabled = true
@@ -83,13 +83,12 @@ light_temperature = 5800.0
 light_energy = 3.611
 light_angular_distance = 0.5
 shadow_enabled = true
-shadow_normal_bias = 1.0
 shadow_blur = 2.5
 directional_shadow_split_1 = 0.05
 directional_shadow_split_2 = 0.15
 directional_shadow_split_3 = 0.4
 directional_shadow_blend_splits = true
-directional_shadow_max_distance = 300.0
+directional_shadow_max_distance = 2500.0
 
 [node name="RaceReferenceTarget" type="Node3D" parent="." unique_id=1570421157]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -60)
@@ -162,6 +161,7 @@ underwater_snell_cone_angle_surface_deg = 90.0
 underwater_snell_cone_angle_deep_deg = 32.0
 underwater_snell_cone_deep_start_m = 35.0
 underwater_snell_cone_angle_deg = 31.25
+maximum_optical_depth_above_m = 48.0
 water_body_depth_start_m = 0.7
 water_body_depth_end_m = 26.0
 opacity_distance_end = 1000.0
@@ -312,6 +312,26 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 551.7321, 5.30381, -506.55515
 [node name="Terrain_Master_VIS" parent="paradise_island" index="0" unique_id=2078926670]
 surface_material_override/0 = ExtResource("13_ody2a")
 
+[node name="Cave_01_VIS" parent="paradise_island" index="1" unique_id=24524933]
+cast_shadow = 2
+gi_mode = 2
+surface_material_override/0 = ExtResource("17_sw3hm")
+
+[node name="Cave_Entrance_Rock_A_VIS" parent="paradise_island" index="2" unique_id=518752368]
+surface_material_override/0 = ExtResource("17_sw3hm")
+
+[node name="Rock2_VIS" parent="paradise_island" index="3" unique_id=199135749]
+surface_material_override/0 = ExtResource("17_sw3hm")
+
+[node name="Rock3_VIS" parent="paradise_island" index="4" unique_id=2055558267]
+surface_material_override/0 = ExtResource("17_sw3hm")
+
+[node name="Cave_Entrance_Rock_B_VIS" parent="paradise_island" index="5" unique_id=1168415983]
+surface_material_override/0 = ExtResource("17_sw3hm")
+
+[node name="Rock4_VIS" parent="paradise_island" index="14" unique_id=329006202]
+surface_material_override/0 = ExtResource("17_sw3hm")
+
 [node name="Cabana_4_COL" parent="paradise_island" index="19" unique_id=1115929881]
 transform = Transform3D(1.3555894, 0, 0.07078267, 0, 1.357436, 0, -0.07078267, 0, 1.3555894, 214.78558, -7.2204156, 331.6032)
 
@@ -333,6 +353,14 @@ coast_id = "paradise_island_phase_test"
 source_root = NodePath("../paradise_island/Terrain_Master_VIS")
 cell_size_m = 4.0
 metadata/_custom_type_script = "uid://bgmu6kdgxmpru"
+
+[node name="ReflectionProbe" type="ReflectionProbe" parent="." unique_id=492733782]
+transform = Transform3D(0.87237877, 0, -0.48883066, 0, 1, 0, 0.48883066, 0, 0.87237877, 856.803, 7.604355, -469.4889)
+blend_distance = 8.0
+max_distance = 7.1
+size = Vector3(174.87506, 54.438812, 83.633385)
+box_projection = true
+enable_shadows = true
 
 [editable path="OceanV3Mount/OceanV3"]
 [editable path="paradise_island"]

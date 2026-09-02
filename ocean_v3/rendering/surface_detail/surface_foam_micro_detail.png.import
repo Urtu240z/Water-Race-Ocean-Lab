@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://c47l61keywwhk"
 path.s3tc="res://.godot/imported/surface_foam_micro_detail.png-c47775bec5d8d56c8efdf894f17c56d9.s3tc.ctex"
+path.etc2="res://.godot/imported/surface_foam_micro_detail.png-c47775bec5d8d56c8efdf894f17c56d9.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://ocean_v3/rendering/surface_detail/surface_foam_micro_detail.png"
-dest_files=["res://.godot/imported/surface_foam_micro_detail.png-c47775bec5d8d56c8efdf894f17c56d9.s3tc.ctex"]
+dest_files=["res://.godot/imported/surface_foam_micro_detail.png-c47775bec5d8d56c8efdf894f17c56d9.s3tc.ctex", "res://.godot/imported/surface_foam_micro_detail.png-c47775bec5d8d56c8efdf894f17c56d9.etc2.ctex"]
 
 [params]
 
