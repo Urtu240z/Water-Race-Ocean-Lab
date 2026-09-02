@@ -2403,6 +2403,9 @@ void fragment() {
 	float underwater_snell_artistic_tir = 0.0;
 	float underwater_tir_visual_weight = 0.0;
 	float underwater_snell_depth_blend = 0.0;
+	float underwater_snell_local_camera_depth_m = 0.0;
+	float underwater_snell_authored_cone_angle_deg = 0.0;
+	float underwater_snell_physical_critical_angle_deg = 0.0;
 	vec3 underwater_snell_normal_world = vec3(0.0, 1.0, 0.0);
 	bool underwater_snell_active = underwater_camera_active && underwater_snell_enabled;
 	if (underwater_snell_active) {
@@ -2422,29 +2425,35 @@ void fragment() {
 		underwater_snell_k = 1.0 - eta_water_air * eta_water_air
 			* (1.0 - underwater_snell_cos_i * underwater_snell_cos_i);
 		underwater_snell_tir = underwater_snell_k < 0.0 ? 1.0 : 0.0;
-		float camera_depth_m = max(
-			underwater_surface_sea_level_y - CAMERA_POSITION_WORLD.y,
+		// Local surface authority: this is the already-displaced surface position
+		// produced by the vertex FFT path and carried into the fragment. Reuse its
+		// Y instead of adding a camera OceanQuery/readback or extra FFT fetches.
+		float local_surface_y_at_camera = ocean_world_position.y;
+		if (isnan(local_surface_y_at_camera) || isinf(local_surface_y_at_camera)) {
+			local_surface_y_at_camera = underwater_surface_sea_level_y;
+		}
+		underwater_snell_local_camera_depth_m = max(
+			local_surface_y_at_camera - CAMERA_POSITION_WORLD.y,
 			0.0
 		);
 		underwater_snell_depth_blend = smoothstep(
 			0.0,
 			max(underwater_snell_cone_deep_start_m, WATER_OPTICS_EPSILON),
-			camera_depth_m
+			underwater_snell_local_camera_depth_m
 		);
-		float authored_cone_angle_deg = mix(
+		underwater_snell_authored_cone_angle_deg = mix(
 			underwater_snell_cone_angle_surface_deg,
 			underwater_snell_cone_angle_deep_deg,
 			underwater_snell_depth_blend
 		);
-		// The physical IOR still determines the refracted direction and raw k.
-		// The authored cone can only close the window, never open it beyond the
-		// physical critical angle.
+		// Keep physical critical angle separate from the authored presentation cone.
+		// IOR still governs eta, k, raw TIR, refract(), and physical Fresnel; the
+		// Surface/Deep exports independently govern the artistic visual threshold.
 		float physical_critical_angle = asin(clamp(1.0003 / max(underwater_water_ior, 1.0003), 0.0, 1.0));
-		float effective_critical_angle = min(
-			radians(clamp(authored_cone_angle_deg, 0.0, 90.0)),
-			physical_critical_angle
-		);
-		float snell_cos_threshold = cos(effective_critical_angle);
+		underwater_snell_physical_critical_angle_deg = physical_critical_angle * 57.2957795;
+		float authored_cone_angle = radians(clamp(underwater_snell_authored_cone_angle_deg, 0.0, 90.0));
+		float artistic_cone_threshold = cos(authored_cone_angle);
+		float snell_cos_threshold = artistic_cone_threshold;
 		underwater_snell_artistic_tir = underwater_snell_cos_i < snell_cos_threshold ? 1.0 : 0.0;
 		underwater_tir_visual_weight = underwater_snell_artistic_tir;
 		if (underwater_snell_edge_softness > 0.0) {
@@ -2471,6 +2480,17 @@ void fragment() {
 		color = vec3(underwater_snell_depth_blend);
 	} else if (underwater_camera_active && underwater_debug_mode == 12) {
 		color = vec3(underwater_tir_visual_weight);
+	} else if (underwater_camera_active && underwater_debug_mode == 47) {
+		color = vec3(clamp(
+			underwater_snell_local_camera_depth_m
+			/ max(underwater_snell_cone_deep_start_m, WATER_OPTICS_EPSILON),
+			0.0,
+			1.0
+		));
+	} else if (underwater_camera_active && underwater_debug_mode == 48) {
+		color = vec3(clamp(underwater_snell_authored_cone_angle_deg / 90.0, 0.0, 1.0));
+	} else if (underwater_camera_active && underwater_debug_mode == 49) {
+		color = vec3(clamp(underwater_snell_physical_critical_angle_deg / 90.0, 0.0, 1.0));
 	}
 	float fresnel = physical_water_fresnel(visual_normal, view_direction);
 	if (underwater_snell_active) {
@@ -3385,14 +3405,19 @@ void fragment() {
 				underwater_reflected_direction_valid = length(reflected_direction_view) > WATER_OPTICS_EPSILON
 					&& !any(isnan(reflected_direction_view))
 					&& !any(isinf(reflected_direction_view));
-				vec3 refracted_direction_view = refract(
-					incident_view,
-					refraction_normal_view,
-					underwater_snell_active
-						? max(underwater_water_ior, 1.0003) / 1.0003
-						: 1.0 / max(WATER_IOR, WATER_OPTICS_EPSILON)
-				);
-				bool refraction_direction_valid = length(refracted_direction_view) > WATER_OPTICS_EPSILON
+				vec3 refracted_direction_view = vec3(0.0);
+				bool physical_refraction_allowed = !(underwater_snell_active && underwater_snell_tir > 0.5);
+				if (physical_refraction_allowed) {
+					refracted_direction_view = refract(
+						incident_view,
+						refraction_normal_view,
+						underwater_snell_active
+							? max(underwater_water_ior, 1.0003) / 1.0003
+							: 1.0 / max(WATER_IOR, WATER_OPTICS_EPSILON)
+					);
+				}
+				bool refraction_direction_valid = physical_refraction_allowed
+					&& length(refracted_direction_view) > WATER_OPTICS_EPSILON
 					&& !any(isnan(refracted_direction_view))
 					&& !any(isinf(refracted_direction_view))
 					&& !(underwater_snell_active && underwater_snell_artistic_tir > 0.5);
