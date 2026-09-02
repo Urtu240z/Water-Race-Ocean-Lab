@@ -18,7 +18,7 @@ layout(set = 0, binding = 2, std140) uniform Params {
 	vec4 sun_color; // rgb, wave intensity strength
 	vec4 sunrays; // enabled, strength, anisotropy, density
 	vec4 sunrays_pattern; // scale, contrast, animation speed, time
-	vec4 sunrays_extra; // maximum distance, legacy tap setting, wave width strength, phase-debug constant
+	vec4 sunrays_extra; // maximum distance, length variation, wave width strength, phase-debug constant
 } params;
 
 const float EPSILON = 0.00001;
@@ -144,9 +144,23 @@ float sunrays_beam_field(vec3 sample_world, vec3 light_into_water, float width_f
 	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0 / safe_width);
 	float slow_intensity = 0.84 + 0.16 * (0.5 + 0.5 * sin(beam_coord.y * 0.09));
 	float ridges = clamp((broad * 0.82 + medium * 0.30 + narrow * 0.12) * slow_intensity, 0.0, 1.0);
+	// Oblique low-frequency waves localize the longitudinal ridges into continuous shafts.
+	float gate_a = sin(dot(beam_coord, vec2(0.43, 0.71)) * 1.10 + 0.37);
+	float gate_b = cos(dot(beam_coord, vec2(-0.82, 0.29)) * 0.73 - 1.19);
+	float gate_c = sin(dot(beam_coord, vec2(0.18, -0.97)) * 1.57 + 2.11);
+	float gate_signal = clamp(0.5 + 0.5 * (gate_a * 0.48 + gate_b * 0.32 + gate_c * 0.20), 0.0, 1.0);
+	float transverse_gate = smoothstep(0.52, 0.78, gate_signal);
+	float shafts = ridges * transverse_gate;
 	float contrast = exaggerated ? 1.0 : clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
 	float low_value = exaggerated ? 0.10 : 0.30;
-	return mix(0.5, low_value + (1.0 - low_value) * ridges, contrast);
+	return mix(0.5, low_value + (1.0 - low_value) * shafts, contrast);
+}
+
+float sunrays_reach_factor(vec2 beam_coord) {
+	float reach_a = sin(dot(beam_coord, vec2(0.41, 0.83)) * 0.23 + 0.73);
+	float reach_b = cos(dot(beam_coord, vec2(-0.91, 0.37)) * 0.17 - 1.21);
+	float reach_c = sin(dot(beam_coord, vec2(0.29, -0.96)) * 0.11 + 2.03);
+	return clamp(0.5 + 0.5 * (reach_a * 0.46 + reach_b * 0.33 + reach_c * 0.21), 0.0, 1.0);
 }
 
 bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
@@ -174,9 +188,12 @@ bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
 		float interval_begin_m, float interval_end_m, float sea_level, vec3 light_into_water,
 		vec3 absorption, float absorption_scale, bool exaggerated, out vec3 sample_point,
 		out vec3 light_entry, out vec3 transmittance, out float pattern, out vec2 beam_coord,
-		out float wave_focus, out float wave_width, out float wave_intensity, out float direction_alignment) {
+		out float shaft_field, out float reach_factor, out float reach_envelope,
+		out float shaft_with_reach, out float wave_focus, out float wave_width,
+		out float wave_intensity, out float direction_alignment) {
 	sample_point = camera_world + view_ray_world * (0.5 * (interval_begin_m + interval_end_m));
 	light_entry = vec3(0.0); transmittance = vec3(0.0); pattern = 0.0; beam_coord = vec2(0.0);
+	shaft_field = 0.0; reach_factor = 0.0; reach_envelope = 0.0; shaft_with_reach = 0.0;
 	wave_focus = 0.5; wave_width = 1.0; wave_intensity = 1.0; direction_alignment = -1.0;
 	if (interval_end_m - interval_begin_m <= EPSILON || !finite_vec3(sample_point)) return false;
 	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
@@ -196,7 +213,15 @@ bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
 	transmittance = exp(-max(absorption, vec3(0.0)) * effective_absorption_scale * sun_water_path);
 	if (!finite_vec3(transmittance)) return false;
 	sunrays_wave_modulation(light_entry, sample_point, wave_focus, wave_width, wave_intensity);
-	pattern = sunrays_beam_field(sample_point, light_into_water, wave_width, exaggerated, beam_coord) * wave_intensity;
+	shaft_field = sunrays_beam_field(sample_point, light_into_water, wave_width, exaggerated, beam_coord);
+	reach_factor = sunrays_reach_factor(beam_coord);
+	float variable_ratio = mix(0.30, 1.0, reach_factor);
+	float length_variation = clamp(params.sunrays_extra.y, 0.0, 1.0);
+	float shaft_max_reach = max(params.sunrays_extra.x, EPSILON) * mix(1.0, variable_ratio, length_variation);
+	float fade_start_ratio = 0.72;
+	reach_envelope = 1.0 - smoothstep(shaft_max_reach * fade_start_ratio, shaft_max_reach, sun_water_path);
+	shaft_with_reach = shaft_field * reach_envelope;
+	pattern = shaft_with_reach * wave_intensity;
 	return !isnan(pattern) && !isinf(pattern);
 }
 
@@ -228,6 +253,8 @@ void main() {
 	float phase_response = 0.0; float depth_response = 0.0; float pattern_debug = 0.0;
 	vec2 beam_coord_debug = vec2(0.0); float world_slice_id_debug = 0.0;
 	float wave_focus_debug = 0.5; float wave_width_debug = 1.0; float wave_modulation_debug = 1.0;
+	float shaft_field_debug = 0.0; float reach_factor_debug = 0.0;
+	float reach_envelope_debug = 0.0; float shaft_with_reach_debug = 0.0;
 	float direction_alignment_debug = -1.0; vec3 view_ray_debug = vec3(0.0); bool view_ray_valid = false;
 	vec3 sample_point_debug = vec3(0.0); vec3 light_entry_debug = vec3(0.0); vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0; vec3 sunray_contribution = vec3(0.0);
@@ -264,15 +291,19 @@ void main() {
 					float interval_begin_m; float interval_end_m;
 					if (!world_slice_interval(params.camera.xyz, view_ray_world, sunray_segment_m, light_into_water, slice_id, interval_begin_m, interval_end_m)) continue;
 					vec3 slice_point; vec3 slice_entry; vec3 slice_transmittance; float slice_pattern; vec2 slice_beam_coord;
+					float slice_shaft_field; float slice_reach_factor; float slice_reach_envelope; float slice_shaft_with_reach;
 					float slice_wave_focus; float slice_wave_width; float slice_wave_intensity; float slice_direction_alignment;
 					if (!evaluate_sunray_world_slice(params.camera.xyz, view_ray_world, interval_begin_m, interval_end_m,
 							params.medium.x, light_into_water, params.absorption.rgb, params.medium.w, force_pattern_debug,
 							slice_point, slice_entry, slice_transmittance, slice_pattern, slice_beam_coord,
+							slice_shaft_field, slice_reach_factor, slice_reach_envelope, slice_shaft_with_reach,
 							slice_wave_focus, slice_wave_width, slice_wave_intensity, slice_direction_alignment)) continue;
 					float slice_length_m = interval_end_m - interval_begin_m;
 					valid_tap_count += 1; integrated_length_m += slice_length_m;
 					sample_point_debug += slice_point * slice_length_m; light_entry_debug += slice_entry * slice_length_m;
 					pattern_debug += slice_pattern * slice_length_m; beam_coord_debug += slice_beam_coord * slice_length_m;
+					shaft_field_debug += slice_shaft_field * slice_length_m; reach_factor_debug += slice_reach_factor * slice_length_m;
+					reach_envelope_debug += slice_reach_envelope * slice_length_m; shaft_with_reach_debug += slice_shaft_with_reach * slice_length_m;
 					world_slice_id_debug += float(slice_id) * slice_length_m;
 					wave_focus_debug += (slice_wave_focus - 0.5) * slice_length_m;
 					wave_width_debug += (slice_wave_width - 1.0) * slice_length_m;
@@ -283,6 +314,8 @@ void main() {
 				if (integrated_length_m > EPSILON) {
 					sample_point_debug /= integrated_length_m; light_entry_debug /= integrated_length_m; pattern_debug /= integrated_length_m;
 					beam_coord_debug /= integrated_length_m; world_slice_id_debug /= integrated_length_m;
+					shaft_field_debug /= integrated_length_m; reach_factor_debug /= integrated_length_m;
+					reach_envelope_debug /= integrated_length_m; shaft_with_reach_debug /= integrated_length_m;
 					wave_focus_debug = 0.5 + (wave_focus_debug - 0.5) / integrated_length_m;
 					wave_width_debug = 1.0 + (wave_width_debug - 1.0) / integrated_length_m;
 					wave_modulation_debug = 1.0 + (wave_modulation_debug - 1.0) / integrated_length_m;
@@ -320,7 +353,11 @@ void main() {
 	else if (debug_mode == 29) { float alignment_color = clamp(0.5 + 0.5 * direction_alignment_debug, 0.0, 1.0); color.rgb = valid_tap_count > 0 ? vec3(1.0 - alignment_color, alignment_color, 0.0) : vec3(0.0); }
 	else if (debug_mode == 31) color.rgb = scene_valid ? 0.5 + 0.5 * sin(scene_world * vec3(0.071, 0.113, 0.097)) : vec3(0.0);
 	else if (debug_mode == 32) color.rgb = view_ray_valid ? view_ray_debug * 0.5 + 0.5 : vec3(0.0);
-	else if (debug_mode >= 33 && debug_mode <= 41) color.rgb = vec3(0.0);
+	else if (debug_mode == 33) color.rgb = vec3(shaft_field_debug);
+	else if (debug_mode == 34) color.rgb = vec3(reach_factor_debug);
+	else if (debug_mode == 35) color.rgb = vec3(reach_envelope_debug);
+	else if (debug_mode == 36) color.rgb = vec3(shaft_with_reach_debug);
+	else if (debug_mode >= 37 && debug_mode <= 41) color.rgb = vec3(0.0);
 	else if (debug_mode == 42) color.rgb = sunray_segment_source_debug == 1.0 ? vec3(0.0, 1.0, 0.0) : sunray_segment_source_debug == 2.0 ? vec3(1.0, 0.0, 0.0) : sunray_segment_source_debug == 3.0 ? vec3(0.0, 0.0, 1.0) : vec3(0.0);
 	else if (debug_mode == 43 || debug_mode == 44) color.rgb = sunray_contribution;
 	else if (debug_mode == 46) color.rgb = vec3(clamp(sunray_segment_debug_m / max(params.sunrays_extra.x, EPSILON), 0.0, 1.0));

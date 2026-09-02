@@ -33,6 +33,7 @@ var _sunrays_strength := 0.35
 var _sunrays_anisotropy := 0.72
 var _sunrays_density := 0.08
 var _sunrays_max_distance := 30.0
+var _sunrays_length_variation := 0.70
 var _sunrays_pattern_scale := 1.0
 var _sunrays_pattern_contrast := 1.4
 var _sunrays_animation_speed := 0.12
@@ -60,6 +61,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		max_distance: float, debug_mode: int, light_into_water: Vector3, sun_color: Color,
 		sun_energy: float, sunrays_enabled: bool, sunrays_strength: float,
 		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
+		sunrays_length_variation: float,
 		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
 		sunrays_animation_speed: float, sunrays_wave_modulation_enabled: bool,
 		sunrays_wave_animation_speed: float, sunrays_wave_freeze: bool,
@@ -86,6 +88,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_anisotropy = clampf(sunrays_anisotropy, 0.0, 0.95)
 	_sunrays_density = clampf(sunrays_density, 0.0, 2.0)
 	_sunrays_max_distance = clampf(sunrays_max_distance, 1.0, 100.0)
+	_sunrays_length_variation = clampf(sunrays_length_variation, 0.0, 1.0)
 	_sunrays_pattern_scale = clampf(sunrays_pattern_scale, 0.05, 10.0)
 	_sunrays_pattern_contrast = clampf(sunrays_pattern_contrast, 0.0, 4.0)
 	_sunrays_animation_speed = clampf(sunrays_animation_speed, 0.0, 2.0)
@@ -177,6 +180,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_anisotropy := _sunrays_anisotropy
 	var sunrays_density := _sunrays_density
 	var sunrays_max_distance := _sunrays_max_distance
+	var sunrays_length_variation := _sunrays_length_variation
 	var sunrays_pattern_scale := _sunrays_pattern_scale
 	var sunrays_pattern_contrast := _sunrays_pattern_contrast
 	var sunrays_wave_modulation_enabled := _sunrays_wave_modulation_enabled
@@ -187,7 +191,6 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_wave_depth_fade_m := _sunrays_wave_depth_fade_m
 	var sunrays_phase_debug_constant := _sunrays_phase_debug_constant
 	var sunrays_time := _sunrays_time
-	var sunrays_tap_count := _sunrays_tap_count
 	var sunrays_segment_mode := _sunrays_segment_mode
 	_mutex.unlock()
 	# In normal AIR mode this compositor remains attached but does no GPU work;
@@ -224,7 +227,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
 	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
 	params.append(sunrays_wave_animation_speed); params.append(0.0 if sunrays_wave_freeze else sunrays_time)
-	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(sunrays_wave_width_strength); params.append(1.0 if sunrays_phase_debug_constant else 0.0)
+	params.append(sunrays_max_distance); params.append(sunrays_length_variation); params.append(sunrays_wave_width_strength); params.append(1.0 if sunrays_phase_debug_constant else 0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
