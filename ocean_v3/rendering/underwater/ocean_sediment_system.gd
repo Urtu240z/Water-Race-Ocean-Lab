@@ -64,7 +64,7 @@ enum DebugMode {
 @export_range(0.0, 8.0, 0.05) var sediment_alpha_multiplier := 3.0
 # RGB is used for the particle tint; alpha is controlled by the multiplier above.
 @export var sediment_particle_color := Color(0.52, 0.38, 0.20, 1.0)
-@export_range(0.25, 8.0, 0.05) var sediment_particle_size_multiplier := 1.5
+@export_range(0.25, 20.0, 0.05) var sediment_particle_size_multiplier := 1.5
 @export_range(64, 10000, 64) var sediment_particle_count := 680
 @export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_in_seconds := 1.0
 @export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_out_seconds := 1.5
