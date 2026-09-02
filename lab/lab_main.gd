@@ -4,8 +4,9 @@ const CALM_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/
 const RACE_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/race.tres")
 const ROUGH_WAVE_PRESET: OceanWavePreset = preload("res://ocean_v3/presets/waves/rough.tres")
 const SEA_STATE_ZONE_SCRIPT := preload("res://ocean_v3/core/ocean_sea_state_zone_3d.gd")
+const SETTINGS_MENU_SCENE := preload("res://lab/ui/lab_settings_menu.tscn")
 const FOAM_DEBUG_MODES: PackedInt32Array = [0, 1, 4, 7, 11, 14, 15]
-const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: acelerar | Ratón: mirar\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | H: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
+const CONTROLS_TEXT := "CONTROLES\nTab: cámara libre / referencia\nWASD: mover | Q/E: bajar/subir | Shift: movimiento rápido | Space: movimiento lento | Ratón: mirar\nEsc / Start: Settings\nP: pausa/reanuda | R: reset conserva seed | N: nueva seed\nO: océano FFT on/off | B: bandas ALL/LONG/MID/SHORT | V: vista | L: LOD | T: periodicidad | M: referencias métricas\nX: PHILLIPS/JONSWAP | H: shape debug | Z: crest sharpen debug | G: normal VERTEX/FRAGMENT | Y: query probes\nF2: Breaker Ribbons ON/OFF | J: Breaker LIP/TAKEOVER/REGION/FORCE_LIP/DETECTOR/OFF | Shift+J: slot 0..7/ALL | Ctrl+J: FORCE SPAWN slot\nF3: Foam Debug | F4: Sea State Zone heatmap ON/OFF | F5: Reflection Debug | F1: HUD\nC: Coastal ON/OFF | Shift+C: FULL/LONG_COASTAL_ONLY | 4/5/6: transición CALM/RACE/ROUGH | Shift+4/5/6: instantáneo | 1/2/3: DECK/STANDARD/DEV_HIGH | ,/.: escala de tiempo"
 
 @onready var free_camera: Camera3D = %FreeCamera
 @onready var race_camera: Camera3D = %RaceReferenceCamera
@@ -19,13 +20,53 @@ var _query_probe_tool: Node3D
 var _demo_sea_state_zone: OceanSeaStateZone3D
 var _foam_debug_index := 0
 var _smoothed_frame_ms := 16.67
+var _settings_menu: Control
+var _settings_open := false
 func _ready() -> void:
 	_set_active_camera(false)
+	_settings_menu = SETTINGS_MENU_SCENE.instantiate() as Control
+	add_child(_settings_menu)
+	_settings_menu.call("initialize", free_camera)
+	_settings_menu.connect("close_requested", _close_settings)
 	_query_probe_tool = load("res://lab/debug/query_probe_snapshot.gd").new()
 	add_child(_query_probe_tool)
 	_foam_debug_index = max(FOAM_DEBUG_MODES.find(ocean_v3.foam_debug_mode), 0)
 	_smoothed_frame_ms = 1000.0 / maxf(float(Engine.get_frames_per_second()), 1.0)
 	_update_coastal_hud()
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		_toggle_settings()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventJoypadButton and event.pressed and _is_settings_button(event.button_index):
+		_toggle_settings()
+		get_viewport().set_input_as_handled()
+
+
+func _is_settings_button(button_index: int) -> bool:
+	return button_index == JOY_BUTTON_START or button_index == JOY_BUTTON_GUIDE or button_index == JOY_BUTTON_BACK
+
+
+func _toggle_settings() -> void:
+	_set_settings_open(not _settings_open)
+
+
+func _close_settings() -> void:
+	_set_settings_open(false)
+
+
+func _set_settings_open(value: bool) -> void:
+	_settings_open = value
+	if _settings_menu == null:
+		return
+	if _settings_open:
+		free_camera.call("set_active", false)
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		_settings_menu.call("open_menu")
+	else:
+		_settings_menu.call("close_menu")
+		_set_active_camera(_using_race_camera)
 
 
 func _unhandled_input(event: InputEvent) -> void:

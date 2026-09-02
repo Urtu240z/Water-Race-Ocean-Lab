@@ -5,6 +5,7 @@ extends Camera3D
 @export var mouse_sensitivity := 0.0025
 
 var _is_active := false
+var _slow_speed_mps := -1.0
 
 
 func _ready() -> void:
@@ -40,9 +41,29 @@ func _process(delta: float) -> void:
 		return
 
 	var speed := movement_speed
-	if Input.is_key_pressed(KEY_SHIFT):
-		speed *= sprint_multiplier
+	if Input.is_key_pressed(KEY_SPACE):
+		speed = get_slow_speed_mps()
+	elif Input.is_key_pressed(KEY_SHIFT):
+		speed = get_sprint_speed_mps()
 	global_position += movement.normalized() * speed * delta
+
+
+func get_sprint_speed_mps() -> float:
+	return movement_speed * sprint_multiplier
+
+
+func set_sprint_speed_mps(value: float) -> void:
+	sprint_multiplier = maxf(value, movement_speed) / maxf(movement_speed, 0.001)
+
+
+func get_slow_speed_mps() -> float:
+	if _slow_speed_mps > 0.0:
+		return _slow_speed_mps
+	return movement_speed * 0.25
+
+
+func set_slow_speed_mps(value: float) -> void:
+	_slow_speed_mps = clampf(value, 0.5, movement_speed)
 
 
 func _input(event: InputEvent) -> void:
@@ -50,8 +71,6 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-	if event is InputEventKey and event.keycode == KEY_ESCAPE and event.pressed:
-		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		rotation.x = clampf(rotation.x - event.relative.y * mouse_sensitivity, -1.45, 1.45)

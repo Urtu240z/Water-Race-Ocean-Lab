@@ -1,0 +1,217 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://lab/ui/lab_settings_menu.gd" id="1_settings"]
+
+[node name="LabSettingsMenu" type="Control"]
+process_mode = 3
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+visible = false
+script = ExtResource("1_settings")
+
+[node name="Dim" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.015, 0.025, 0.04, 0.72)
+mouse_filter = 2
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(540, 0)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 24
+
+[node name="VBox" type="VBoxContainer" parent="Center/Panel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Title" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "OCEAN LAB SETTINGS"
+horizontal_alignment = 1
+
+[node name="DisplayHeading" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Display"
+
+[node name="Separator" type="HSeparator" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="ResolutionLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+text = "Resolution"
+
+[node name="Resolution" type="OptionButton" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+
+[node name="UpscalingLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+text = "Upscaling"
+
+[node name="Upscaling" type="OptionButton" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+item_count = 3
+selected = 0
+popup/item_0/text = "Native / No Scaling"
+popup/item_1/text = "FSR 1"
+popup/item_2/text = "FSR 2"
+
+[node name="RenderScaleLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Render Scale"
+
+[node name="RenderScaleRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="RenderScale" type="HSlider" parent="Center/Panel/Margin/VBox/RenderScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 100.0
+step = 1.0
+value = 100.0
+
+[node name="RenderScaleValue" type="Label" parent="Center/Panel/Margin/VBox/RenderScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "100%"
+horizontal_alignment = 2
+
+[node name="InternalResolution" type="Label" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.74, 1)
+text = "Output: 1920 x 1080\nInternal 3D: 1920 x 1080"
+
+[node name="SharpnessLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "FSR Sharpness"
+
+[node name="SharpnessRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="Sharpness" type="HSlider" parent="Center/Panel/Margin/VBox/SharpnessRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+max_value = 100.0
+step = 1.0
+value = 50.0
+
+[node name="SharpnessValue" type="Label" parent="Center/Panel/Margin/VBox/SharpnessRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "50%"
+horizontal_alignment = 2
+
+[node name="CameraHeading" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Camera"
+
+[node name="Separator2" type="HSeparator" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="ShiftLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+text = "SHIFT speed"
+
+[node name="ShiftRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="ShiftSpeed" type="HSlider" parent="Center/Panel/Margin/VBox/ShiftRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 1.0
+max_value = 250.0
+step = 1.0
+value = 48.0
+
+[node name="ShiftSpeedValue" type="Label" parent="Center/Panel/Margin/VBox/ShiftRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "48 m/s"
+horizontal_alignment = 2
+
+[node name="SlowLabel" type="Label" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+text = "SPACE slow speed"
+
+[node name="SlowRow" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+
+[node name="SlowSpeed" type="HSlider" parent="Center/Panel/Margin/VBox/SlowRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 0.5
+max_value = 12.0
+step = 0.5
+value = 3.0
+
+[node name="SlowSpeedValue" type="Label" parent="Center/Panel/Margin/VBox/SlowRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "3.0 m/s"
+horizontal_alignment = 2
+
+[node name="Performance" type="Label" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.62, 0.68, 0.74, 1)
+text = "FPS: --    Frame: -- ms"
+
+[node name="Buttons" type="HBoxContainer" parent="Center/Panel/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Reset" type="Button" parent="Center/Panel/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Reset to Project Defaults"
+
+[node name="Close" type="Button" parent="Center/Panel/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Close"
