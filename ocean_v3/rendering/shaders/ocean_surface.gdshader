@@ -3281,8 +3281,11 @@ void fragment() {
 			vec3 optical_scene = body_component + scattering_component;
 			vec2 refraction_final_offset_px = vec2(0.0);
 			float refraction_validity = 0.0;
-			vec2 refraction_background_uv = SCREEN_UV;
 			vec3 refraction_background_only = vec3(0.0);
+			vec2 sky_refracted_uv_raw = SCREEN_UV;
+			vec2 sky_refracted_uv_safe = clamp(SCREEN_UV, vec2(0.002), vec2(0.998));
+			float sky_refraction_validity = 0.0;
+			bool sky_refraction_active = false;
 			// Developer diagnostics for the underwater SHORT contribution. These are
 			// populated in the same branch as the production sample so each mode
 			// exposes the actual source, pixel mapping and sampled-color delta.
@@ -3514,12 +3517,27 @@ void fragment() {
 						projection_matrix,
 						sky_projection_valid
 					);
-					if (sky_projection_valid) {
-						float sky_edge_confidence = water_optics_edge_confidence(sky_refracted_uv);
-						candidate_refracted_uv = sky_refracted_uv;
-						refraction_final_offset_px = (sky_refracted_uv - SCREEN_UV)
-							* refraction_screen_size * sky_edge_confidence;
-						refraction_validity = sky_edge_confidence;
+					bool sky_refracted_uv_finite = !(any(isnan(sky_refracted_uv)) || any(isinf(sky_refracted_uv)));
+					if (sky_projection_valid && sky_refracted_uv_finite) {
+						sky_refracted_uv_raw = sky_refracted_uv;
+						sky_refracted_uv_safe = clamp(
+							sky_refracted_uv_raw,
+							vec2(0.002),
+							vec2(0.998)
+						);
+						sky_refraction_validity = clamp(
+							water_optics_edge_confidence(sky_refracted_uv_raw),
+							0.0,
+							1.0
+						);
+						candidate_refracted_uv = sky_refracted_uv_raw;
+						// Keep the geometric sky displacement independent from the
+						// rectangular viewport confidence. Confidence only controls the
+						// eventual sample blend/fallback.
+						refraction_final_offset_px = (sky_refracted_uv_raw - SCREEN_UV)
+							* refraction_screen_size;
+						refraction_validity = sky_refraction_validity;
+						sky_refraction_active = true;
 					}
 				}
 				// SHORT slope is deliberately introduced only after physical
@@ -3574,11 +3592,17 @@ void fragment() {
 						}
 					}
 				}
-				vec2 final_refracted_uv = clamp(
-					SCREEN_UV + (refraction_final_offset_px + snell_micro_offset_px) / refraction_screen_size,
-					vec2(0.001),
-					vec2(0.999)
-				);
+				vec2 final_refracted_uv = sky_refraction_active
+					? clamp(
+						sky_refracted_uv_safe + snell_micro_offset_px / refraction_screen_size,
+						vec2(0.002),
+						vec2(0.998)
+					)
+					: clamp(
+						SCREEN_UV + (refraction_final_offset_px + snell_micro_offset_px) / refraction_screen_size,
+						vec2(0.001),
+						vec2(0.999)
+					);
 				if (underwater_debug_mode == 10 && underwater_snell_active) {
 					vec2 micro_base_uv = clamp(
 						SCREEN_UV + refraction_final_offset_px / refraction_screen_size,
@@ -3589,23 +3613,31 @@ void fragment() {
 					vec3 micro_shifted_color = textureLod(screen_texture, final_refracted_uv, 0.0).rgb;
 					snell_micro_sample_delta = abs(micro_shifted_color - micro_base_color);
 				}
-				refraction_background_uv = final_refracted_uv;
-				if (water_optics_debug_mode == 40) {
-					// Diagnostic only: prove the displaced coordinate reads the real
-					// pre-water screen color, at full resolution and without composition.
-					refraction_background_only = textureLod(
-						screen_texture,
-						refraction_background_uv,
-						0.0
-					).rgb;
-				}
+				float refraction_sample_lod = underwater_snell_active
+					? min(transmission_lod, SNELL_TRANSMISSION_MAX_LOD)
+					: transmission_lod;
 				vec3 refracted_scene = textureLod(
 					screen_texture,
 					final_refracted_uv,
-					underwater_snell_active
-						? min(transmission_lod, SNELL_TRANSMISSION_MAX_LOD)
-						: transmission_lod
+					refraction_sample_lod
 				).rgb;
+				if (sky_refraction_active) {
+					vec3 sky_fallback_color = textureLod(
+						screen_texture,
+						clamp(SCREEN_UV, vec2(0.002), vec2(0.998)),
+						refraction_sample_lod
+					).rgb;
+					refracted_scene = mix(
+						sky_fallback_color,
+						refracted_scene,
+						sky_refraction_validity
+					);
+				}
+				// Debug 40 shows the effective screen sample, including the safe
+				// sky fallback, so edge validity cannot reveal a viewport rectangle.
+				if (water_optics_debug_mode == 40) {
+					refraction_background_only = refracted_scene;
+				}
 				float bottom_luma = dot(
 					max(refracted_scene, vec3(0.0)),
 					vec3(0.2126, 0.7152, 0.0722)
