@@ -390,6 +390,8 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Sun Rays")
+## Sunrays V4 uses the organic caustics texture at the reconstructed light entry.
+## Wave/lattice-era controls below remain serialized for scene compatibility but are inactive in V4.
 @export var underwater_sunrays_enabled := true:
 	set(value):
 		underwater_sunrays_enabled = value
@@ -1626,6 +1628,7 @@ func _sync_underwater_manager() -> void:
 			"sunrays_pattern_scale": underwater_sunrays_pattern_scale,
 			"sunrays_pattern_contrast": underwater_sunrays_pattern_contrast,
 			"sunrays_animation_speed": underwater_sunrays_animation_speed,
+			"sunrays_pattern_texture": _active_caustics_texture(),
 			"sunrays_wave_modulation_enabled": underwater_sunrays_wave_modulation_enabled,
 			"sunrays_wave_animation_speed": underwater_sunrays_wave_animation_speed,
 			"sunrays_wave_freeze": underwater_sunrays_wave_freeze,
