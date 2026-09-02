@@ -98,6 +98,9 @@ var _configuration_requested := false
 var _particles_created := false
 var _field_published := false
 var _camera_underwater := false
+var _performance_enabled := true
+var _performance_field_enabled := true
+var _performance_particles_enabled := true
 var _update_accumulator := 0.0
 var _completed_read_index := 0
 var _published_dispatch_serial := 0
@@ -199,6 +202,10 @@ func _print_bathymetry_wait_diagnostic() -> void:
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
+	if not _performance_enabled:
+		_apply_particle_visibility()
+		_update_field_debug_visual()
+		return
 	if not _configuration_requested:
 		_report_test_blocked_once("not configured")
 		return
@@ -225,11 +232,15 @@ func _process(delta: float) -> void:
 		return
 	_set_emitter_from_camera()
 	if _field.ready and _field.has_valid_rids():
-		_publish_completed_field()
-		if not _particles_created and _field_published:
+		if _performance_field_enabled:
+			_publish_completed_field()
+		if not _particles_created and _field_published and _performance_particles_enabled:
 			_ensure_particles()
 			_print_init_diagnostic()
-		_update_particles()
+		if _performance_particles_enabled:
+			_update_particles()
+		else:
+			_apply_particle_visibility()
 		_update_field_debug_visual()
 	elif not _field.ready and not _field.last_error.is_empty() and not _init_failure_reported:
 		if _field.last_error.begins_with("RenderingDevice global"):
@@ -249,7 +260,7 @@ func _process(delta: float) -> void:
 	if _runtime_injection_requested:
 		_request_test_injection()
 	var hz := sediment_update_hz if _camera_underwater else sediment_air_update_hz
-	if not sediment_enabled or not _field.ready or not _field.has_valid_rids() or _dispatch_queued:
+	if not sediment_enabled or not _performance_field_enabled or not _field.ready or not _field.has_valid_rids() or _dispatch_queued:
 		return
 	_update_accumulator += maxf(delta, 0.0)
 	var period := 1.0 / maxf(hz, 1.0)
@@ -265,7 +276,18 @@ func set_camera_underwater(camera_underwater: bool) -> void:
 	_apply_particle_visibility()
 
 
+func set_performance_gates(master_enabled: bool, field_enabled: bool, particles_enabled: bool) -> void:
+	_performance_enabled = master_enabled
+	_performance_field_enabled = field_enabled
+	_performance_particles_enabled = particles_enabled
+	_apply_particle_visibility()
+	_update_field_debug_visual()
+	_publish_surface_field_state()
+
+
 func inject_sediment(world_position: Vector3, radius_m: float, strength: float) -> bool:
+	if not _performance_enabled or not _performance_field_enabled:
+		return false
 	if not _injection_validation(world_position).get("accepted", false):
 		return false
 	var injection := Vector4(world_position.x, world_position.z, maxf(radius_m, 0.05), clampf(strength, 0.0, 1.0))
@@ -544,6 +566,8 @@ func get_debug_state() -> Dictionary:
 
 
 func _dispatch_field(step_delta: float) -> void:
+	if not _performance_enabled or not _performance_field_enabled or not sediment_enabled:
+		return
 	var read_index := _completed_read_index
 	var write_index := 1 - read_index
 	var serial_before := int(_field.diagnostic_state().get("completed_dispatch_serial", 0))
@@ -621,14 +645,18 @@ func _publish_completed_field() -> void:
 			_field.get_texture_rid(_completed_read_index).get_id(),
 		])
 		_pending_dispatch_diagnostic.clear()
+	_publish_surface_field_state()
+
+
+func _publish_surface_field_state() -> void:
 	if _surface == null or not is_instance_valid(_surface):
 		return
 	var material := _surface.get_surface_material()
-	if material == null or material.shader == null:
+	if material == null or material.shader == null or not _field_published:
 		return
 	_surface.set_sediment_field(
 		_field_texture,
-		sediment_enabled,
+		sediment_enabled and _performance_enabled,
 		_field_origin(),
 		_field_extent(),
 		sediment_above_water_optics_strength,
@@ -887,8 +915,9 @@ func _apply_particle_counts() -> void:
 
 func _apply_particle_visibility() -> void:
 	var particle_debug := _is_particle_debug_mode()
-	var clouds_visible := sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_cloud_strength > 0.0)
-	var wisps_visible := sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_wisp_strength > 0.0)
+	var particles_active := _performance_enabled and _performance_particles_enabled
+	var clouds_visible := particles_active and sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_cloud_strength > 0.0)
+	var wisps_visible := particles_active and sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_wisp_strength > 0.0)
 	if _cloud_particles != null:
 		_cloud_particles.emitting = clouds_visible
 		_cloud_particles.visible = clouds_visible
@@ -1071,7 +1100,7 @@ func _particle_visibility_aabb() -> AABB:
 
 func _update_field_debug_visual() -> void:
 	var enabled := (sediment_debug_mode == DebugMode.FIELD_UNDERWATER or sediment_debug_mode == DebugMode.FIELD_UV) \
-		and _field_published and _last_test_target_valid
+		and _performance_enabled and _field_published and _last_test_target_valid
 	if not enabled:
 		if _field_debug_mesh != null and is_instance_valid(_field_debug_mesh):
 			_field_debug_mesh.visible = false

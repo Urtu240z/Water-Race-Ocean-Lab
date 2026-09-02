@@ -62,6 +62,7 @@ var _near_render_material: ShaderMaterial
 var _process_shader: Shader
 var _render_shader: Shader
 var _underwater := false
+var _performance_enabled := true
 var _camera: Camera3D
 var _last_camera_position := Vector3.ZERO
 var _camera_velocity := Vector3.ZERO
@@ -95,6 +96,9 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
+	if not _performance_enabled:
+		_apply_state(false)
+		return
 	var active_camera := get_viewport().get_camera_3d()
 	if active_camera == null:
 		_apply_state(false)
@@ -124,6 +128,15 @@ func _process(_delta: float) -> void:
 		_configure_particles()
 	_update_process_uniforms()
 	_apply_state(_underwater)
+
+
+func set_performance_enabled(value: bool) -> void:
+	if _performance_enabled == value:
+		return
+	_performance_enabled = value
+	if not Engine.is_editor_hint():
+		set_process(value)
+	_apply_state(_underwater if value else false)
 
 
 func set_underwater_state(camera_underwater: bool) -> void:
@@ -321,7 +334,7 @@ func _update_process_uniforms() -> void:
 func _apply_state(camera_underwater: bool) -> void:
 	if _fine_particles == null or _near_particles == null:
 		return
-	var should_emit := underwater_particles_enabled and camera_underwater
+	var should_emit := _performance_enabled and underwater_particles_enabled and camera_underwater
 	var fine_should_emit := should_emit and _benchmark_fine_enabled
 	var near_should_emit := should_emit and _benchmark_near_enabled
 	var debug_changed := particles_position_debug != _last_debug

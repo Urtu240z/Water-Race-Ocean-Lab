@@ -276,7 +276,10 @@ void main() {
 	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 46;
 	bool exaggerated = debug_mode == 22;
 	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || (debug_mode >= 23 && debug_mode <= 29) || exaggerated;
-	if (params.sunrays.x > 0.5 || sunrays_debug) {
+	// The runtime performance gate is encoded in sunrays.x. Keep this as a real
+	// branch so disabling sunrays skips the slab/beam integration entirely,
+	// including debug-forced sunray work.
+	if (params.sunrays.x > 0.5) {
 		vec3 ray_reference_world = vec3(0.0);
 		bool ray_reference_valid = reconstruct_world(uv, 0.0, ray_reference_world);
 		vec3 view_ray_world = ray_reference_world - params.camera.xyz;

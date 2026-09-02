@@ -110,6 +110,43 @@ var _performance_overlay_label: Label
 	set(value):
 		perf_enable_refraction = value
 		_request_performance_sync()
+@export_subgroup("Underwater")
+@export var perf_enable_underwater_medium := true:
+	set(value):
+		perf_enable_underwater_medium = value
+		_request_performance_sync()
+@export var perf_enable_underwater_sunrays := true:
+	set(value):
+		perf_enable_underwater_sunrays = value
+		_request_performance_sync()
+@export var perf_enable_underwater_caustics := true:
+	set(value):
+		perf_enable_underwater_caustics = value
+		_request_performance_sync()
+@export var perf_enable_underwater_particles := true:
+	set(value):
+		perf_enable_underwater_particles = value
+		_request_performance_sync()
+@export var perf_enable_underwater_sediment := true:
+	set(value):
+		perf_enable_underwater_sediment = value
+		_request_performance_sync()
+@export var perf_enable_underwater_sediment_field := true:
+	set(value):
+		perf_enable_underwater_sediment_field = value
+		_request_performance_sync()
+@export var perf_enable_underwater_sediment_particles := true:
+	set(value):
+		perf_enable_underwater_sediment_particles = value
+		_request_performance_sync()
+@export var perf_enable_underwater_snell_tir := true:
+	set(value):
+		perf_enable_underwater_snell_tir = value
+		_request_performance_sync()
+@export var perf_enable_water_lens_fx := true:
+	set(value):
+		perf_enable_water_lens_fx = value
+		_request_performance_sync()
 @export var perf_overlay_enabled := false:
 	set(value):
 		perf_overlay_enabled = value
@@ -1549,7 +1586,7 @@ func _ready() -> void:
 		_caustics_manager = CAUSTICS_MANAGER_SCRIPT.new()
 		_caustics_manager.name = &"OceanCausticsManager"
 		add_child(_caustics_manager)
-		_caustics_manager.configure(self, _surface_sea_level(), caustics_enabled,
+		_caustics_manager.configure(self, _surface_sea_level(), caustics_enabled and perf_enable_underwater_caustics,
 			_active_caustics_texture(), _active_caustics_luma_gradient(), caustics_scale,
 			caustics_speed, caustics_strength, caustics_power, caustics_chroma_split,
 			caustics_layer_a_speed_multiplier, caustics_layer_b_speed_multiplier,
@@ -1633,10 +1670,11 @@ func _sync_underwater_manager() -> void:
 	if _water_lens_fx != null and is_instance_valid(_water_lens_fx):
 		# The existing binary state is the sole authority. Lens FX only consumes
 		# the transition and never queries FFT/OceanQuery.
+		_water_lens_fx.set_performance_enabled(perf_enable_water_lens_fx)
 		_water_lens_fx.set_medium_state(_camera_underwater)
 	if _underwater_manager != null and is_instance_valid(_underwater_manager):
 		_underwater_manager.set_settings({
-			"enabled": underwater_enabled,
+			"enabled": underwater_enabled and perf_enable_underwater_medium,
 			"sea_level": _surface_sea_level(),
 			"camera_underwater": _camera_underwater,
 			"camera_factor": _underwater_factor,
@@ -1651,7 +1689,7 @@ func _sync_underwater_manager() -> void:
 			"light_into_water": _light_into_water_world,
 			"sun_color": _sun_color * underwater_sunrays_color,
 			"sun_energy": _sun_energy,
-			"sunrays_enabled": underwater_sunrays_enabled,
+			"sunrays_enabled": underwater_sunrays_enabled and perf_enable_underwater_sunrays,
 			"sunrays_strength": underwater_sunrays_strength,
 			"sunrays_anisotropy": underwater_sunrays_anisotropy,
 			"sunrays_density": underwater_sunrays_density,
@@ -1670,7 +1708,7 @@ func _sync_underwater_manager() -> void:
 			"sunrays_segment_mode": underwater_sunrays_segment_mode,
 			"sunrays_time": SimulationClock.get_render_time(),
 			"sunrays_tap_count": _underwater_sunrays_benchmark_tap_count,
-			"snell_enabled": underwater_snell_enabled,
+			"snell_enabled": underwater_snell_enabled and perf_enable_underwater_snell_tir,
 			"water_ior": underwater_water_ior,
 			"snell_strength": underwater_snell_strength,
 			"tir_strength": underwater_tir_strength,
@@ -1679,15 +1717,19 @@ func _sync_underwater_manager() -> void:
 		# The existing binary camera state is the only activation authority for
 		# suspended particles. The component owns presentation and camera-relative
 		# movement; it never queries the ocean simulation.
+		_underwater_particles.call("set_performance_enabled", perf_enable_underwater_particles)
 		_underwater_particles.call("set_underwater_state", _camera_underwater)
 	if _sediment_system != null and is_instance_valid(_sediment_system):
+		_sediment_system.call("set_performance_gates", perf_enable_underwater_sediment,
+			perf_enable_underwater_sediment_field, perf_enable_underwater_sediment_particles)
 		_sediment_system.call("set_camera_underwater", _camera_underwater)
 	var surface := get_node_or_null(^"OpenOceanFFT/OceanClipmapSurface") as OceanClipmapSurface
 	var surface_material := surface.get_surface_material() if surface != null else null
 	if surface_material != null and is_instance_valid(surface_material):
+		var effective_snell_enabled := underwater_snell_enabled and perf_enable_underwater_snell_tir
 		var surface_state_changed := not _underwater_surface_state_initialized \
 			or _underwater_surface_camera_active != _camera_underwater \
-			or _underwater_surface_snell_enabled != underwater_snell_enabled \
+			or _underwater_surface_snell_enabled != effective_snell_enabled \
 			or not is_equal_approx(_underwater_surface_water_ior, underwater_water_ior) \
 			or not is_equal_approx(_underwater_surface_snell_strength, underwater_snell_strength) \
 			or not is_equal_approx(_underwater_surface_tir_strength, underwater_tir_strength) \
@@ -1706,7 +1748,7 @@ func _sync_underwater_manager() -> void:
 		# Camera medium state changes every frame as the camera crosses the
 		# hysteresis band; keep the surface's Snell branch in lockstep with it.
 		surface_material.set_shader_parameter(&"underwater_camera_active", _camera_underwater)
-		surface_material.set_shader_parameter(&"underwater_snell_enabled", underwater_snell_enabled)
+		surface_material.set_shader_parameter(&"underwater_snell_enabled", effective_snell_enabled)
 		surface_material.set_shader_parameter(&"underwater_water_ior", underwater_water_ior)
 		surface_material.set_shader_parameter(&"underwater_snell_strength", underwater_snell_strength)
 		surface_material.set_shader_parameter(&"underwater_tir_strength", underwater_tir_strength)
@@ -1722,7 +1764,7 @@ func _sync_underwater_manager() -> void:
 		surface_material.set_shader_parameter(&"underwater_debug_mode", underwater_debug_mode)
 		_underwater_surface_state_initialized = true
 		_underwater_surface_camera_active = _camera_underwater
-		_underwater_surface_snell_enabled = underwater_snell_enabled
+		_underwater_surface_snell_enabled = effective_snell_enabled
 		_underwater_surface_water_ior = underwater_water_ior
 		_underwater_surface_snell_strength = underwater_snell_strength
 		_underwater_surface_tir_strength = underwater_tir_strength
@@ -1765,7 +1807,10 @@ func set_performance_profile(profile: Dictionary) -> void:
 	## Applies only the runtime profiling gates. Authored controls remain intact.
 	for key in [
 		"spectral", "coastal", "crest_foam_solver", "surface_foam_solver",
-		"mid_fold_history", "surface_foam_render", "prebreak", "breakers", "sspr", "refraction"
+		"mid_fold_history", "surface_foam_render", "prebreak", "breakers", "sspr", "refraction",
+		"underwater_medium", "underwater_sunrays", "underwater_caustics", "underwater_particles",
+		"underwater_sediment", "underwater_sediment_field", "underwater_sediment_particles",
+		"underwater_snell_tir", "water_lens_fx"
 	]:
 		if profile.has(key):
 			set("perf_enable_%s" % key, bool(profile[key]))
@@ -1858,6 +1903,15 @@ func performance_profile() -> Dictionary:
 		"breakers": perf_enable_breakers,
 		"sspr": perf_enable_sspr,
 		"refraction": perf_enable_refraction,
+		"underwater_medium": perf_enable_underwater_medium,
+		"underwater_sunrays": perf_enable_underwater_sunrays,
+		"underwater_caustics": perf_enable_underwater_caustics,
+		"underwater_particles": perf_enable_underwater_particles,
+		"underwater_sediment": perf_enable_underwater_sediment,
+		"underwater_sediment_field": perf_enable_underwater_sediment_field,
+		"underwater_sediment_particles": perf_enable_underwater_sediment_particles,
+		"underwater_snell_tir": perf_enable_underwater_snell_tir,
+		"water_lens_fx": perf_enable_water_lens_fx,
 	}
 
 
@@ -1870,6 +1924,9 @@ func _full_performance_profile() -> Dictionary:
 		"spectral": true, "coastal": true, "crest_foam_solver": true,
 		"surface_foam_solver": true, "mid_fold_history": true, "surface_foam_render": true,
 		"prebreak": true, "breakers": true, "sspr": true, "refraction": true,
+		"underwater_medium": true, "underwater_sunrays": true, "underwater_caustics": true,
+		"underwater_particles": true, "underwater_sediment": true, "underwater_sediment_field": true,
+		"underwater_sediment_particles": true, "underwater_snell_tir": true, "water_lens_fx": true,
 	}
 
 
@@ -1879,6 +1936,11 @@ func _base_performance_profile() -> Dictionary:
 		"spectral": true, "coastal": false, "crest_foam_solver": false,
 		"surface_foam_solver": false, "mid_fold_history": false, "surface_foam_render": false,
 		"prebreak": false, "breakers": false, "sspr": false, "refraction": false,
+		# Keep underwater authored behaviour unchanged in the existing BASE preset;
+		# these are independent A/B switches, not quality reductions.
+		"underwater_medium": true, "underwater_sunrays": true, "underwater_caustics": true,
+		"underwater_particles": true, "underwater_sediment": true, "underwater_sediment_field": true,
+		"underwater_sediment_particles": true, "underwater_snell_tir": true, "water_lens_fx": true,
 	}
 
 
@@ -1904,6 +1966,8 @@ func _apply_performance_profile() -> void:
 		fft_module.set_performance_profile(performance_profile())
 	if _reflection_sspr_manager != null and is_instance_valid(_reflection_sspr_manager):
 		_reflection_sspr_manager.set_enabled(reflection_sspr_enabled and perf_enable_sspr)
+	_sync_caustics_manager()
+	_sync_underwater_manager()
 	_update_performance_overlay_visibility()
 
 
@@ -1955,6 +2019,13 @@ func _update_performance_overlay() -> void:
 			_on_off(reflection_sspr_kawase_enabled)
 		],
 		"REFRACTION     %s" % _on_off(profile["refraction"]),
+		"UW M:%d SNELL:%d RAYS:%d CAUS:%d PART:%d SED:%d FIELD:%d SEDPART:%d LENS:%d" % [
+			int(perf_enable_underwater_medium), int(perf_enable_underwater_snell_tir),
+			int(perf_enable_underwater_sunrays), int(perf_enable_underwater_caustics),
+			int(perf_enable_underwater_particles), int(perf_enable_underwater_sediment),
+			int(perf_enable_underwater_sediment_field), int(perf_enable_underwater_sediment_particles),
+			int(perf_enable_water_lens_fx),
+		],
 		"FPS %d | Frame %.2f ms" % [fps, frame_ms],
 		"CPU process %.2f ms | physics %.2f ms" % [
 			Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,

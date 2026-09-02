@@ -60,6 +60,7 @@ var _droplets: Array[Dictionary] = []
 var _last_camera_position := Vector3.ZERO
 var _has_camera_position := false
 var _velocity_is_explicit := false
+var _performance_enabled := true
 
 func configure(_ocean: Node) -> void:
 	if not is_inside_tree() or Engine.is_editor_hint(): return
@@ -72,10 +73,11 @@ func set_medium_state(underwater: bool, jetski_velocity: Vector3 = Vector3.ZERO,
 		jetski_vertical_velocity_mps = vertical_velocity_mps if absf(vertical_velocity_mps) > EPSILON else jetski_velocity.y
 		_velocity_is_explicit = true
 	if underwater == _underwater: return
-	if underwater:
-		_on_entry()
-	else:
-		_on_exit()
+	if _performance_enabled:
+		if underwater:
+			_on_entry()
+		else:
+			_on_exit()
 	_underwater = underwater
 
 func set_jetski_velocity(velocity: Vector3) -> void:
@@ -86,7 +88,16 @@ func set_jetski_velocity(velocity: Vector3) -> void:
 func set_enabled(value: bool) -> void:
 	enabled = value
 	if _effect != null:
-		_effect.enabled = value and (lens_wetness > EPSILON or _entry_elapsed < 1.0 or _exit_elapsed < 1.0)
+		_effect.enabled = _performance_enabled and value and (lens_wetness > EPSILON or _entry_elapsed < 1.0 or _exit_elapsed < 1.0)
+
+func set_performance_enabled(value: bool) -> void:
+	if _performance_enabled == value:
+		return
+	_performance_enabled = value
+	if not Engine.is_editor_hint():
+		set_process(value)
+	if _effect != null:
+		_effect.enabled = _performance_enabled and enabled and (lens_wetness > EPSILON or _entry_elapsed < 1.0 or _exit_elapsed < 1.0)
 
 func _ready() -> void:
 	if not Engine.is_editor_hint():
@@ -123,6 +134,10 @@ func _initialize() -> void:
 
 func _process(delta: float) -> void:
 	if Engine.is_editor_hint() or not _attached: return
+	if not _performance_enabled:
+		if _effect != null:
+			_effect.enabled = false
+		return
 	_time_s += maxf(delta, 0.0)
 	_sim_accumulator += maxf(delta, 0.0)
 	var camera := get_viewport().get_camera_3d()
@@ -217,7 +232,7 @@ func _publish_frame() -> void:
 	if _effect == null: return
 	# The stable underwater medium does not need a wet-lens pass. Once the entry
 	# impulse has decayed, the compositor sleeps until exit wetness or a new event.
-	var active := enabled and (lens_wetness > EPSILON or _entry_elapsed < 1.0 or _exit_elapsed < 1.0)
+	var active := _performance_enabled and enabled and (lens_wetness > EPSILON or _entry_elapsed < 1.0 or _exit_elapsed < 1.0)
 	_effect.enabled = active
 	if not active: return
 	var camera := get_viewport().get_camera_3d()

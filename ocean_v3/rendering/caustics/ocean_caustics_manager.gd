@@ -112,7 +112,7 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-	if _effect == null:
+	if _effect == null or not _enabled:
 		return
 	_push_settings()
 	_effect.set_time(_time)
@@ -120,6 +120,7 @@ func _process(_delta: float) -> void:
 
 func _push_settings() -> void:
 	if _effect != null:
+		_effect.enabled = _enabled
 		_effect.set_settings(_enabled, _sea_level, _texture, _luma_gradient, _scale,
 			_speed, _strength, _power, _chroma_split, _layer_a_speed_multiplier,
 			_layer_b_speed_multiplier, _layer_a_scale_multiplier, _layer_b_scale_multiplier,
