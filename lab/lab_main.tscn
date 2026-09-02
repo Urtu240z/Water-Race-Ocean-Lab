@@ -176,6 +176,7 @@ bottom_visibility_fade_end_m = 41.1
 seabed_match_tolerance_start_m = 0.0
 seabed_match_tolerance_end_m = 22.85
 shallow_fresnel_depth_end_m = 48.6
+caustics_enabled = true
 caustics_texture = ExtResource("9_35bca")
 caustics_scale = 46.0
 caustics_strength = 1.44
@@ -197,11 +198,14 @@ reflection_near_ssr_quality = 2
 reflection_radiance_exposure_ev = -1.5
 reflection_radiance_saturation = 0.36
 reflection_screen_space_weight = 0.55
-foam_color = Color(2.3958, 3.4121144, 3.4269989, 1)
-foam_intensity = 4.0
+reflection_environment_specular_boost = 0.65
+foam_color = Color(3.427, 3.427, 3.427, 1)
+foam_intensity = 0.96
 foam_fresh_color = Color(0.6971579, 0.7115656, 0.70580256, 1)
-foam_residual_color = Color(0.49183583, 0.6706126, 0.65739405, 1)
+foam_residual_color = Color(1, 1, 1, 1)
+foam_fresh_strength = 0.0
 foam_residual_decay_multiplier = 0.2
+crest_foam_update_hz = 30
 foam_contrast = 1.1900000000000002
 foam_roughness = 0.27
 foam_distance_fade_start = 0.0
@@ -211,19 +215,19 @@ crest_filigree_whitecap = 0.4
 crest_fresh_filigree_strength = 0.5
 crest_residual_filigree_strength = 0.62
 crest_filigree_normal_influence = 0.0
-surface_foam_stochastic_cell_size_m = 55.0
-surface_foam_whitecap = 0.49
+surface_foam_whitecap = 0.58
 surface_foam_topology_resolution = 512
-surface_foam_update_hz = 60
 surface_foam_evolution_speed = 0.59
 surface_foam_strength = 2.52
 surface_foam_threshold_visual = 0.11
 surface_foam_mid_fold_start = 0.0
 surface_foam_mid_fold_end = 1.0
+surface_foam_color = Color(0.8954583, 0.9249786, 0.9149783, 1)
 surface_foam_specular = 0.37
 surface_foam_source_domain_m = 14.5
-surface_foam_wind_speed_mps = 9.0
+surface_foam_directional_spread = 0.11
 surface_foam_micro_detail_enabled = false
+surface_foam_micro_strength = 1.0
 
 [node name="OceanClipmapSurface" parent="OceanV3Mount/OceanV3/OpenOceanFFT" parent_id_path=PackedInt32Array(1474607840, 396589776) index="0" unique_id=140669600]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 398.43634, 0, 107.41211)
@@ -231,7 +235,6 @@ clipmap_config = SubResource("Resource_ody2a")
 
 [node name="OceanUnderwaterParticles" parent="OceanV3Mount/OceanV3" index="2"]
 top_level = true
-underwater_particles_enabled = false
 underwater_particles_fine_amount = 10000
 underwater_particles_near_amount = 6000
 underwater_particles_fine_strength = 8.0
@@ -249,7 +252,6 @@ underwater_particles_fine_size_scale = 2.15
 underwater_particles_near_size_scale = 1.35
 
 [node name="OceanSedimentSystem" parent="OceanV3Mount/OceanV3" index="3"]
-sediment_enabled = false
 sediment_shallow_start_m = 15.5
 sediment_shallow_end_m = 20.0
 sediment_wave_resuspension_strength = 4.0
