@@ -757,6 +757,9 @@ func _create_process_material(layer_seed: float, height_min: float, height_max: 
 func _create_render_material(is_wisps: bool) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = _render_shader
+	# Draw after the ocean's transparent surface so the depth published by the
+	# sediment billboards is the depth seen by the post-transparent medium pass.
+	material.render_priority = 127
 	material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 	material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 	material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())

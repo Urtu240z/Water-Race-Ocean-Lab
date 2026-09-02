@@ -1,8 +1,10 @@
 shader_type spatial;
 
-// Depth testing is disabled so fragments behind the seabed reach the shader;
-// geometry_edge_softness_m then fades them against the sampled scene depth.
-render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, depth_test_disabled, shadows_disabled;
+// Keep depth testing disabled so the billboard remains visible, but publish
+// its depth in the transparent pass. The post-transparent underwater medium
+// then attenuates the particle using its own path instead of the background
+// depth behind each pixel, eliminating background-dependent cutouts.
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_always, depth_test_disabled, shadows_disabled;
 
 uniform sampler2D sediment_field_texture : repeat_disable, filter_linear;
 uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
@@ -82,6 +84,9 @@ void fragment() {
 		float filament = 1.0 - smoothstep(0.18, 0.72, abs(centered_uv.y + 0.18 * sin(centered_uv.x * 4.0)));
 		soft_shape *= filament;
 	}
+	// Do not publish depth for fully transparent billboard pixels. This keeps
+	// the medium's depth input particle-shaped instead of rectangular.
+	if (soft_shape <= 0.001) discard;
 	if (debug_mode == 1) {
 		// Stage 2: process-shader candidates only. Do not sample the field or use
 		// production density/alpha, so a missing candidate cannot be mistaken for

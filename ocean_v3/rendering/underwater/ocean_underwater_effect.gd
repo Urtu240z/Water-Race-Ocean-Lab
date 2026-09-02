@@ -11,6 +11,7 @@ var _shader := RID()
 var _pipeline := RID()
 var _depth_sampler := RID()
 var _params_buffer := RID()
+var _pipeline_init_failed := false
 var _mutex := Mutex.new()
 var _enabled := true
 var _sea_level := 0.0
@@ -116,6 +117,7 @@ func get_dispatch_count() -> int:
 	return count
 
 func free_resources() -> void:
+	_pipeline_init_failed = false
 	if _rd == null: return
 	if _pipeline.is_valid(): _rd.free_rid(_pipeline)
 	_pipeline = RID()
@@ -127,11 +129,20 @@ func free_resources() -> void:
 	_params_buffer = RID()
 
 func _ensure_pipeline() -> bool:
+	if _pipeline_init_failed: return false
 	if _pipeline.is_valid() and _depth_sampler.is_valid() and _params_buffer.is_valid(): return true
 	var shader_file := load(SHADER_PATH) as RDShaderFile
 	if shader_file == null: return false
-	_shader = _rd.shader_create_from_spirv(shader_file.get_spirv(), "OceanUnderwater.Medium")
-	if not _shader.is_valid(): return false
+	var spirv: RDShaderSPIRV = shader_file.get_spirv()
+	var compile_error: String = spirv.get_stage_compile_error(RenderingDevice.SHADER_STAGE_COMPUTE)
+	if not compile_error.is_empty():
+		_pipeline_init_failed = true
+		push_error("OceanUnderwater.Medium shader compile failed: " + compile_error)
+		return false
+	_shader = _rd.shader_create_from_spirv(spirv, "OceanUnderwater.Medium")
+	if not _shader.is_valid():
+		_pipeline_init_failed = true
+		return false
 	_pipeline = _rd.compute_pipeline_create(_shader)
 	var depth_sampler_state := RDSamplerState.new()
 	depth_sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR

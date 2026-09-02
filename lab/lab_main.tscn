@@ -264,8 +264,7 @@ sediment_fade_out_seconds = 5.0
 sediment_geometry_edge_softness_m = 4.0
 sediment_distance_fade_start_m = 200.0
 sediment_distance_fade_end_m = 240.0
-sediment_optical_compensation_enabled = true
-sediment_optical_compensation_max = 4.0
+sediment_optical_compensation_enabled = false
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
