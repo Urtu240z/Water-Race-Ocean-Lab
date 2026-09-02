@@ -23,6 +23,10 @@ layout(set = 0, binding = 3, std140) uniform Params {
 } params;
 
 const float EPSILON = 0.00001;
+const float TAP_0 = 0.125;
+const float TAP_1 = 0.375;
+const float TAP_2 = 0.625;
+const float TAP_3 = 0.875;
 
 bool finite_vec3(vec3 value) {
 	return !any(isnan(value)) && !any(isinf(value));
@@ -104,6 +108,31 @@ float sunrays_pattern(vec3 light_entry) {
 	return mix(0.5, 0.35 + 0.65 * shaped, contrast);
 }
 
+bool evaluate_sunray_tap(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
+		float sea_level, vec3 light_into_water, vec3 absorption, float absorption_scale,
+		float tap_fraction, out vec3 sample_point, out vec3 light_entry,
+		out vec3 sun_transmittance, out float pattern) {
+	sample_point = camera_world + view_ray_world * (sunray_segment_m * tap_fraction);
+	light_entry = vec3(0.0);
+	sun_transmittance = vec3(0.0);
+	pattern = 0.0;
+	if (sunray_segment_m <= EPSILON || !finite_vec3(sample_point)) return false;
+	if (sample_point.y > sea_level + EPSILON || !finite_vec3(light_into_water)) return false;
+	vec3 toward_surface = -light_into_water;
+	float denom = toward_surface.y;
+	if (abs(denom) <= EPSILON) return false;
+	float light_distance = (sea_level - sample_point.y) / denom;
+	if (light_distance < 0.0 || isnan(light_distance) || isinf(light_distance)) return false;
+	light_entry = sample_point + toward_surface * light_distance;
+	if (!finite_vec3(light_entry) || abs(light_entry.y - sea_level) > 0.01) return false;
+	float sun_water_path = length(sample_point - light_entry);
+	if (isnan(sun_water_path) || isinf(sun_water_path)) return false;
+	sun_transmittance = exp(-max(absorption, vec3(0.0)) * max(absorption_scale, 0.0) * sun_water_path);
+	if (!finite_vec3(sun_transmittance)) return false;
+	pattern = sunrays_pattern(light_entry);
+	return !isnan(pattern) && !isinf(pattern);
+}
+
 void main() {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 size = ivec2(params.viewport.xy);
@@ -153,9 +182,10 @@ void main() {
 	float sunray_segment_source_debug = 0.0; // 1 analytic sea plane, 2 scene depth, 3 max distance
 	vec3 sample_point_debug = vec3(0.0);
 	vec3 light_entry_debug = vec3(0.0);
-	vec3 sun_transmittance_debug = vec3(0.0);
+	vec3 organic_field_integral = vec3(0.0);
 	bool sample_point_valid = false;
 	bool light_entry_valid = false;
+	int valid_tap_count = 0;
 	vec3 view_ray_debug = vec3(0.0);
 	bool view_ray_valid = false;
 	vec3 sunray_contribution = vec3(0.0);
@@ -186,42 +216,62 @@ void main() {
 			sunray_segment_debug_m = sunray_segment_m;
 
 			if (sunray_segment_m > EPSILON && light_valid) {
-				// V4 uses one deterministic representative point: the segment midpoint.
-				float sample_distance = sunray_segment_m * 0.5;
-				vec3 sample_point = params.camera.xyz + view_ray_world * sample_distance;
-				sample_point_valid = finite_vec3(sample_point)
-					&& sample_point.y <= params.medium.x + EPSILON;
-				sample_point_debug = sample_point;
-				vec3 toward_surface = -light_into_water;
-				float denom = toward_surface.y;
-				if (sample_point_valid && abs(denom) > EPSILON) {
-					float light_distance = (params.medium.x - sample_point.y) / denom;
-					vec3 light_entry = sample_point + toward_surface * light_distance;
-					light_entry_valid = light_distance >= 0.0 && !isnan(light_distance)
-						&& !isinf(light_distance) && finite_vec3(light_entry)
-						&& abs(light_entry.y - params.medium.x) <= 0.01;
-					if (light_entry_valid) {
-						light_entry_debug = light_entry;
-						float sun_water_path = length(sample_point - light_entry);
-						if (!isnan(sun_water_path) && !isinf(sun_water_path)) {
-							sun_transmittance_debug = exp(-max(params.absorption.rgb, vec3(0.0))
-								* max(params.medium.w, 0.0) * sun_water_path);
-							if (!finite_vec3(sun_transmittance_debug)) sun_transmittance_debug = vec3(0.0);
-							phase_response = sunrays_phase_response(
-								normalize(params.camera.xyz - sample_point), light_into_water);
-							float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * sunray_segment_m);
-							float far_fade = 1.0 - smoothstep(max_sunray_distance * 0.35,
-								max_sunray_distance, sunray_segment_m);
-							depth_response = clamp(build_up * far_fade, 0.0, 1.0);
-							pattern_debug = sunrays_pattern(light_entry);
-							vec3 sunray_color = params.sun_color.rgb * max(params.light.w, 0.0)
-								* params.state.x * max(params.sunrays.y, 0.0) * phase_response
-								* depth_response * pattern_debug * sun_transmittance_debug;
-							float sunray_luma = dot(sunray_color, vec3(0.2126, 0.7152, 0.0722));
-							if (sunray_luma > 0.75) sunray_color *= 0.75 / sunray_luma;
-							sunray_contribution = max(sunray_color, vec3(0.0));
-						}
-					}
+				// V4.1 samples the continuous light-entry field at four stratified
+				// positions. Every Pi reconstructs its own Ei; no discretisation grid is involved.
+				phase_response = sunrays_phase_response(-view_ray_world, light_into_water);
+				vec3 tap_point_0; vec3 tap_point_1; vec3 tap_point_2; vec3 tap_point_3;
+				vec3 tap_entry_0; vec3 tap_entry_1; vec3 tap_entry_2; vec3 tap_entry_3;
+				vec3 tap_transmittance_0; vec3 tap_transmittance_1;
+				vec3 tap_transmittance_2; vec3 tap_transmittance_3;
+				float tap_pattern_0; float tap_pattern_1; float tap_pattern_2; float tap_pattern_3;
+				bool tap_valid_0 = evaluate_sunray_tap(params.camera.xyz, view_ray_world,
+					sunray_segment_m, params.medium.x, light_into_water, params.absorption.rgb,
+					params.medium.w, TAP_0, tap_point_0, tap_entry_0, tap_transmittance_0, tap_pattern_0);
+				bool tap_valid_1 = evaluate_sunray_tap(params.camera.xyz, view_ray_world,
+					sunray_segment_m, params.medium.x, light_into_water, params.absorption.rgb,
+					params.medium.w, TAP_1, tap_point_1, tap_entry_1, tap_transmittance_1, tap_pattern_1);
+				bool tap_valid_2 = evaluate_sunray_tap(params.camera.xyz, view_ray_world,
+					sunray_segment_m, params.medium.x, light_into_water, params.absorption.rgb,
+					params.medium.w, TAP_2, tap_point_2, tap_entry_2, tap_transmittance_2, tap_pattern_2);
+				bool tap_valid_3 = evaluate_sunray_tap(params.camera.xyz, view_ray_world,
+					sunray_segment_m, params.medium.x, light_into_water, params.absorption.rgb,
+					params.medium.w, TAP_3, tap_point_3, tap_entry_3, tap_transmittance_3, tap_pattern_3);
+				valid_tap_count = (tap_valid_0 ? 1 : 0) + (tap_valid_1 ? 1 : 0)
+					+ (tap_valid_2 ? 1 : 0) + (tap_valid_3 ? 1 : 0);
+				if (tap_valid_0) {
+					sample_point_debug += tap_point_0; light_entry_debug += tap_entry_0;
+					pattern_debug += tap_pattern_0; organic_field_integral += tap_pattern_0 * tap_transmittance_0;
+				}
+				if (tap_valid_1) {
+					sample_point_debug += tap_point_1; light_entry_debug += tap_entry_1;
+					pattern_debug += tap_pattern_1; organic_field_integral += tap_pattern_1 * tap_transmittance_1;
+				}
+				if (tap_valid_2) {
+					sample_point_debug += tap_point_2; light_entry_debug += tap_entry_2;
+					pattern_debug += tap_pattern_2; organic_field_integral += tap_pattern_2 * tap_transmittance_2;
+				}
+				if (tap_valid_3) {
+					sample_point_debug += tap_point_3; light_entry_debug += tap_entry_3;
+					pattern_debug += tap_pattern_3; organic_field_integral += tap_pattern_3 * tap_transmittance_3;
+				}
+				if (valid_tap_count > 0) {
+					float valid_tap_weight = 1.0 / float(valid_tap_count);
+					sample_point_debug *= valid_tap_weight;
+					light_entry_debug *= valid_tap_weight;
+					pattern_debug *= valid_tap_weight;
+					organic_field_integral *= valid_tap_weight;
+					sample_point_valid = true;
+					light_entry_valid = true;
+					float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * sunray_segment_m);
+					float far_fade = 1.0 - smoothstep(max_sunray_distance * 0.35,
+						max_sunray_distance, sunray_segment_m);
+					depth_response = clamp(build_up * far_fade, 0.0, 1.0);
+					vec3 sunray_color = params.sun_color.rgb * max(params.light.w, 0.0)
+						* params.state.x * max(params.sunrays.y, 0.0) * phase_response
+						* depth_response * organic_field_integral;
+					float sunray_luma = dot(sunray_color, vec3(0.2126, 0.7152, 0.0722));
+					if (sunray_luma > 0.75) sunray_color *= 0.75 / sunray_luma;
+					sunray_contribution = max(sunray_color, vec3(0.0));
 				}
 			}
 		}
@@ -237,13 +287,14 @@ void main() {
 	} else if (debug_mode == 13) {
 		color.rgb = vec3(phase_response);
 	} else if (debug_mode == 14 || debug_mode == 23) {
-		color.rgb = vec3(pattern_debug);
+		color.rgb = organic_field_integral;
 	} else if (debug_mode == 15) {
 		color.rgb = vec3(depth_response);
 	} else if (debug_mode == 16 || debug_mode == 22 || debug_mode == 28 || debug_mode == 37 || debug_mode == 38) {
 		color.rgb = sunray_contribution;
 	} else if (debug_mode == 17) {
-		color.rgb = sample_point_valid ? vec3(1.0,
+		// Red reports valid taps / 4; green is their mean segment position.
+		color.rgb = sample_point_valid ? vec3(float(valid_tap_count) / 4.0,
 			clamp(length(sample_point_debug - params.camera.xyz) / max(sunray_segment_debug_m, EPSILON), 0.0, 1.0), 0.0) : vec3(0.0);
 	} else if (debug_mode == 18) {
 		float entry_plane_error = abs(light_entry_debug.y - params.medium.x);
@@ -251,9 +302,9 @@ void main() {
 			? vec3(pattern_debug, clamp(entry_plane_error * 100.0, 0.0, 1.0), 1.0 - pattern_debug)
 			: vec3(0.0);
 	} else if (debug_mode == 20) {
-		color.rgb = light_entry_valid ? vec3(1.0) : vec3(0.0);
+		color.rgb = vec3(float(valid_tap_count) / 4.0);
 	} else if (debug_mode == 21) {
-		color.rgb = sun_transmittance_debug;
+		color.rgb = organic_field_integral;
 	} else if (debug_mode == 31) {
 		color.rgb = scene_valid ? 0.5 + 0.5 * sin(scene_world * vec3(0.071, 0.113, 0.097)) : vec3(0.0);
 	} else if (debug_mode == 32) {
