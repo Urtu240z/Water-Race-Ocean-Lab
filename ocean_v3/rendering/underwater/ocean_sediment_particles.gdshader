@@ -10,7 +10,8 @@ uniform float strength = 1.0;
 uniform float field_threshold = 0.10;
 uniform float field_contrast = 0.75;
 uniform bool wisps = false;
-// 0 = production, 1 = all valid bathymetry candidates, 2 = field match.
+// 0 = production; 1/2 = Stage 2/3 plumbing; 3..6 = production alpha
+// components; 7 = production output exaggerated only.
 uniform int debug_mode = 0;
 
 varying float particle_distance_m;
@@ -66,8 +67,26 @@ void fragment() {
 		float density = smoothstep(field_threshold, 1.0, particle_field_density);
 		density = pow(max(density, 0.0), max(field_contrast, 0.1));
 		float distance_fade = 1.0 - smoothstep(28.0, 42.0, particle_distance_m);
-		float alpha = soft_shape * density * distance_fade * particle_color.a * strength;
-		ALBEDO = particle_color.rgb;
-		ALPHA = clamp(alpha, 0.0, 0.35);
+		float alpha_final = soft_shape * density * distance_fade * particle_color.a * strength;
+		if (debug_mode == 3) {
+			// Component views are white with their real value as opacity. This keeps
+			// zero-valued candidates transparent instead of drawing black quads.
+			ALBEDO = vec3(1.0);
+			ALPHA = clamp(density, 0.0, 1.0);
+		} else if (debug_mode == 4) {
+			ALBEDO = vec3(1.0);
+			ALPHA = clamp(soft_shape, 0.0, 1.0);
+		} else if (debug_mode == 5) {
+			ALBEDO = vec3(1.0);
+			ALPHA = clamp(distance_fade, 0.0, 1.0);
+		} else if (debug_mode == 6) {
+			// Raw production alpha before the safety clamp: no boosted display value.
+			ALBEDO = vec3(1.0);
+			ALPHA = clamp(alpha_final, 0.0, 1.0);
+		} else {
+			float visual_alpha = alpha_final * (debug_mode == 7 ? 5.0 : 1.0);
+			ALBEDO = particle_color.rgb;
+			ALPHA = clamp(visual_alpha, 0.0, 0.35);
+		}
 	}
 }

@@ -469,9 +469,9 @@ var _performance_overlay_label: Label
 		underwater_sunrays_direction_proof_camera_offset_m = clampf(value, 1.0, 20.0)
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR", "SUNRAYS_RECONSTRUCTED_WORLD", "SUNRAYS_VIEW_RAY") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 30)
+		underwater_debug_mode = clampi(value, 0, 32)
 		if underwater_debug_mode != 19:
 			_sun_vector_diagnostic_printed = false
 		_request_visual_sync()
@@ -1611,7 +1611,7 @@ func _sync_underwater_manager() -> void:
 			"scattering_density": underwater_scattering_density,
 			"max_distance": underwater_max_optical_distance_m,
 			"debug_mode": underwater_debug_mode,
-			"sun_direction": _sun_direction_world,
+			"light_into_water": _light_into_water_world,
 			"sun_color": _sun_color * underwater_sunrays_color,
 			"sun_energy": _sun_energy,
 			"sunrays_enabled": underwater_sunrays_enabled,

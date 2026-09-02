@@ -13,7 +13,7 @@ layout(set = 0, binding = 2, std140) uniform Params {
 	vec4 absorption; // rgb, scattering strength
 	vec4 scattering; // rgb, scattering density
 	vec4 state; // underwater factor, debug mode, enabled, wave modulation enabled
-	vec4 sun; // direction from the water toward the sun, energy
+	vec4 light; // xyz physical photon travel: sun -> water, w energy
 	vec4 sun_color; // rgb, wave intensity strength
 	vec4 sunrays; // enabled, strength, anisotropy, density
 	vec4 sunrays_pattern; // scale, contrast, animation speed, time
@@ -30,12 +30,11 @@ bool finite_vec3(vec3 value) {
 }
 
 bool reconstruct_world(vec2 uv, float raw_depth, out vec3 world_position) {
-	// imageStore/texelFetch addresses rows from the render target, while the
-	// camera projection receives NDC Y with the opposite orientation. Without
-	// this conversion the compositor samples a vertically mirrored world point:
-	// light-space bands then mirror the real DirectionalLight guide on screen.
-	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-	vec4 world = params.inverse_view_projection * vec4(ndc, raw_depth, 1.0);
+	// The render projection already carries Godot's backend Y correction. UV
+	// identifies the current color pixel, so it must map directly to its NDC
+	// ray. Flipping NDC Y here mirrors the ray while pitching the camera and
+	// makes world-anchored slabs swim independently of scene depth.
+	vec4 world = params.inverse_view_projection * vec4(uv * 2.0 - 1.0, raw_depth, 1.0);
 	if (abs(world.w) <= EPSILON) return false;
 	world_position = world.xyz / world.w;
 	return finite_vec3(world_position);
@@ -80,13 +79,14 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv) {
 	return camera_below ? surface_distance : ray_length - surface_distance;
 }
 
-float sunrays_phase_response(vec3 view_dir_world, vec3 sun_direction_world) {
+float sunrays_phase_response(vec3 view_to_camera_dir, vec3 light_into_water) {
 	// Temporary A/B diagnostic. This leaves geometry, slabs and all production
 	// behavior untouched unless explicitly enabled from OceanV3.
 	if (params.sunrays_extra.w > 0.5) return 1.0;
 	// HG keeps the directional lobe cheap while the extra gate makes the back
 	// side effectively dark enough for underwater gameplay.
-	float cos_theta = clamp(dot(view_dir_world, -sun_direction_world), -1.0, 1.0);
+	// Scattering angle between incoming photon travel and outgoing sample-to-camera.
+	float cos_theta = clamp(dot(view_to_camera_dir, light_into_water), -1.0, 1.0);
 	float g = clamp(params.sunrays.z, 0.0, 0.95);
 	float denom = 1.0 + g * g - 2.0 * g * cos_theta;
 	float phase = (1.0 - g * g) / max(pow(denom, 1.5), 0.001);
@@ -96,11 +96,11 @@ float sunrays_phase_response(vec3 view_dir_world, vec3 sun_direction_world) {
 	return clamp(phase / max(forward_phase, 0.001) * forward_gate, 0.0, 1.0);
 }
 
-bool sunrays_beam_coord(vec3 world_position, vec3 toward_sun, out vec2 beam_coord) {
+bool sunrays_beam_coord(vec3 world_position, vec3 light_into_water, out vec2 beam_coord) {
 	// The physical light direction points into the water.  U/V span only the
 	// transverse plane, so P and P + L * d retain the same beam coordinate.
-	vec3 light_into_water = -normalize(toward_sun);
 	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
+	light_into_water = normalize(light_into_water);
 	vec3 reference = abs(light_into_water.y) < 0.98
 		? vec3(0.0, 1.0, 0.0)
 		: vec3(1.0, 0.0, 0.0);
@@ -147,10 +147,10 @@ void sunrays_wave_modulation(vec3 light_entry, vec3 sample_point, out float wave
 	width_factor = clamp(1.0 + centered_focus * width_strength * depth_envelope, 0.60, 1.40);
 }
 
-float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, float width_factor,
+float sunrays_beam_field(vec3 sample_world, vec3 light_into_water, float width_factor,
 		bool exaggerated, out vec2 beam_coord) {
 	beam_coord = vec2(0.0);
-	if (!sunrays_beam_coord(sample_world, toward_sun, beam_coord)) return 0.0;
+	if (!sunrays_beam_coord(sample_world, light_into_water, beam_coord)) return 0.0;
 	float scale = max(params.sunrays_pattern.x, 0.01);
 	// Meter-space ridges: broad 8.7 m shafts, medium 2.9 m shafts, and a
 	// restrained 1.8 m secondary line. The only warp varies slowly across V.
@@ -195,7 +195,7 @@ bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_s
 }
 
 bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
-		float interval_begin_m, float interval_end_m, float sea_level, vec3 toward_sun,
+		float interval_begin_m, float interval_end_m, float sea_level, vec3 light_into_water,
 		vec3 absorption, float absorption_scale, bool exaggerated, out vec3 sample_point,
 		out vec3 light_entry, out vec3 transmittance, out float pattern, out vec2 beam_coord,
 		out float wave_focus, out float wave_width, out float wave_intensity,
@@ -212,25 +212,27 @@ bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
 	wave_intensity = 1.0;
 	direction_alignment = -1.0;
 	if (interval_end_m - interval_begin_m <= EPSILON || !finite_vec3(sample_point)) return false;
-	float denom = toward_sun.y;
-	if (!finite_vec3(toward_sun) || abs(denom) <= EPSILON) return false;
+	if (!finite_vec3(light_into_water) || length(light_into_water) <= EPSILON) return false;
+	light_into_water = normalize(light_into_water);
+	vec3 toward_surface = -light_into_water;
+	float denom = toward_surface.y;
 	float light_distance = (sea_level - sample_point.y) / denom;
 	if (light_distance < 0.0 || isnan(light_distance) || isinf(light_distance)) return false;
-	light_entry = sample_point + toward_sun * light_distance;
+	light_entry = sample_point + toward_surface * light_distance;
 	if (!finite_vec3(light_entry) || abs(light_entry.y - sea_level) > 0.01) return false;
 	float sun_water_path = length(light_entry - sample_point);
 	if (sun_water_path < 0.0 || isnan(sun_water_path) || isinf(sun_water_path)) return false;
-	// light_entry is found by tracing upward toward the sun. The physical path
-	// back into water must therefore be +light_into_water = -toward_sun.
+	// light_entry is found by tracing toward the surface. The physical path
+	// from that entry into water is exactly light_into_water.
 	vec3 actual_travel = normalize(sample_point - light_entry);
-	vec3 expected_travel = -normalize(toward_sun);
+	vec3 expected_travel = light_into_water;
 	direction_alignment = dot(actual_travel, expected_travel);
 	if (direction_alignment < 0.99 || isnan(direction_alignment) || isinf(direction_alignment)) return false;
 	float effective_absorption_scale = max(absorption_scale, 0.0) * (exaggerated ? 0.20 : 1.0);
 	transmittance = exp(-max(absorption, vec3(0.0)) * effective_absorption_scale * sun_water_path);
 	if (!finite_vec3(transmittance)) return false;
 	sunrays_wave_modulation(light_entry, sample_point, wave_focus, wave_width, wave_intensity);
-	pattern = sunrays_beam_field(sample_point, toward_sun, wave_width, exaggerated, beam_coord)
+	pattern = sunrays_beam_field(sample_point, light_into_water, wave_width, exaggerated, beam_coord)
 		* wave_intensity;
 	return !isnan(pattern) && !isinf(pattern);
 }
@@ -251,15 +253,15 @@ void main() {
 	}
 	if (params.camera.w < 0.5) return;
 	if (debug_mode == 19) {
-		vec3 toward_sun = params.sun.xyz;
-		float sun_length = length(toward_sun);
-		bool sun_valid = finite_vec3(toward_sun) && sun_length > EPSILON
-			&& !isnan(sun_length) && !isinf(sun_length);
-		if (sun_valid) toward_sun /= sun_length;
-		vec3 light_into_water = -toward_sun;
+		vec3 light_into_water = params.light.xyz;
+		float light_length = length(light_into_water);
+		bool light_valid = finite_vec3(light_into_water) && light_length > EPSILON
+			&& !isnan(light_length) && !isinf(light_length);
+		if (light_valid) light_into_water /= light_length;
+		vec3 toward_sun = -light_into_water;
 		// Red encodes toward_sun.y and green encodes light_into_water.y;
 		// 0.5 is zero, values above/below it are positive/negative.
-		color.rgb = sun_valid
+		color.rgb = light_valid
 			? vec3(0.5 + 0.5 * toward_sun.y, 0.5 + 0.5 * light_into_water.y, 1.0)
 			: vec3(0.0);
 		imageStore(color_image, pixel, color);
@@ -280,12 +282,14 @@ void main() {
 	float wave_width_debug = 1.0;
 	float wave_modulation_debug = 1.0;
 	float direction_alignment_debug = -1.0;
+	vec3 view_ray_debug = vec3(0.0);
+	bool view_ray_debug_valid = false;
 	vec3 sample_point_debug = vec3(0.0);
 	vec3 light_entry_debug = vec3(0.0);
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 30;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 32;
 	bool exaggerated = debug_mode == 22;
 	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode >= 23 || exaggerated;
 	int tap_count = int(params.sunrays_extra.y + 0.5);
@@ -301,23 +305,22 @@ void main() {
 			&& !isnan(view_ray_length) && !isinf(view_ray_length);
 		if (view_valid) {
 			view_ray_world /= view_ray_length;
-			vec3 toward_sun = params.sun.xyz;
-			float sun_length = length(toward_sun);
-			bool sun_direction_valid = finite_vec3(toward_sun) && sun_length > EPSILON
-				&& !isnan(sun_length) && !isinf(sun_length);
-			if (sun_direction_valid) toward_sun /= sun_length;
-			// params.sun.xyz points from water toward the sun. Light physically
-			// travels into the water along light_into_water = -toward_sun.
-			vec3 view_dir_world = -view_ray_world;
-		phase_response = sun_direction_valid
-			? sunrays_phase_response(view_dir_world, toward_sun)
+			view_ray_debug = view_ray_world;
+			view_ray_debug_valid = true;
+			vec3 light_into_water = params.light.xyz;
+			float light_length = length(light_into_water);
+			bool light_direction_valid = finite_vec3(light_into_water) && light_length > EPSILON
+				&& !isnan(light_length) && !isinf(light_length);
+			if (light_direction_valid) light_into_water /= light_length;
+			vec3 view_to_camera_dir = -view_ray_world;
+		phase_response = light_direction_valid
+			? sunrays_phase_response(view_to_camera_dir, light_into_water)
 			: 0.0;
 		float max_sunray_distance = max(params.sunrays_extra.x, EPSILON) * (exaggerated ? 1.35 : 1.0);
 		float sunray_segment_m = min(water_path_m, max_sunray_distance);
 		if (sunray_segment_m > EPSILON) {
 			float integrated_length_m = 0.0;
-			if (sun_direction_valid) {
-				vec3 light_into_water = -toward_sun;
+			if (light_direction_valid) {
 				float longitudinal_begin = dot(params.camera.xyz, light_into_water);
 				float longitudinal_end = dot(params.camera.xyz + view_ray_world * sunray_segment_m, light_into_water);
 				int first_slice_id = int(floor(min(longitudinal_begin, longitudinal_end) / SUNRAY_WORLD_SLICE_SPACING_M));
@@ -337,7 +340,7 @@ void main() {
 					float slice_wave_focus; float slice_wave_width; float slice_wave_intensity;
 					float slice_direction_alignment;
 					if (!evaluate_sunray_world_slice(params.camera.xyz, view_ray_world,
-							interval_begin_m, interval_end_m, params.medium.x, toward_sun,
+							interval_begin_m, interval_end_m, params.medium.x, light_into_water,
 							params.absorption.rgb, params.medium.w, force_pattern_debug, slice_point,
 							slice_entry, slice_transmittance, slice_pattern, slice_beam_coord,
 							slice_wave_focus, slice_wave_width, slice_wave_intensity,
@@ -377,7 +380,7 @@ void main() {
 			float density_path = max(params.sunrays.w, 0.0) * integrated_length_m;
 			float integration_normalizer = 1.0 / max(1.0, density_path);
 			depth_response = integrated_length_m > EPSILON ? 1.0 : 0.0;
-			float final_gain = max(params.sun.w, 0.0) * params.state.x
+			float final_gain = max(params.light.w, 0.0) * params.state.x
 				* max(params.sunrays.y, 0.0) * phase_response * depth_response * integration_normalizer;
 			if (exaggerated) final_gain *= 4.0;
 			sunray_contribution = max(shaft_integral * final_gain, vec3(0.0));
@@ -448,8 +451,20 @@ void main() {
 			? vec3(1.0 - alignment_color, alignment_color, 0.0)
 			: vec3(0.0);
 	} else if (debug_mode == 30) {
-		vec3 light_into_water = -normalize(params.sun.xyz);
-		color.rgb = finite_vec3(light_into_water) ? light_into_water * 0.5 + 0.5 : vec3(0.0);
+		vec3 light_into_water = params.light.xyz;
+		float light_length = length(light_into_water);
+		bool light_valid = finite_vec3(light_into_water) && light_length > EPSILON
+			&& !isnan(light_length) && !isinf(light_length);
+		if (light_valid) light_into_water /= light_length;
+		color.rgb = light_valid ? light_into_water * 0.5 + 0.5 : vec3(0.0);
+	} else if (debug_mode == 31) {
+		// A low-frequency world-space encoding: the same visible world point
+		// keeps its color while the camera pitches, independent of screen UV.
+		color.rgb = scene_valid
+			? 0.5 + 0.5 * sin(scene_world * vec3(0.071, 0.113, 0.097))
+			: vec3(0.0);
+	} else if (debug_mode == 32) {
+		color.rgb = view_ray_debug_valid ? view_ray_debug * 0.5 + 0.5 : vec3(0.0);
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);

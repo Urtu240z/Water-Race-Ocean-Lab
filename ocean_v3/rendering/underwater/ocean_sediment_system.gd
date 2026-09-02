@@ -26,6 +26,11 @@ enum DebugMode {
 	CANDIDATES,
 	FIELD_PARTICLE_MATCH,
 	FIELD_UV,
+	ALPHA_DENSITY,
+	ALPHA_SOFT_SHAPE,
+	ALPHA_DISTANCE,
+	ALPHA_FINAL,
+	PRODUCTION_EXAGGERATED,
 }
 
 @export_group("Underwater / Sediment")
@@ -46,7 +51,7 @@ enum DebugMode {
 @export_range(0.0, 4.0, 0.01) var sediment_wisp_strength := 1.0
 @export_range(8.0, 80.0, 1.0, "suffix: m") var sediment_render_distance_m := 36.0
 @export_range(0.0, 2.0, 0.01) var sediment_above_water_optics_strength := 1.0
-@export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV") var sediment_debug_mode: int = DebugMode.OFF
+@export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV", "SEDIMENT ALPHA DENSITY", "SEDIMENT ALPHA SOFT SHAPE", "SEDIMENT ALPHA DISTANCE", "SEDIMENT ALPHA FINAL", "SEDIMENT PRODUCTION EXAGGERATED") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
 # Editor tooling only. Runtime validation must use Ctrl+Shift+J, never this button.
 @export_tool_button("Inject Test Sediment (Editor Tool)", "Burst") var inject_test_sediment_button = inject_test_sediment
@@ -304,6 +309,7 @@ func _request_test_injection() -> void:
 	print("radius=%.3f strength=%.3f queued=%s pending_queue=%d" % [TEST_INJECTION_RADIUS_M, TEST_INJECTION_STRENGTH, accepted, _pending_injections.size()])
 	print("FIELD DEBUG PROXY: expected_center_after_dispatch=%.3f (GPU impulse, no readback); marker_lifetime_s=%.1f" % [TEST_INJECTION_STRENGTH * exp(-sediment_settling_rate / maxf(sediment_update_hz, 1.0)), TEST_MARKER_LIFETIME_S])
 	_print_particle_height_diagnostic(sample_position, validation)
+	_print_production_alpha_diagnostic()
 
 
 func _find_test_position(camera: Camera3D) -> Dictionary:
@@ -451,6 +457,11 @@ func _apply_runtime_debug_mode() -> void:
 			"SEDIMENT_DEBUG_CANDIDATES", "SEDIMENT_CANDIDATES": sediment_debug_mode = DebugMode.CANDIDATES
 			"SEDIMENT_DEBUG_FIELD_PARTICLE_MATCH", "SEDIMENT_FIELD_PARTICLE_MATCH": sediment_debug_mode = DebugMode.FIELD_PARTICLE_MATCH
 			"SEDIMENT_DEBUG_FIELD_UV", "SEDIMENT_FIELD_UV": sediment_debug_mode = DebugMode.FIELD_UV
+			"SEDIMENT_ALPHA_DENSITY": sediment_debug_mode = DebugMode.ALPHA_DENSITY
+			"SEDIMENT_ALPHA_SOFT_SHAPE": sediment_debug_mode = DebugMode.ALPHA_SOFT_SHAPE
+			"SEDIMENT_ALPHA_DISTANCE": sediment_debug_mode = DebugMode.ALPHA_DISTANCE
+			"SEDIMENT_ALPHA_FINAL": sediment_debug_mode = DebugMode.ALPHA_FINAL
+			"SEDIMENT_PRODUCTION_EXAGGERATED": sediment_debug_mode = DebugMode.PRODUCTION_EXAGGERATED
 			"SEDIMENT_DEBUG_OFF": sediment_debug_mode = DebugMode.OFF
 
 
@@ -461,6 +472,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if key_event.pressed and not key_event.echo and key_event.ctrl_pressed \
 		and key_event.shift_pressed and key_event.keycode == KEY_J:
 		print("SEDIMENT RUNTIME TRIGGER RECEIVED")
+		print("SEDIMENT RUNTIME DEBUG MODE=%s (select it on the Remote tree, not Local)" % DebugMode.find_key(sediment_debug_mode))
 		inject_test_sediment()
 		get_viewport().set_input_as_handled()
 
@@ -715,7 +727,9 @@ func _create_render_material(is_wisps: bool) -> ShaderMaterial:
 	material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 	material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 	material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
-	material.set_shader_parameter(&"particle_color", Color(0.34, 0.29, 0.19, 0.065 if not is_wisps else 0.035))
+	# Stage 4: retain the validated field response but lift only the restrained
+	# production opacity. Wisps stay half as strong as the near-seabed clouds.
+	material.set_shader_parameter(&"particle_color", Color(0.34, 0.29, 0.19, 0.16 if not is_wisps else 0.08))
 	material.set_shader_parameter(&"strength", sediment_wisp_strength if is_wisps else sediment_cloud_strength)
 	material.set_shader_parameter(&"field_threshold", 0.10 if is_wisps else 0.15)
 	material.set_shader_parameter(&"field_contrast", 0.80 if is_wisps else 0.68)
@@ -784,7 +798,16 @@ func _surface_debug_mode() -> int:
 
 
 func _is_particle_debug_mode() -> bool:
-	return sediment_debug_mode == DebugMode.CANDIDATES or sediment_debug_mode == DebugMode.FIELD_PARTICLE_MATCH
+	# Stage 2/3 already proved particle data only with culling disabled. Keep the
+	# same temporary AABB for Stage 4 so an invisible production test cannot be
+	# mistaken for an alpha failure when it is actually renderer culling.
+	return sediment_debug_mode == DebugMode.CANDIDATES \
+		or sediment_debug_mode == DebugMode.FIELD_PARTICLE_MATCH \
+		or sediment_debug_mode == DebugMode.ALPHA_DENSITY \
+		or sediment_debug_mode == DebugMode.ALPHA_SOFT_SHAPE \
+		or sediment_debug_mode == DebugMode.ALPHA_DISTANCE \
+		or sediment_debug_mode == DebugMode.ALPHA_FINAL \
+		or sediment_debug_mode == DebugMode.PRODUCTION_EXAGGERATED
 
 
 func _particle_shader_debug_mode() -> int:
@@ -792,7 +815,71 @@ func _particle_shader_debug_mode() -> int:
 		return 1
 	if sediment_debug_mode == DebugMode.FIELD_PARTICLE_MATCH:
 		return 2
+	if sediment_debug_mode == DebugMode.ALPHA_DENSITY:
+		return 3
+	if sediment_debug_mode == DebugMode.ALPHA_SOFT_SHAPE:
+		return 4
+	if sediment_debug_mode == DebugMode.ALPHA_DISTANCE:
+		return 5
+	if sediment_debug_mode == DebugMode.ALPHA_FINAL:
+		return 6
+	if sediment_debug_mode == DebugMode.PRODUCTION_EXAGGERATED:
+		return 7
 	return 0
+
+
+func _print_production_alpha_diagnostic() -> void:
+	if _cloud_material == null or _wisp_material == null:
+		print("SEDIMENT PRODUCTION ALPHA: materials unavailable")
+		return
+	var cloud_color: Color = _cloud_material.get_shader_parameter(&"particle_color")
+	var wisp_color: Color = _wisp_material.get_shader_parameter(&"particle_color")
+	var cloud_strength: float = float(_cloud_material.get_shader_parameter(&"strength"))
+	var wisp_strength: float = float(_wisp_material.get_shader_parameter(&"strength"))
+	var cloud_threshold: float = float(_cloud_material.get_shader_parameter(&"field_threshold"))
+	var wisp_threshold: float = float(_wisp_material.get_shader_parameter(&"field_threshold"))
+	var cloud_contrast: float = float(_cloud_material.get_shader_parameter(&"field_contrast"))
+	var wisp_contrast: float = float(_wisp_material.get_shader_parameter(&"field_contrast"))
+	print("SEDIMENT PRODUCTION ALPHA cloud_color_a=%.3f cloud_strength=%.3f cloud_threshold=%.3f cloud_contrast=%.3f wisp_color_a=%.3f wisp_strength=%.3f wisp_threshold=%.3f wisp_contrast=%.3f" % [
+		cloud_color.a, cloud_strength, cloud_threshold, cloud_contrast,
+		wisp_color.a, wisp_strength, wisp_threshold, wisp_contrast,
+	])
+	var field_samples := PackedFloat32Array([0.15, 0.25, 0.50, 0.90])
+	var cloud_max := PackedFloat32Array()
+	var wisp_max := PackedFloat32Array()
+	for field_value in field_samples:
+		cloud_max.append(_production_alpha_upper_bound(field_value, cloud_threshold, cloud_contrast, cloud_color.a, cloud_strength))
+		wisp_max.append(_production_alpha_upper_bound(field_value, wisp_threshold, wisp_contrast, wisp_color.a, wisp_strength))
+	print("SEDIMENT PRODUCTION ALPHA UPPER_BOUND soft_shape=1 distance_fade=1 field=[0.15,0.25,0.50,0.90] cloud=%s wisp=%s" % [cloud_max, wisp_max])
+	_print_particle_render_binding_diagnostic()
+
+
+func _print_particle_render_binding_diagnostic() -> void:
+	var cloud_quad := _cloud_particles.draw_pass_1 as QuadMesh if _cloud_particles != null else null
+	var wisp_quad := _wisp_particles.draw_pass_1 as QuadMesh if _wisp_particles != null else null
+	var cloud_bound := cloud_quad != null and cloud_quad.material == _cloud_material
+	var wisp_bound := wisp_quad != null and wisp_quad.material == _wisp_material
+	var cloud_mode := int(_cloud_material.get_shader_parameter(&"debug_mode")) if _cloud_material != null else -1
+	var wisp_mode := int(_wisp_material.get_shader_parameter(&"debug_mode")) if _wisp_material != null else -1
+	print("SEDIMENT PARTICLE RENDER BINDING cloud_bound=%s cloud_mode=%d cloud_emitting=%s cloud_visible=%s cloud_amount=%d cloud_local_coords=%s wisp_bound=%s wisp_mode=%d wisp_emitting=%s wisp_visible=%s wisp_amount=%d wisp_local_coords=%s" % [
+		cloud_bound, cloud_mode,
+		_cloud_particles.emitting if _cloud_particles != null else false,
+		_cloud_particles.visible if _cloud_particles != null else false,
+		_cloud_particles.amount if _cloud_particles != null else 0,
+		_cloud_particles.local_coords if _cloud_particles != null else true,
+		wisp_bound, wisp_mode,
+		_wisp_particles.emitting if _wisp_particles != null else false,
+		_wisp_particles.visible if _wisp_particles != null else false,
+		_wisp_particles.amount if _wisp_particles != null else 0,
+		_wisp_particles.local_coords if _wisp_particles != null else true,
+	])
+
+
+func _production_alpha_upper_bound(field_value: float, threshold: float, contrast: float, color_alpha: float, strength: float) -> float:
+	var t := clampf((field_value - threshold) / maxf(1.0 - threshold, 0.001), 0.0, 1.0)
+	var shaped := t * t * (3.0 - 2.0 * t)
+	var density := pow(maxf(shaped, 0.0), maxf(contrast, 0.1))
+	return density * maxf(color_alpha, 0.0) * maxf(strength, 0.0)
 
 
 func _particle_visibility_aabb() -> AABB:

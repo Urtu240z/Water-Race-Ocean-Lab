@@ -24,7 +24,7 @@ var _scattering_strength := 1.0
 var _scattering_density := 0.15
 var _max_distance := 120.0
 var _debug_mode := 0
-var _sun_direction := Vector3(0.0, 1.0, 0.0)
+var _light_into_water := Vector3(0.0, -1.0, 0.0)
 var _sun_color := Color.WHITE
 var _sun_energy := 0.0
 var _sunrays_enabled := true
@@ -55,7 +55,7 @@ func _init() -> void:
 func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, camera_factor: float,
 		transition_width: float, absorption: Vector3, absorption_scale: float,
 		scattering_color: Color, scattering_strength: float, scattering_density: float,
-		max_distance: float, debug_mode: int, sun_direction: Vector3, sun_color: Color,
+		max_distance: float, debug_mode: int, light_into_water: Vector3, sun_color: Color,
 		sun_energy: float, sunrays_enabled: bool, sunrays_strength: float,
 		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
 		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
@@ -76,7 +76,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_scattering_strength = clampf(scattering_strength, 0.0, 4.0)
 	_scattering_density = clampf(scattering_density, 0.0, 2.0)
 	_max_distance = clampf(max_distance, 1.0, 500.0)
-	_sun_direction = sun_direction.normalized() if sun_direction.length_squared() > 0.000001 else Vector3(0.0, 1.0, 0.0)
+	_light_into_water = light_into_water.normalized() if light_into_water.length_squared() > 0.000001 else Vector3(0.0, -1.0, 0.0)
 	_sun_color = sun_color
 	_sun_energy = maxf(sun_energy, 0.0)
 	_sunrays_enabled = sunrays_enabled
@@ -99,7 +99,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
 	# are rendered by the surface material and must not turn this pass into a
 	# conflicting compositor visualization.
-	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 30) else 0
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 32) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:
@@ -156,7 +156,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var scattering_density := _scattering_density
 	var max_distance := _max_distance
 	var debug_mode := _debug_mode
-	var sun_direction := _sun_direction
+	var light_into_water := _light_into_water
 	var sun_color := _sun_color
 	var sun_energy := _sun_energy
 	var sunrays_enabled := _sunrays_enabled
@@ -204,7 +204,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
 	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0)
 	params.append(1.0 if sunrays_wave_modulation_enabled else 0.0)
-	params.append(sun_direction.x); params.append(sun_direction.y); params.append(sun_direction.z); params.append(sun_energy)
+	params.append(light_into_water.x); params.append(light_into_water.y); params.append(light_into_water.z); params.append(sun_energy)
 	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(sunrays_wave_intensity_strength)
 	params.append(1.0 if sunrays_enabled and sunrays_strength > 0.0 else 0.0)
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)

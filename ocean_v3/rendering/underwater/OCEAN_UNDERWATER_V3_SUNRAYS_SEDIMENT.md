@@ -55,10 +55,9 @@ and no practical depth fade to make the plumbing unambiguous.
 ## Sunrays V3.3 — light-direction invariant
 
 `DirectionalLight3D.global_transform.basis.z` is the world-space direction
-from water toward the sun. The compositor receives that vector as
-`toward_sun`; physical photon travel is always `light_into_water =
--toward_sun`. Each reconstructed `light_entry` is formed by tracing from a
-sample toward `toward_sun`, and every sample now verifies that
+from water toward the sun. Physical photon travel is always `light_into_water
+= -basis.z`. Each reconstructed `light_entry` is formed by tracing from a
+sample toward the surface (`-light_into_water`), and every sample verifies that
 `normalize(sample_point - light_entry)` aligns with `light_into_water` by at
 least 0.99 before it contributes. `SUNRAYS_DIRECTION_ALIGNMENT` exposes this
 invariant (green is +1), while `SUNRAYS_LIGHT_TRAVEL_VECTOR` encodes the
@@ -89,11 +88,24 @@ green reference. Directional appearance is now governed only by each slice's
 Beer-Lambert transport from `light_entry` into the water along
 `light_into_water`.
 
-The independent guide also exposed the compositor's actual orientation fault:
-the render-target V coordinate was passed to the camera inverse projection as
-if it were NDC Y. `reconstruct_world()` now converts it with `1 - 2*uv.y`.
-This restores the same vertical convention as the live scene geometry before
-any light-space field, slab, entry, or attenuation calculation is performed.
+The independent guide separated a visual direction issue from camera-ray
+reconstruction. `get_view_projection()` already includes Godot's backend
+depth/Y correction, so `reconstruct_world()` maps the current color UV directly
+with `uv * 2 - 1`; it does not mirror NDC Y. This keeps pitch changes as normal
+projection changes rather than rebuilding world slabs around a reflected ray.
+`SUNRAYS_RECONSTRUCTED_WORLD` and `SUNRAYS_VIEW_RAY` expose the two inputs for
+fixed-position pitch diagnosis. Scene-depth texel orientation remains separate
+from NDC orientation and is currently read without a flip.
+
+## Sunrays V3.6 — single physical light authority
+
+The underwater UBO receives `params.light.xyz` directly as `L =
+light_into_water = -DirectionalLight3D.basis.z`. `L` means photon travel from
+sun to water everywhere: beam basis, world-slab coordinate and slice interval
+all use `L` directly. Only light-entry reconstruction declares the local
+opposite `toward_surface = -L`. HG explicitly uses `L` as incoming light and
+the sample-to-camera vector as outgoing direction. No shader path receives an
+ambiguous `sun_direction` or negates a `params.sun` vector.
 
 
 ## Sediment V2 test path

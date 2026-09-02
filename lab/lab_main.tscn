@@ -251,9 +251,6 @@ underwater_particles_near_color = Color(4.5819564, 3.6724234, 0.69980174, 1)
 underwater_particles_fine_size_scale = 2.15
 underwater_particles_near_size_scale = 1.35
 
-[node name="OceanSedimentSystem" parent="OceanV3Mount/OceanV3" index="3"]
-sediment_debug_mode = 7
-
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true
 process_mode = 4
