@@ -279,7 +279,9 @@ var _surface_foam_detail := 1.0
 var _surface_foam_config: Resource = null
 var _surface_foam_solver = null
 var _surface_foam_short_solver = null
-var _surface_foam_source_mode := SurfaceFoamSourceMode.LEGACY_AUXILIARY_FFT
+# Stored as int because inspector/parent synchronization also supplies an int.
+# The named enum values remain the only values accepted by the public setter.
+var _surface_foam_source_mode: int = SurfaceFoamSourceMode.LEGACY_AUXILIARY_FFT
 var _surface_foam_texture := Texture2DRD.new()
 var _surface_foam_jacobian_texture := Texture2DRD.new()
 var _surface_foam_topology_texture := Texture2DRD.new()

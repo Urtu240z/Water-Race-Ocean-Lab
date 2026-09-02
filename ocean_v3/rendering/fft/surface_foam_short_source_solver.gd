@@ -161,6 +161,12 @@ func advance(frame_delta: float) -> void:
 	for _unused in pass_budget:
 		if not _job_active:
 			break
+		# RenderingDevice forbids buffer updates while a compute list is active.
+		# The update pass consumes the current job delta, so upload it immediately
+		# before opening that list.
+		if _job_pass == 1:
+			_write_foam_params()
+			_rd.buffer_update(_foam_params_buffer, 0, 48, _foam_params_bytes)
 		var list := _rd.compute_list_begin()
 		_dispatch_job_pass(list)
 		_passes_dispatched_total += 1
@@ -182,8 +188,6 @@ func _dispatch_job_pass(list: int) -> void:
 		var source_groups := ceili(float(_source_resolution) / 8.0)
 		_rd.compute_list_dispatch(list, source_groups, source_groups, 1)
 	else:
-		_write_foam_params()
-		_rd.buffer_update(_foam_params_buffer, 0, 48, _foam_params_bytes)
 		_rd.compute_list_bind_compute_pipeline(list, _update_pipeline)
 		_rd.compute_list_bind_uniform_set(list, _foam_sets[_foam_read_index], 0)
 		var foam_groups := ceili(float(_field_resolution) / 8.0)
