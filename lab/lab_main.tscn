@@ -79,7 +79,7 @@ environment = SubResource("Environment_lab")
 camera_attributes = SubResource("CameraAttributesPhysical_ody2a")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1866959699]
-transform = Transform3D(0.85626704, 0.35881415, -0.37156284, 0, 0.71933967, 0.6946582, 0.51653326, -0.594813, 0.6159468, 0, 0, 0)
+transform = Transform3D(-0.85626704, -0.35881415, 0.37156284, 0, 0.71933967, 0.6946582, -0.51653326, 0.594813, -0.6159468, 0, 0, 0)
 light_temperature = 5800.0
 light_energy = 3.611
 light_angular_distance = 0.5

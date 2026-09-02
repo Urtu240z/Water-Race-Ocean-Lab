@@ -142,12 +142,14 @@ func _finish_measurement() -> void:
 		"resolution": int(state.get("field", {}).get("resolution", 0)),
 		"cloud_amount": int(state.get("cloud_amount", 0)),
 		"wisp_amount": int(state.get("wisp_amount", 0)),
+		"cloud_emitting": bool(state.get("cloud_emitting", false)),
+		"wisp_emitting": bool(state.get("wisp_emitting", false)),
 		"update_hz": float(state.get("update_hz_underwater", 0.0)),
 	}
 	_results.append(row)
-	print("%s rep %d avg=%.4f ms FPS=%.2f P95=%.4f ms CPU=%.4f ms dispatches=%d resolution=%d clouds=%d wisps=%d" % [
+	print("%s rep %d avg=%.4f ms FPS=%.2f P95=%.4f ms CPU=%.4f ms dispatches=%d resolution=%d clouds=%d(%s) wisps=%d(%s)" % [
 		row["case"], row["repetition"], row["avg_ms"], row["fps"], row["p95_ms"], row["process_ms"],
-		row["dispatches"], row["resolution"], row["cloud_amount"], row["wisp_amount"]
+		row["dispatches"], row["resolution"], row["cloud_amount"], row["cloud_emitting"], row["wisp_amount"], row["wisp_emitting"]
 	])
 	if _repetition_index + 1 < repetitions:
 		_repetition_index += 1
@@ -177,11 +179,11 @@ func _write_results() -> void:
 	if csv == null or txt == null:
 		push_error("SEDIMENT BENCHMARK: could not open result files.")
 		return
-	csv.store_line("case,repetition,avg_ms,fps,p95_ms,cpu_process_ms,dispatches,resolution,update_hz,cloud_amount,wisp_amount")
+	csv.store_line("case,repetition,avg_ms,fps,p95_ms,cpu_process_ms,dispatches,resolution,update_hz,cloud_amount,wisp_amount,cloud_emitting,wisp_emitting")
 	for row in _results:
-		csv.store_line("%s,%d,%.6f,%.6f,%.6f,%.6f,%d,%d,%.3f,%d,%d" % [
+		csv.store_line("%s,%d,%.6f,%.6f,%.6f,%.6f,%d,%d,%.3f,%d,%d,%s,%s" % [
 			row["case"], row["repetition"], row["avg_ms"], row["fps"], row["p95_ms"], row["process_ms"],
-			row["dispatches"], row["resolution"], row["update_hz"], row["cloud_amount"], row["wisp_amount"]
+			row["dispatches"], row["resolution"], row["update_hz"], row["cloud_amount"], row["wisp_amount"], row["cloud_emitting"], row["wisp_emitting"]
 		])
 		txt.store_line("%s rep %d | avg %.4f ms | FPS %.2f | P95 %.4f ms | CPU %.4f ms | dispatches %d | %dx%d | %.2f Hz | clouds %d | wisps %d" % [
 			row["case"], row["repetition"], row["avg_ms"], row["fps"], row["p95_ms"], row["process_ms"],

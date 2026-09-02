@@ -402,7 +402,7 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_sunrays_color = value
 		_request_visual_sync()
-@export_range(0.0, 0.95, 0.01) var underwater_sunrays_anisotropy := 0.72:
+@export_range(0.0, 0.95, 0.01) var underwater_sunrays_anisotropy := 0.45:
 	set(value):
 		underwater_sunrays_anisotropy = clampf(value, 0.0, 0.95)
 		_request_visual_sync()

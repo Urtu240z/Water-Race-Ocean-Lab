@@ -1,6 +1,5 @@
 shader_type particles;
 
-uniform sampler2D sediment_field_texture : repeat_disable, filter_linear;
 uniform sampler2D bathymetry_texture : repeat_disable, filter_linear;
 uniform vec2 sediment_field_origin_xz = vec2(0.0);
 uniform vec2 sediment_field_extent_m = vec2(1.0);
@@ -12,7 +11,6 @@ uniform float spawn_radius_m = 36.0;
 uniform float layer_seed = 1.0;
 uniform float height_min_m = 0.05;
 uniform float height_max_m = 1.5;
-uniform float field_threshold = 0.15;
 uniform vec2 current_direction_xz = vec2(1.0, 0.0);
 uniform float current_speed_mps = 0.20;
 uniform float orbital_strength_mps = 0.08;
@@ -41,14 +39,14 @@ void start() {
 	vec2 world_xz = EMISSION_TRANSFORM[3].xz + local_xz;
 	vec2 field_sample_uv = field_uv(world_xz);
 	vec2 bathy_sample_uv = bathymetry_uv(world_xz);
-	float concentration = texture(sediment_field_texture, clamp(field_sample_uv, vec2(0.0), vec2(1.0))).r;
 	vec2 bathy = texture(bathymetry_texture, clamp(bathy_sample_uv, vec2(0.0), vec2(1.0))).rg;
 	float inside = step(0.0, field_sample_uv.x) * step(field_sample_uv.x, 1.0)
 		* step(0.0, field_sample_uv.y) * step(field_sample_uv.y, 1.0);
 	float water = step(0.5, bathy.g);
-	float active = inside * water * step(field_threshold, concentration);
 	float height = mix(height_min_m, height_max_m, hash_value(seed + 12.0));
 	float depth_m = max(bathy.r * bathymetry_depth_scale_m, 0.0);
+	float valid_bathymetry = step(0.001, depth_m);
+	float active = inside * water * valid_bathymetry;
 	vec3 world_position = vec3(world_xz.x, sea_level_y - depth_m + height, world_xz.y);
 	TRANSFORM = mat4(1.0);
 	float width = mix(0.7, 2.5, hash_value(seed + 13.0));
@@ -57,7 +55,6 @@ void start() {
 	TRANSFORM[1][1] = vertical;
 	TRANSFORM[2][2] = 0.0;
 	TRANSFORM[3].xyz = world_position;
-	float phase = hash_value(seed + 15.0) * 6.2831853;
 	CUSTOM.xyz = vec3(
 		current_direction_xz.x * current_speed_mps,
 		0.0,

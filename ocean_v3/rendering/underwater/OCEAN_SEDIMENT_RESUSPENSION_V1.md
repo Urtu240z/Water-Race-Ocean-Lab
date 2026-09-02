@@ -35,12 +35,36 @@ depend on transparent-object sorting.
 The field remains resident and available when the camera is AIR. Only the 3D
 cloud/wisp layers are disabled in AIR; the field continues at its reduced rate.
 
+## Bathymetry preview mapping
+
+The particle start shader uses one immutable `FORMAT_RG8` preview of the baked
+bathymetry. Its channels are intentionally not inverted:
+
+```text
+R = clamp(depth_m / 32.0, 0.0, 1.0)
+G = 1.0 for water, 0.0 for land
+shader depth_m = bathymetry.r * 32.0
+```
+
+The compute field uses the same source data as an `R32G32_SFLOAT` GPU texture
+(`R = depth_m`, `G = water mask`) so the preview's `/32` normalization is only
+for the particle `Texture2D` binding. Particle `start()` validates only field
+bounds, water mask, and positive bathymetry depth; dynamic sediment
+concentration is sampled by the render shader for alpha/density and never
+rejects a candidate at spawn.
+
 ## Debug and validation API
 
 The system exposes `inject_sediment(world_position, radius_m, strength)` and an
 Inspector `Inject Test Sediment` action. Debug modes are OFF, FIELD, SOURCE,
 CLOUDS, and WISPS. `get_debug_state()` reports resource identity, mapping,
 dispatch count, pending injections, and particle counts without a GPU readback.
+At runtime, pass `INJECT_SEDIMENT_TEST` after `--`, or press F8, for a one-shot
+diagnostic containing world position, raw/clamped field UV, field bounds,
+bathymetry bounds, water mask, depth, radius, strength, acceptance, and queued
+count. `SEDIMENT_DEBUG_FIELD`, `SEDIMENT_DEBUG_SOURCE`,
+`SEDIMENT_DEBUG_CLOUDS`, and `SEDIMENT_DEBUG_WISPS` select the corresponding
+debug presentation from the command line.
 
 The intended manual persistence check is:
 

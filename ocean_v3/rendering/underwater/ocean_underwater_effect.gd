@@ -9,7 +9,9 @@ const THREAD_SIZE := 8
 var _rd: RenderingDevice
 var _shader := RID()
 var _pipeline := RID()
-var _sampler := RID()
+var _depth_sampler := RID()
+var _pattern_sampler := RID()
+var _neutral_pattern_texture := RID()
 var _params_buffer := RID()
 var _mutex := Mutex.new()
 var _enabled := true
@@ -29,7 +31,7 @@ var _sun_color := Color.WHITE
 var _sun_energy := 0.0
 var _sunrays_enabled := true
 var _sunrays_strength := 0.35
-var _sunrays_anisotropy := 0.72
+var _sunrays_anisotropy := 0.45
 var _sunrays_density := 0.08
 var _sunrays_max_distance := 30.0
 var _sunrays_pattern_scale := 1.0
@@ -39,6 +41,7 @@ var _sunrays_pattern_texture: Texture2D
 var _sunrays_time := 0.0
 var _sunrays_tap_count := 4
 var _dispatch_count := 0
+var _pattern_resolution_diagnostic_printed := false
 
 func _init() -> void:
 	effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
@@ -104,26 +107,52 @@ func free_resources() -> void:
 	_pipeline = RID()
 	if _shader.is_valid(): _rd.free_rid(_shader)
 	_shader = RID()
-	if _sampler.is_valid(): _rd.free_rid(_sampler)
-	_sampler = RID()
+	if _depth_sampler.is_valid(): _rd.free_rid(_depth_sampler)
+	_depth_sampler = RID()
+	if _pattern_sampler.is_valid(): _rd.free_rid(_pattern_sampler)
+	_pattern_sampler = RID()
+	if _neutral_pattern_texture.is_valid(): _rd.free_rid(_neutral_pattern_texture)
+	_neutral_pattern_texture = RID()
 	if _params_buffer.is_valid(): _rd.free_rid(_params_buffer)
 	_params_buffer = RID()
 
 func _ensure_pipeline() -> bool:
-	if _pipeline.is_valid() and _sampler.is_valid() and _params_buffer.is_valid(): return true
+	if _pipeline.is_valid() and _depth_sampler.is_valid() and _pattern_sampler.is_valid() \
+			and _neutral_pattern_texture.is_valid() and _params_buffer.is_valid(): return true
 	var shader_file := load(SHADER_PATH) as RDShaderFile
 	if shader_file == null: return false
 	_shader = _rd.shader_create_from_spirv(shader_file.get_spirv(), "OceanUnderwater.Medium")
 	if not _shader.is_valid(): return false
 	_pipeline = _rd.compute_pipeline_create(_shader)
-	var sampler_state := RDSamplerState.new()
-	sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
-	sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
-	_sampler = _rd.sampler_create(sampler_state)
+	var depth_sampler_state := RDSamplerState.new()
+	depth_sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	depth_sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	depth_sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	depth_sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+	_depth_sampler = _rd.sampler_create(depth_sampler_state)
+	var pattern_sampler_state := RDSamplerState.new()
+	pattern_sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	pattern_sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+	pattern_sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	pattern_sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
+	_pattern_sampler = _rd.sampler_create(pattern_sampler_state)
+	var neutral_format := RDTextureFormat.new()
+	neutral_format.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
+	neutral_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
+	neutral_format.width = 1
+	neutral_format.height = 1
+	neutral_format.depth = 1
+	neutral_format.array_layers = 1
+	neutral_format.mipmaps = 1
+	neutral_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+	var neutral_data := PackedByteArray([128, 128, 128, 255])
+	var neutral_initial_data: Array[PackedByteArray] = [neutral_data]
+	_neutral_pattern_texture = _rd.texture_create(neutral_format, RDTextureView.new(), neutral_initial_data)
+	if _neutral_pattern_texture.is_valid():
+		_rd.set_resource_name(_neutral_pattern_texture, "OceanUnderwater.SunraysNeutralPattern")
 	_params_buffer = _rd.uniform_buffer_create(PARAMS_BYTES)
-	return _shader.is_valid() and _pipeline.is_valid() and _sampler.is_valid() and _params_buffer.is_valid()
+	return _shader.is_valid() and _pipeline.is_valid() and _depth_sampler.is_valid() \
+			and _pattern_sampler.is_valid() and _neutral_pattern_texture.is_valid() and _params_buffer.is_valid()
 
 func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	if callback_type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT or _rd == null: return
@@ -161,7 +190,9 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	# A pipeline can only be bound with all of its backing RIDs alive. Keep this
 	# explicit guard next to the render callback so a teardown/rebuild race cannot
 	# reach uniform creation or dispatch with a stale shader resource.
-	if not _shader.is_valid() or not _pipeline.is_valid() or not _sampler.is_valid() or not _params_buffer.is_valid(): return
+	if not _shader.is_valid() or not _pipeline.is_valid() or not _depth_sampler.is_valid() \
+			or not _pattern_sampler.is_valid() or not _neutral_pattern_texture.is_valid() \
+			or not _params_buffer.is_valid(): return
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
 	if buffers == null or scene_data == null or buffers.get_view_count() != 1: return
@@ -180,8 +211,18 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(sea_level); params.append(transition_width); params.append(max_distance); params.append(absorption_scale)
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
+	var pattern_texture_rid := _neutral_pattern_texture
+	var pattern_available := false
+	if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid():
+		var candidate_rid := RenderingServer.texture_get_rd_texture(sunrays_pattern_texture.get_rid(), true)
+		if candidate_rid.is_valid():
+			pattern_texture_rid = candidate_rid
+			pattern_available = true
+		elif not _pattern_resolution_diagnostic_printed:
+			_pattern_resolution_diagnostic_printed = true
+			push_warning("OceanUnderwater: sunrays pattern Texture2D exists but could not be resolved to an RD texture; using neutral modulation.")
 	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0)
-	params.append(1.0 if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid() else 0.0)
+	params.append(1.0 if pattern_available else 0.0)
 	params.append(sun_direction.x); params.append(sun_direction.y); params.append(sun_direction.z); params.append(sun_energy)
 	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(0.0)
 	params.append(1.0 if sunrays_enabled and sunrays_strength > 0.0 else 0.0)
@@ -197,16 +238,12 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var depth_uniform := RDUniform.new()
 	depth_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	depth_uniform.binding = 1
-	depth_uniform.add_id(_sampler)
+	depth_uniform.add_id(_depth_sampler)
 	depth_uniform.add_id(depth_texture)
 	var pattern_uniform := RDUniform.new()
 	pattern_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 	pattern_uniform.binding = 2
-	pattern_uniform.add_id(_sampler)
-	var pattern_texture_rid := depth_texture
-	if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid():
-		var candidate_rid := RenderingServer.texture_get_rd_texture(sunrays_pattern_texture.get_rid(), true)
-		if candidate_rid.is_valid(): pattern_texture_rid = candidate_rid
+	pattern_uniform.add_id(_pattern_sampler)
 	pattern_uniform.add_id(pattern_texture_rid)
 	var params_uniform := RDUniform.new()
 	params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER

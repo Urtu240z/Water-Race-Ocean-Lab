@@ -13,6 +13,8 @@ var resolution := FIELD_RESOLUTION
 var field_rids: Array[RID] = [RID(), RID()]
 var source_rid := RID()
 var injection_buffer_rid := RID()
+var completed_read_index := 0
+var completed_dispatch_serial := 0
 
 var _rd: RenderingDevice
 var _shader := RID()
@@ -32,6 +34,9 @@ func initialize(
 		bathymetry_source_bytes: PackedByteArray,
 		resource_prefix := "OceanV3.Sediment") -> void:
 	free_resources()
+	last_error = ""
+	completed_read_index = 0
+	completed_dispatch_serial = 0
 	resolution = clampi(field_resolution, 64, 512)
 	resolution = 64 if resolution < 96 else (128 if resolution < 192 else 256)
 	_rd = RenderingServer.get_rendering_device()
@@ -124,18 +129,19 @@ func advance(
 		wave_k_rad_m: float,
 		wave_omega_rad_s: float,
 		diffusion: float,
-		settling_rate: float,
-		shallow_start_m: float,
-		shallow_end_m: float,
-		wave_resuspension_strength: float,
-		source_enabled: bool,
-		injections: PackedByteArray) -> void:
+	settling_rate: float,
+	shallow_start_m: float,
+	shallow_end_m: float,
+	wave_resuspension_strength: float,
+	source_enabled: bool,
+	injections: PackedByteArray,
+	injection_count: int) -> bool:
 	if not ready or _rd == null or not _pipeline.is_valid():
-		return
+		return false
 	read_index = clampi(read_index, 0, 1)
 	write_index = clampi(write_index, 0, 1)
 	if read_index == write_index:
-		return
+		return false
 	if injections.size() == MAX_INJECTIONS * 16:
 		_rd.buffer_update(injection_buffer_rid, 0, injections.size(), injections)
 	var list := _rd.compute_list_begin()
@@ -150,16 +156,27 @@ func advance(
 		current_dir.x, current_dir.y, maxf(orbital_strength_mps, 0.0), time_s,
 		wave_dir.x, wave_dir.y, maxf(wave_k_rad_m, 0.0), maxf(wave_omega_rad_s, 0.0),
 		maxf(shallow_start_m, 0.0), maxf(shallow_end_m, shallow_start_m + 0.001), maxf(wave_resuspension_strength, 0.0), 1.0 if source_enabled else 0.0,
-		float(MAX_INJECTIONS), float(_source_width), float(_source_height), 0.0,
+		float(clampi(injection_count, 0, MAX_INJECTIONS)), float(_source_width), float(_source_height), 0.0,
 	])
 	_rd.compute_list_set_push_constant(list, push.to_byte_array(), push.size() * 4)
 	_rd.compute_list_dispatch(list, ceili(float(resolution) / 8.0), ceili(float(resolution) / 8.0), 1)
 	_rd.compute_list_add_barrier(list)
 	_rd.compute_list_end()
+	# The render-thread command sequence is now ordered as READ -> WRITE ->
+	# barrier -> end. The main thread publishes this completed target on the next
+	# frame; it never samples or synchronizes the GPU here.
+	completed_read_index = write_index
+	completed_dispatch_serial += 1
+	return true
 
 
 func get_texture_rid(index: int) -> RID:
 	return field_rids[clampi(index, 0, 1)]
+
+
+func has_valid_rids() -> bool:
+	return ready and field_rids[0].is_valid() and field_rids[1].is_valid() \
+		and source_rid.is_valid() and injection_buffer_rid.is_valid()
 
 
 func diagnostic_state() -> Dictionary:
@@ -170,6 +187,10 @@ func diagnostic_state() -> Dictionary:
 		"field_bytes": resolution * resolution * 2 * 2,
 		"source_rid": source_rid.get_id() if source_rid.is_valid() else -1,
 		"injection_buffer_rid": injection_buffer_rid.get_id() if injection_buffer_rid.is_valid() else -1,
+		"read_rid_valid": field_rids[completed_read_index].is_valid(),
+		"write_rid_valid": field_rids[1 - completed_read_index].is_valid(),
+		"completed_read_index": completed_read_index,
+		"completed_dispatch_serial": completed_dispatch_serial,
 		"last_error": last_error,
 	}
 
@@ -180,6 +201,12 @@ func free_resources() -> void:
 		field_rids = [RID(), RID()]
 		source_rid = RID()
 		injection_buffer_rid = RID()
+		_uniform_sets.clear()
+		_samplers.clear()
+		_pipeline = RID()
+		_shader = RID()
+		completed_read_index = 0
+		completed_dispatch_serial = 0
 		return
 	for uniform_set in _uniform_sets:
 		if uniform_set.is_valid():
@@ -198,6 +225,8 @@ func free_resources() -> void:
 	field_rids = [RID(), RID()]
 	source_rid = RID()
 	injection_buffer_rid = RID()
+	completed_read_index = 0
+	completed_dispatch_serial = 0
 	_pipeline = RID()
 	_shader = RID()
 	_rd = null
