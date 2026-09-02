@@ -287,8 +287,11 @@ func _injection_validation(world_position: Vector3) -> Dictionary:
 	var bathymetry_ready := _bathymetry != null and _bathymetry.is_valid()
 	var sample = _bathymetry.sample_bathymetry(Vector2(world_position.x, world_position.z)) if bathymetry_ready else null
 	var field_ready := _configured and _field != null and _field.ready and _field.has_valid_rids()
-	var in_bounds := sample != null and sample.in_bounds
-	var water := sample != null and sample.is_water
+	var in_bounds: bool = false
+	var water: bool = false
+	if sample != null:
+		in_bounds = bool(sample.in_bounds)
+		water = bool(sample.is_water)
 	return {
 		"accepted": field_ready and inside_field and in_bounds and water,
 		"field_ready": field_ready,
