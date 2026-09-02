@@ -7,14 +7,26 @@ extends Node3D
 const FIELD_SCRIPT := preload("res://ocean_v3/rendering/underwater/ocean_sediment_field.gd")
 const PARTICLE_PROCESS_SHADER_PATH := "res://ocean_v3/rendering/underwater/ocean_sediment_particles_process.gdshader"
 const PARTICLE_RENDER_SHADER_PATH := "res://ocean_v3/rendering/underwater/ocean_sediment_particles.gdshader"
+const FIELD_DEBUG_SHADER_PATH := "res://ocean_v3/rendering/underwater/ocean_sediment_field_debug.gdshader"
 const MAX_INJECTIONS := 16
 const TEST_INJECTION_RADIUS_M := 9.0
 const TEST_INJECTION_STRENGTH := 0.90
-const TEST_SEARCH_RADIUS_M := 20.0
+const TEST_SEARCH_RADIUS_M := 15.0
 const TEST_PREFERRED_DISTANCE_M := 8.0
-const TEST_MARKER_LIFETIME_S := 6.0
+const TEST_MARKER_LIFETIME_S := 9.0
+const TEST_FIELD_DEBUG_SIZE_M := 36.0
 
-enum DebugMode { OFF, FIELD, SOURCE, CLOUDS, WISPS }
+enum DebugMode {
+	OFF,
+	FIELD_SURFACE,
+	SOURCE_SURFACE,
+	CLOUDS,
+	WISPS,
+	FIELD_UNDERWATER,
+	CANDIDATES,
+	FIELD_PARTICLE_MATCH,
+	FIELD_UV,
+}
 
 @export_group("Underwater / Sediment")
 @export var sediment_enabled := true
@@ -34,7 +46,7 @@ enum DebugMode { OFF, FIELD, SOURCE, CLOUDS, WISPS }
 @export_range(0.0, 4.0, 0.01) var sediment_wisp_strength := 1.0
 @export_range(8.0, 80.0, 1.0, "suffix: m") var sediment_render_distance_m := 36.0
 @export_range(0.0, 2.0, 0.01) var sediment_above_water_optics_strength := 1.0
-@export_enum("OFF", "FIELD", "SOURCE", "CLOUDS", "WISPS") var sediment_debug_mode: int = DebugMode.OFF
+@export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
 @export_tool_button("Inject Test Sediment", "Burst") var inject_test_sediment_button = inject_test_sediment
 
@@ -76,8 +88,15 @@ var _bathymetry_wait_elapsed := 0.0
 var _bathymetry_wait_reported := false
 var _test_injection_sequence := 0
 var _last_queued_injection_count := 0
-var _test_marker: MeshInstance3D
+var _test_marker: Node3D
 var _test_marker_remaining_s := 0.0
+var _field_debug_mesh: MeshInstance3D
+var _field_debug_material: ShaderMaterial
+var _field_debug_shader: Shader
+var _last_test_target := Vector3.ZERO
+var _last_test_target_valid := false
+var _pending_dispatch_diagnostic := {}
+var _aabb_debug_reported := false
 
 
 func _ready() -> void:
@@ -173,6 +192,7 @@ func _process(delta: float) -> void:
 			_ensure_particles()
 			_print_init_diagnostic()
 		_update_particles()
+		_update_field_debug_visual()
 	elif not _field.ready and not _field.last_error.is_empty() and not _init_failure_reported:
 		if _field.last_error.begins_with("RenderingDevice global"):
 			# The callback is render-thread queued and can run before the renderer
@@ -237,7 +257,7 @@ func _request_test_injection() -> void:
 	var target := _find_test_position(camera)
 	if target.is_empty():
 		_runtime_injection_requested = false
-		print("SEDIMENT TEST FAILED: no valid water/seabed cell within %.1f metres." % TEST_SEARCH_RADIUS_M)
+		print("SEDIMENT TEST FAILED: no valid visible seabed near camera")
 		return
 	var sample_position: Vector3 = target["world_position"]
 	var validation := _injection_validation(sample_position)
@@ -245,25 +265,37 @@ func _request_test_injection() -> void:
 	_runtime_injection_requested = false
 	_test_injection_sequence += 1
 	if accepted:
+		_last_test_target = sample_position
+		_last_test_target_valid = true
 		_show_test_marker(sample_position)
 	print("SEDIMENT TEST INJECTION #%d" % _test_injection_sequence)
 	print("camera_world=%s" % camera.global_position)
-	print("target_world=%s distance_from_camera=%.3f" % [sample_position, camera.global_position.distance_to(sample_position)])
+	print("target_world=%s horizontal_distance=%.3f 3D_distance=%.3f camera_forward_dot_to_target=%.3f target_in_front=%s in_frustum=%s" % [
+		sample_position,
+		float(target.get("horizontal_distance", 0.0)),
+		float(target.get("distance_3d", 0.0)),
+		float(target.get("forward_dot", -1.0)),
+		bool(target.get("target_in_front", false)),
+		bool(target.get("in_frustum", false)),
+	])
 	print("raw_field_uv=%s inside_field=%s" % [validation.get("raw_uv", Vector2.ZERO), validation.get("inside_field", false)])
 	print("bathymetry_in_bounds=%s water=%s depth=%.3f" % [validation.get("bathymetry_in_bounds", false), validation.get("water", false), validation.get("depth_m", 0.0)])
 	print("radius=%.3f strength=%.3f queued=%s pending_queue=%d" % [TEST_INJECTION_RADIUS_M, TEST_INJECTION_STRENGTH, accepted, _pending_injections.size()])
 	print("FIELD DEBUG PROXY: expected_center_after_dispatch=%.3f (GPU impulse, no readback); marker_lifetime_s=%.1f" % [TEST_INJECTION_STRENGTH * exp(-sediment_settling_rate / maxf(sediment_update_hz, 1.0)), TEST_MARKER_LIFETIME_S])
+	_print_particle_height_diagnostic(sample_position, validation)
 
 
 func _find_test_position(camera: Camera3D) -> Dictionary:
 	var camera_xz := Vector2(camera.global_position.x, camera.global_position.z)
 	var forward := -camera.global_transform.basis.z
-	var forward_xz := Vector2(forward.x, forward.z).normalized()
-	if forward_xz.length_squared() <= 0.0001:
-		forward_xz = Vector2(0.0, -1.0)
-	var preferred_xz := camera_xz + forward_xz * TEST_PREFERRED_DISTANCE_M
+	if forward.length_squared() <= 0.0001:
+		return {}
+	forward = forward.normalized()
+	var preferred_position := camera.global_position + forward * TEST_PREFERRED_DISTANCE_M
+	var viewport_rect := get_viewport().get_visible_rect()
 	var best_index := -1
 	var best_score := INF
+	var best_target := {}
 	for index in _bathymetry.cell_count():
 		if _bathymetry.land_water_mask[index] == 0 or _bathymetry.depth_m[index] <= 0.001:
 			continue
@@ -273,16 +305,32 @@ func _find_test_position(camera: Camera3D) -> Dictionary:
 		var distance_sq := world_xz.distance_squared_to(camera_xz)
 		if distance_sq > TEST_SEARCH_RADIUS_M * TEST_SEARCH_RADIUS_M:
 			continue
-		var forward_alignment := (world_xz - camera_xz).normalized().dot(forward_xz)
-		var score := world_xz.distance_squared_to(preferred_xz) + (1.0 - forward_alignment) * 16.0
+		var candidate := Vector3(world_xz.x, _bathymetry.sea_level_y - _bathymetry.depth_m[index] + 0.45, world_xz.y)
+		var to_candidate := candidate - camera.global_position
+		var distance_3d := to_candidate.length()
+		if distance_3d <= 0.001 or distance_3d > TEST_SEARCH_RADIUS_M:
+			continue
+		var forward_dot := forward.dot(to_candidate / distance_3d)
+		if forward_dot <= 0.10 or camera.is_position_behind(candidate):
+			continue
+		var screen_position := camera.unproject_position(candidate)
+		var in_frustum := viewport_rect.grow(-2.0).has_point(screen_position)
+		if not in_frustum:
+			continue
+		var score := candidate.distance_squared_to(preferred_position) + (1.0 - forward_dot) * 16.0
 		if score < best_score:
 			best_score = score
 			best_index = index
+			best_target = {
+				"world_position": candidate,
+				"horizontal_distance": sqrt(distance_sq),
+				"distance_3d": distance_3d,
+				"forward_dot": forward_dot,
+				"target_in_front": true,
+				"in_frustum": true,
+			}
 	if best_index >= 0:
-		var best_x := best_index % _bathymetry.width
-		var best_z := floori(float(best_index) / float(_bathymetry.width))
-		var world_xz := _bathymetry.world_origin_xz + Vector2(float(best_x), float(best_z)) * _bathymetry.cell_size_m
-		return {"world_position": Vector3(world_xz.x, _bathymetry.sea_level_y - _bathymetry.depth_m[best_index] + 0.45, world_xz.y)}
+		return best_target
 	return {}
 
 
@@ -314,19 +362,34 @@ func _show_test_marker(world_position: Vector3) -> void:
 		return
 	if _test_marker != null and is_instance_valid(_test_marker):
 		_test_marker.queue_free()
-	_test_marker = MeshInstance3D.new()
+	_test_marker = Node3D.new()
 	_test_marker.name = "SedimentTestInjectionMarker"
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.35
-	sphere.height = 0.70
-	_test_marker.mesh = sphere
 	var material := StandardMaterial3D.new()
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.albedo_color = Color(1.0, 0.30, 0.04, 0.90)
+	material.albedo_color = Color(1.0, 0.08, 0.78, 0.96)
 	material.emission_enabled = true
-	material.emission = Color(1.0, 0.08, 0.01)
+	material.emission = Color(1.0, 0.01, 0.36)
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_test_marker.material_override = material
+	var ring := MeshInstance3D.new()
+	ring.name = "InjectionRing"
+	var torus := TorusMesh.new()
+	torus.inner_radius = 1.55
+	torus.outer_radius = 1.82
+	torus.rings = 24
+	torus.ring_segments = 12
+	ring.mesh = torus
+	ring.material_override = material
+	_test_marker.add_child(ring)
+	var pillar := MeshInstance3D.new()
+	pillar.name = "InjectionPillar"
+	var cylinder := CylinderMesh.new()
+	cylinder.top_radius = 0.12
+	cylinder.bottom_radius = 0.18
+	cylinder.height = 5.0
+	pillar.mesh = cylinder
+	pillar.position.y = 2.5
+	pillar.material_override = material
+	_test_marker.add_child(pillar)
 	_test_marker.global_position = world_position
 	_test_marker.top_level = true
 	add_child(_test_marker)
@@ -359,10 +422,14 @@ func _apply_runtime_debug_mode() -> void:
 	arguments.append_array(OS.get_cmdline_user_args())
 	for argument in arguments:
 		match argument.trim_prefix("--").to_upper():
-			"SEDIMENT_DEBUG_FIELD": sediment_debug_mode = DebugMode.FIELD
-			"SEDIMENT_DEBUG_SOURCE": sediment_debug_mode = DebugMode.SOURCE
+			"SEDIMENT_DEBUG_FIELD": sediment_debug_mode = DebugMode.FIELD_SURFACE
+			"SEDIMENT_DEBUG_SOURCE": sediment_debug_mode = DebugMode.SOURCE_SURFACE
 			"SEDIMENT_DEBUG_CLOUDS": sediment_debug_mode = DebugMode.CLOUDS
 			"SEDIMENT_DEBUG_WISPS": sediment_debug_mode = DebugMode.WISPS
+			"SEDIMENT_DEBUG_FIELD_UNDERWATER", "SEDIMENT_FIELD_UNDERWATER": sediment_debug_mode = DebugMode.FIELD_UNDERWATER
+			"SEDIMENT_DEBUG_CANDIDATES", "SEDIMENT_CANDIDATES": sediment_debug_mode = DebugMode.CANDIDATES
+			"SEDIMENT_DEBUG_FIELD_PARTICLE_MATCH", "SEDIMENT_FIELD_PARTICLE_MATCH": sediment_debug_mode = DebugMode.FIELD_PARTICLE_MATCH
+			"SEDIMENT_DEBUG_FIELD_UV", "SEDIMENT_FIELD_UV": sediment_debug_mode = DebugMode.FIELD_UV
 			"SEDIMENT_DEBUG_OFF": sediment_debug_mode = DebugMode.OFF
 
 
@@ -398,6 +465,10 @@ func get_debug_state() -> Dictionary:
 		"pending_injections": _pending_injections.size(),
 		"test_injection_pending": _runtime_injection_requested,
 		"last_queued_injection_count": _last_queued_injection_count,
+		"last_test_target": _last_test_target,
+		"has_last_test_target": _last_test_target_valid,
+		"particle_debug_mode": sediment_debug_mode,
+		"particle_culling_debug_disabled": _is_particle_debug_mode(),
 		"cloud_amount": _cloud_particles.amount if _cloud_particles != null else 0,
 		"wisp_amount": _wisp_particles.amount if _wisp_particles != null else 0,
 		"cloud_emitting": _cloud_particles.emitting if _cloud_particles != null else false,
@@ -408,6 +479,7 @@ func get_debug_state() -> Dictionary:
 func _dispatch_field(step_delta: float) -> void:
 	var read_index := _completed_read_index
 	var write_index := 1 - read_index
+	var serial_before := int(_field.diagnostic_state().get("completed_dispatch_serial", 0))
 	var injection_count := mini(_pending_injections.size(), MAX_INJECTIONS)
 	var injection_floats := PackedFloat32Array()
 	injection_floats.resize(MAX_INJECTIONS * 4)
@@ -449,6 +521,13 @@ func _dispatch_field(step_delta: float) -> void:
 		injection_count))
 	_pending_injections.clear()
 	_last_queued_injection_count = injection_count
+	if injection_count > 0:
+		_pending_dispatch_diagnostic = {
+			"read_index": read_index,
+			"write_index": write_index,
+			"injection_count": injection_count,
+			"serial_before": serial_before,
+		}
 
 
 func _publish_completed_field() -> void:
@@ -460,22 +539,33 @@ func _publish_completed_field() -> void:
 		_completed_read_index = int(diagnostic.get("completed_read_index", _completed_read_index))
 		_published_dispatch_serial = completed_serial
 		_dispatch_queued = false
+	if not _field.get_texture_rid(_completed_read_index).is_valid():
+		return
+	_field_texture.texture_rd_rid = _field.get_texture_rid(_completed_read_index)
+	_field_published = true
+	if not _pending_dispatch_diagnostic.is_empty() and completed_serial > int(_pending_dispatch_diagnostic.get("serial_before", completed_serial)):
+		print("SEDIMENT DISPATCH read_index=%d write_index=%d injection_count=%d serial_before=%d serial_after=%d published_index=%d published_rid_id=%d" % [
+			int(_pending_dispatch_diagnostic.get("read_index", -1)),
+			int(_pending_dispatch_diagnostic.get("write_index", -1)),
+			int(_pending_dispatch_diagnostic.get("injection_count", 0)),
+			int(_pending_dispatch_diagnostic.get("serial_before", 0)),
+			completed_serial,
+			_completed_read_index,
+			_field.get_texture_rid(_completed_read_index).get_id(),
+		])
+		_pending_dispatch_diagnostic.clear()
 	if _surface == null or not is_instance_valid(_surface):
 		return
 	var material := _surface.get_surface_material()
 	if material == null or material.shader == null:
 		return
-	if not _field.get_texture_rid(_completed_read_index).is_valid():
-		return
-	_field_texture.texture_rd_rid = _field.get_texture_rid(_completed_read_index)
 	_surface.set_sediment_field(
 		_field_texture,
 		sediment_enabled,
 		_field_origin(),
 		_field_extent(),
 		sediment_above_water_optics_strength,
-		sediment_debug_mode)
-	_field_published = true
+		_surface_debug_mode())
 
 
 func _ensure_particles() -> void:
@@ -560,7 +650,7 @@ func _create_particle_layer(layer_name: String) -> GPUParticles3D:
 	particles.preprocess = 20.0
 	particles.randomness = 0.25
 	particles.local_coords = false
-	particles.visibility_aabb = AABB(Vector3(-42.0, -42.0, -42.0), Vector3(84.0, 84.0, 84.0))
+	particles.visibility_aabb = _particle_visibility_aabb()
 	particles.emitting = false
 	particles.visible = false
 	return particles
@@ -606,6 +696,7 @@ func _create_render_material(is_wisps: bool) -> ShaderMaterial:
 	material.set_shader_parameter(&"field_threshold", 0.10 if is_wisps else 0.15)
 	material.set_shader_parameter(&"field_contrast", 0.80 if is_wisps else 0.68)
 	material.set_shader_parameter(&"wisps", is_wisps)
+	material.set_shader_parameter(&"debug_mode", 0)
 	return material
 
 
@@ -626,16 +717,23 @@ func _update_particles() -> void:
 		_cloud_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 		_cloud_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 		_cloud_material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
+		_cloud_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
 	if _wisp_material != null:
 		_wisp_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 		_wisp_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
 		_wisp_material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
+		_wisp_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
+	if _cloud_particles != null:
+		_cloud_particles.visibility_aabb = _particle_visibility_aabb()
+	if _wisp_particles != null:
+		_wisp_particles.visibility_aabb = _particle_visibility_aabb()
 	_apply_particle_visibility()
 
 
 func _apply_particle_visibility() -> void:
-	var clouds_visible := sediment_enabled and _camera_underwater and _field_published and sediment_cloud_strength > 0.0
-	var wisps_visible := sediment_enabled and _camera_underwater and _field_published and sediment_wisp_strength > 0.0
+	var particle_debug := _is_particle_debug_mode()
+	var clouds_visible := sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_cloud_strength > 0.0)
+	var wisps_visible := sediment_enabled and _camera_underwater and _field_published and (particle_debug or sediment_wisp_strength > 0.0)
 	if _cloud_particles != null:
 		_cloud_particles.emitting = clouds_visible
 		_cloud_particles.visible = clouds_visible
@@ -646,6 +744,96 @@ func _apply_particle_visibility() -> void:
 		_cloud_material.set_shader_parameter(&"strength", sediment_cloud_strength * (8.0 if sediment_debug_mode == DebugMode.CLOUDS else 1.0))
 	if _wisp_material != null:
 		_wisp_material.set_shader_parameter(&"strength", sediment_wisp_strength * (8.0 if sediment_debug_mode == DebugMode.WISPS else 1.0))
+	if particle_debug and not _aabb_debug_reported:
+		print("SEDIMENT PARTICLE AABB DEBUG: culling disabled with %s; production AABB restores when debug mode is OFF." % _particle_visibility_aabb())
+		_aabb_debug_reported = true
+	elif not particle_debug:
+		_aabb_debug_reported = false
+
+
+func _surface_debug_mode() -> int:
+	if sediment_debug_mode == DebugMode.FIELD_SURFACE:
+		return 1
+	if sediment_debug_mode == DebugMode.SOURCE_SURFACE:
+		return 2
+	return 0
+
+
+func _is_particle_debug_mode() -> bool:
+	return sediment_debug_mode == DebugMode.CANDIDATES or sediment_debug_mode == DebugMode.FIELD_PARTICLE_MATCH
+
+
+func _particle_shader_debug_mode() -> int:
+	if sediment_debug_mode == DebugMode.CANDIDATES:
+		return 1
+	if sediment_debug_mode == DebugMode.FIELD_PARTICLE_MATCH:
+		return 2
+	return 0
+
+
+func _particle_visibility_aabb() -> AABB:
+	# Stage 2/3 deliberately disable culling to distinguish an AABB issue from a
+	# process/material issue. Production retains the measured camera-local bounds.
+	if _is_particle_debug_mode():
+		return AABB(Vector3(-1000.0, -1000.0, -1000.0), Vector3(2000.0, 2000.0, 2000.0))
+	return AABB(Vector3(-42.0, -42.0, -42.0), Vector3(84.0, 84.0, 84.0))
+
+
+func _update_field_debug_visual() -> void:
+	var enabled := (sediment_debug_mode == DebugMode.FIELD_UNDERWATER or sediment_debug_mode == DebugMode.FIELD_UV) \
+		and _field_published and _last_test_target_valid
+	if not enabled:
+		if _field_debug_mesh != null and is_instance_valid(_field_debug_mesh):
+			_field_debug_mesh.visible = false
+		return
+	if not _ensure_field_debug_mesh():
+		return
+	_field_debug_mesh.global_position = _last_test_target + Vector3(0.0, 0.12, 0.0)
+	_field_debug_mesh.visible = true
+	_field_debug_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
+	_field_debug_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
+	_field_debug_material.set_shader_parameter(&"sediment_field_extent_m", _field_extent())
+	_field_debug_material.set_shader_parameter(&"debug_mode", 1 if sediment_debug_mode == DebugMode.FIELD_UV else 0)
+
+
+func _ensure_field_debug_mesh() -> bool:
+	if _field_debug_mesh != null and is_instance_valid(_field_debug_mesh):
+		return true
+	if _field_debug_shader == null:
+		_field_debug_shader = load(FIELD_DEBUG_SHADER_PATH) as Shader
+	if _field_debug_shader == null:
+		push_error("SEDIMENT FIELD DEBUG: could not load %s" % FIELD_DEBUG_SHADER_PATH)
+		return false
+	_field_debug_material = ShaderMaterial.new()
+	_field_debug_material.shader = _field_debug_shader
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(TEST_FIELD_DEBUG_SIZE_M, TEST_FIELD_DEBUG_SIZE_M)
+	_field_debug_mesh = MeshInstance3D.new()
+	_field_debug_mesh.name = "SedimentFieldUnderwaterDebug"
+	_field_debug_mesh.mesh = plane
+	_field_debug_mesh.material_override = _field_debug_material
+	add_child(_field_debug_mesh)
+	_field_debug_mesh.owner = null
+	_field_debug_mesh.top_level = true
+	return true
+
+
+func _print_particle_height_diagnostic(target: Vector3, validation: Dictionary) -> void:
+	var depth_m: float = float(validation.get("depth_m", 0.0))
+	var preview_depth_m: float = float(round(clampf(depth_m / 32.0, 0.0, 1.0) * 255.0)) / 255.0 * 32.0
+	var seabed_y: float = (_bathymetry.sea_level_y if _bathymetry != null else 0.0) - depth_m
+	var preview_seabed_y: float = (_bathymetry.sea_level_y if _bathymetry != null else 0.0) - preview_depth_m
+	print("SEDIMENT PARTICLE HEIGHT target=%s seabed_y=%.3f preview_depth_m=%.3f preview_seabed_y=%.3f cloud_y_range=[%.3f, %.3f] wisp_y_range=[%.3f, %.3f] preview_error_m=%.3f" % [
+		target,
+		seabed_y,
+		preview_depth_m,
+		preview_seabed_y,
+		preview_seabed_y + 0.05,
+		preview_seabed_y + 1.5,
+		preview_seabed_y + 0.5,
+		preview_seabed_y + 2.5,
+		preview_seabed_y - seabed_y,
+	])
 
 
 func _set_emitter_from_camera() -> void:

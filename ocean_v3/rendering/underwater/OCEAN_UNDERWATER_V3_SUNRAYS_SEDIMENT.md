@@ -42,10 +42,28 @@ tap-index phase input.
 The stable light-space beam coordinate and world-slice ID remain unchanged.
 The proxy only modulates per-slice energy (default 0.65–1.35 near the surface)
 and ridge exponents for width (default 0.90–1.10), with both effects fading
-smoothly to zero over the default 15 m depth envelope. Set the existing
-`underwater_sunrays_animation_speed` to zero to freeze the modulation in its
-world-space state. The `SUNRAYS_WAVE_FOCUS`, `SUNRAYS_WAVE_WIDTH`, and
-`SUNRAYS_WAVE_MODULATION` diagnostics expose the three resulting signals.
+smoothly to zero over the default 15 m depth envelope. V3.2A separates the
+living-wave clock from the earlier sunray control: use
+`underwater_sunrays_wave_animation_speed` (default 1.5, configurable through
+10.0) for its rate and
+`underwater_sunrays_wave_freeze` for an explicit static world-space debug
+state. The `SUNRAYS_WAVE_FOCUS`, `SUNRAYS_WAVE_WIDTH`, and
+`SUNRAYS_WAVE_MODULATION` diagnostics expose the three resulting signals;
+`SUNRAYS_WAVE_EXAGGERATED` uses 1.0 intensity strength, 0.40 width strength,
+and no practical depth fade to make the plumbing unambiguous.
+
+## Sunrays V3.3 — light-direction invariant
+
+`DirectionalLight3D.global_transform.basis.z` is the world-space direction
+from water toward the sun. The compositor receives that vector as
+`toward_sun`; physical photon travel is always `light_into_water =
+-toward_sun`. Each reconstructed `light_entry` is formed by tracing from a
+sample toward `toward_sun`, and every sample now verifies that
+`normalize(sample_point - light_entry)` aligns with `light_into_water` by at
+least 0.99 before it contributes. `SUNRAYS_DIRECTION_ALIGNMENT` exposes this
+invariant (green is +1), while `SUNRAYS_LIGHT_TRAVEL_VECTOR` encodes the
+physical into-water vector. The light transform itself is never modified by
+these diagnostics.
 
 ## Sediment V2 test path
 

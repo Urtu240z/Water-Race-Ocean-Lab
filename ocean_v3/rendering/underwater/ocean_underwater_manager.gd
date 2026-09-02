@@ -56,6 +56,8 @@ func _push_settings() -> void:
 		float(_settings.get("sunrays_pattern_scale", 1.0)), float(_settings.get("sunrays_pattern_contrast", 1.4)),
 		float(_settings.get("sunrays_animation_speed", 0.35)),
 		bool(_settings.get("sunrays_wave_modulation_enabled", true)),
+		float(_settings.get("sunrays_wave_animation_speed", 1.50)),
+		bool(_settings.get("sunrays_wave_freeze", false)),
 		float(_settings.get("sunrays_wave_intensity_strength", 0.35)),
 		float(_settings.get("sunrays_wave_width_strength", 0.10)),
 		float(_settings.get("sunrays_wave_depth_fade_m", 15.0)),
@@ -96,7 +98,7 @@ func _exit_tree() -> void:
 		_effect.enabled = false
 		_effect.set_settings(false, 0.0, false, 0.0, 0.12, Vector3.ZERO, 0.0, Color.BLACK, 0.0, 0.0, 1.0, 0,
 			Vector3(0.0, 1.0, 0.0), Color.WHITE, 0.0, false, 0.0, 0.45, 0.08, 30.0, 1.0, 1.4,
-			0.0, false, 0.0, 0.0, 15.0, 0.0, 4)
+			0.0, false, 1.0, false, 0.0, 0.0, 15.0, 0.0, 4)
 		RenderingServer.call_on_render_thread(_effect.free_resources)
 	_effect = null
 	_attached = false

@@ -10,6 +10,8 @@ uniform float strength = 1.0;
 uniform float field_threshold = 0.10;
 uniform float field_contrast = 0.75;
 uniform bool wisps = false;
+// 0 = production, 1 = all valid bathymetry candidates, 2 = field match.
+uniform int debug_mode = 0;
 
 varying float particle_distance_m;
 varying float particle_field_density;
@@ -48,10 +50,24 @@ void fragment() {
 		float filament = 1.0 - smoothstep(0.18, 0.72, abs(centered_uv.y + 0.18 * sin(centered_uv.x * 4.0)));
 		soft_shape *= filament;
 	}
-	float density = smoothstep(field_threshold, 1.0, particle_field_density);
-	density = pow(max(density, 0.0), max(field_contrast, 0.1));
-	float distance_fade = 1.0 - smoothstep(28.0, 42.0, particle_distance_m);
-	float alpha = soft_shape * density * distance_fade * particle_color.a * strength;
-	ALBEDO = particle_color.rgb;
-	ALPHA = clamp(alpha, 0.0, 0.35);
+	if (debug_mode == 1) {
+		// Stage 2: process-shader candidates only. Do not sample the field or use
+		// production density/alpha, so a missing candidate cannot be mistaken for
+		// subtle production art direction.
+		ALBEDO = vec3(0.02, 1.0, 0.16);
+		ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+	} else if (debug_mode == 2) {
+		// Stage 3: the same world->field UV mapping as production. Red proves a
+		// valid candidate outside the field; bright green proves a field match.
+		bool matched = particle_field_density >= field_threshold;
+		ALBEDO = matched ? vec3(0.02, 1.0, 0.16) : vec3(1.0, 0.025, 0.02);
+		ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+	} else {
+		float density = smoothstep(field_threshold, 1.0, particle_field_density);
+		density = pow(max(density, 0.0), max(field_contrast, 0.1));
+		float distance_fade = 1.0 - smoothstep(28.0, 42.0, particle_distance_m);
+		float alpha = soft_shape * density * distance_fade * particle_color.a * strength;
+		ALBEDO = particle_color.rgb;
+		ALPHA = clamp(alpha, 0.0, 0.35);
+	}
 }

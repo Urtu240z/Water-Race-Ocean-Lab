@@ -430,6 +430,14 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_sunrays_wave_modulation_enabled = value
 		_request_visual_sync()
+@export_range(0.0, 10.0, 0.01, "suffix:x") var underwater_sunrays_wave_animation_speed := 1.50:
+	set(value):
+		underwater_sunrays_wave_animation_speed = clampf(value, 0.0, 10.0)
+		_request_visual_sync()
+@export var underwater_sunrays_wave_freeze := false:
+	set(value):
+		underwater_sunrays_wave_freeze = value
+		_request_visual_sync()
 @export_range(0.0, 0.45, 0.01) var underwater_sunrays_wave_intensity_strength := 0.35:
 	set(value):
 		underwater_sunrays_wave_intensity_strength = clampf(value, 0.0, 0.45)
@@ -444,9 +452,9 @@ var _performance_overlay_label: Label
 		_request_visual_sync()
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 27)
+		underwater_debug_mode = clampi(value, 0, 30)
 		if underwater_debug_mode != 19:
 			_sun_vector_diagnostic_printed = false
 		_request_visual_sync()
@@ -1593,6 +1601,8 @@ func _sync_underwater_manager() -> void:
 			"sunrays_pattern_contrast": underwater_sunrays_pattern_contrast,
 			"sunrays_animation_speed": underwater_sunrays_animation_speed,
 			"sunrays_wave_modulation_enabled": underwater_sunrays_wave_modulation_enabled,
+			"sunrays_wave_animation_speed": underwater_sunrays_wave_animation_speed,
+			"sunrays_wave_freeze": underwater_sunrays_wave_freeze,
 			"sunrays_wave_intensity_strength": underwater_sunrays_wave_intensity_strength,
 			"sunrays_wave_width_strength": underwater_sunrays_wave_width_strength,
 			"sunrays_wave_depth_fade_m": underwater_sunrays_wave_depth_fade_m,
