@@ -450,6 +450,23 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_sunrays_wave_depth_fade_m = clampf(value, 1.0, 50.0)
 		_request_visual_sync()
+@export var underwater_sunrays_phase_debug_constant := false:
+	set(value):
+		underwater_sunrays_phase_debug_constant = value
+		_request_visual_sync()
+
+@export_group("Underwater / Sun Rays Direction Proof")
+## Independent world-space aid: green is physical photon travel (-light.basis.z),
+## red is the opposite (+light.basis.z). It never reads compositor/shader state.
+@export var underwater_sunrays_direction_proof_enabled := false:
+	set(value):
+		underwater_sunrays_direction_proof_enabled = value
+@export_range(5.0, 100.0, 1.0, "suffix: m") var underwater_sunrays_direction_proof_length_m := 30.0:
+	set(value):
+		underwater_sunrays_direction_proof_length_m = clampf(value, 5.0, 100.0)
+@export_range(1.0, 20.0, 0.5, "suffix: m") var underwater_sunrays_direction_proof_camera_offset_m := 6.0:
+	set(value):
+		underwater_sunrays_direction_proof_camera_offset_m = clampf(value, 1.0, 20.0)
 
 @export_group("Underwater / Debug")
 @export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR") var underwater_debug_mode := 0:
@@ -1453,6 +1470,11 @@ var _light_into_water_world := Vector3(0.0, -1.0, 0.0)
 var _sun_color := Color.WHITE
 var _sun_energy := 0.0
 var _sun_vector_diagnostic_printed := false
+var _sunrays_direction_proof_root: Node3D
+var _sunrays_direction_proof_green: MeshInstance3D
+var _sunrays_direction_proof_red: MeshInstance3D
+var _sunrays_direction_proof_origin: MeshInstance3D
+var _sunrays_direction_proof_last_basis_z := Vector3(999.0, 999.0, 999.0)
 var _underwater_sunrays_benchmark_tap_count := 4
 var _reflection_sspr_manager: Node
 var _caustics_manager: Node
@@ -1606,6 +1628,7 @@ func _sync_underwater_manager() -> void:
 			"sunrays_wave_intensity_strength": underwater_sunrays_wave_intensity_strength,
 			"sunrays_wave_width_strength": underwater_sunrays_wave_width_strength,
 			"sunrays_wave_depth_fade_m": underwater_sunrays_wave_depth_fade_m,
+			"sunrays_phase_debug_constant": underwater_sunrays_phase_debug_constant,
 			"sunrays_time": SimulationClock.get_render_time(),
 			"sunrays_tap_count": _underwater_sunrays_benchmark_tap_count,
 			"snell_enabled": underwater_snell_enabled,
@@ -2136,6 +2159,97 @@ func _sync_sun_direction() -> void:
 				basis_z_world, _sun_direction_world, _light_into_water_world])
 
 
+func _sunrays_direction_proof_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = color
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return material
+
+
+func _sunrays_direction_proof_transform(origin: Vector3, direction: Vector3, length_m: float) -> Transform3D:
+	# CylinderMesh is aligned to local +Y. Build an orthonormal basis whose Y
+	# axis is the independently sampled physical/world direction.
+	var axis_y := direction.normalized()
+	var reference := Vector3.FORWARD if absf(axis_y.dot(Vector3.FORWARD)) < 0.99 else Vector3.RIGHT
+	var axis_x := reference.cross(axis_y).normalized()
+	var axis_z := axis_x.cross(axis_y).normalized()
+	return Transform3D(Basis(axis_x, axis_y * length_m, axis_z), origin + axis_y * (length_m * 0.5))
+
+
+func _ensure_sunrays_direction_proof_geometry() -> void:
+	if _sunrays_direction_proof_root != null and is_instance_valid(_sunrays_direction_proof_root):
+		return
+	_sunrays_direction_proof_root = Node3D.new()
+	_sunrays_direction_proof_root.name = &"SunrayDirectionProof"
+	add_child(_sunrays_direction_proof_root)
+	var rod_mesh := CylinderMesh.new()
+	rod_mesh.top_radius = 0.055
+	rod_mesh.bottom_radius = 0.055
+	rod_mesh.height = 1.0
+	_sunrays_direction_proof_green = MeshInstance3D.new()
+	_sunrays_direction_proof_green.name = &"SUNRAY_DEBUG_LIGHT_TRAVEL_GREEN"
+	_sunrays_direction_proof_green.mesh = rod_mesh
+	_sunrays_direction_proof_green.material_override = _sunrays_direction_proof_material(Color(0.10, 1.0, 0.20, 1.0))
+	_sunrays_direction_proof_green.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sunrays_direction_proof_root.add_child(_sunrays_direction_proof_green)
+	_sunrays_direction_proof_red = MeshInstance3D.new()
+	_sunrays_direction_proof_red.name = &"SUNRAY_DEBUG_TOWARD_SUN_RED"
+	_sunrays_direction_proof_red.mesh = rod_mesh
+	_sunrays_direction_proof_red.material_override = _sunrays_direction_proof_material(Color(1.0, 0.08, 0.08, 1.0))
+	_sunrays_direction_proof_red.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sunrays_direction_proof_root.add_child(_sunrays_direction_proof_red)
+	var origin_mesh := SphereMesh.new()
+	origin_mesh.radius = 0.22
+	origin_mesh.height = 0.44
+	_sunrays_direction_proof_origin = MeshInstance3D.new()
+	_sunrays_direction_proof_origin.name = &"SUNRAY_DEBUG_ORIGIN"
+	_sunrays_direction_proof_origin.mesh = origin_mesh
+	_sunrays_direction_proof_origin.material_override = _sunrays_direction_proof_material(Color(1.0, 0.95, 0.20, 1.0))
+	_sunrays_direction_proof_origin.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sunrays_direction_proof_root.add_child(_sunrays_direction_proof_origin)
+
+
+func _update_sunrays_direction_proof() -> void:
+	if Engine.is_editor_hint():
+		return
+	if not underwater_sunrays_direction_proof_enabled:
+		if _sunrays_direction_proof_root != null and is_instance_valid(_sunrays_direction_proof_root):
+			_sunrays_direction_proof_root.visible = false
+		return
+	var scene_root := get_tree().current_scene
+	var camera := get_viewport().get_camera_3d()
+	var lights := scene_root.find_children("*", "DirectionalLight3D", true, false) if scene_root != null else []
+	if camera == null or lights.is_empty():
+		return
+	var sun := lights[0] as DirectionalLight3D
+	if sun == null:
+		return
+	var toward_sun := sun.global_transform.basis.z.normalized()
+	if toward_sun.length_squared() <= 0.000001:
+		return
+	var light_into_water := -toward_sun
+	var camera_forward := -camera.global_transform.basis.z
+	camera_forward.y = 0.0
+	if camera_forward.length_squared() <= 0.000001:
+		camera_forward = Vector3.FORWARD
+	camera_forward = camera_forward.normalized()
+	var debug_surface_point := Vector3(camera.global_position.x, _surface_sea_level(), camera.global_position.z) \
+		+ camera_forward * underwater_sunrays_direction_proof_camera_offset_m
+	_ensure_sunrays_direction_proof_geometry()
+	_sunrays_direction_proof_root.visible = true
+	var length_m := underwater_sunrays_direction_proof_length_m
+	_sunrays_direction_proof_green.global_transform = _sunrays_direction_proof_transform(debug_surface_point, light_into_water, length_m)
+	_sunrays_direction_proof_red.global_transform = _sunrays_direction_proof_transform(debug_surface_point, toward_sun, length_m)
+	_sunrays_direction_proof_origin.global_position = debug_surface_point
+	if not toward_sun.is_equal_approx(_sunrays_direction_proof_last_basis_z):
+		_sunrays_direction_proof_last_basis_z = toward_sun
+		print("OCEAN SUNRAYS DIRECTION PROOF: basis.z=%s toward_sun=%s light_into_water=%s" % [
+			toward_sun, toward_sun, light_into_water])
+
+
 func _refresh_sea_state_zones() -> void:
 	if not _sea_state_zones_dirty:
 		return
@@ -2193,6 +2307,7 @@ func _process(_delta: float) -> void:
 	# caustics input current without re-running the full visual material sync.
 	if not Engine.is_editor_hint():
 		_sync_sun_direction()
+		_update_sunrays_direction_proof()
 		_sync_caustics_manager()
 		_update_underwater_camera_state()
 		_sync_underwater_manager()

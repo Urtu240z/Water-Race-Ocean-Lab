@@ -48,7 +48,8 @@ enum DebugMode {
 @export_range(0.0, 2.0, 0.01) var sediment_above_water_optics_strength := 1.0
 @export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
-@export_tool_button("Inject Test Sediment", "Burst") var inject_test_sediment_button = inject_test_sediment
+# Editor tooling only. Runtime validation must use Ctrl+Shift+J, never this button.
+@export_tool_button("Inject Test Sediment (Editor Tool)", "Burst") var inject_test_sediment_button = inject_test_sediment
 
 var _field: OceanSedimentField
 var _field_texture := Texture2DRD.new()
@@ -82,6 +83,7 @@ var _init_failure_reported := false
 var _render_device_wait_reported := false
 var _runtime_injection_requested := false
 var _test_injection_wait_reported := false
+var _test_blocked_reported := false
 var _runtime_debug_mode_applied := false
 var _initialization_retry_timer := 0.0
 var _bathymetry_wait_elapsed := 0.0
@@ -166,7 +168,10 @@ func _print_bathymetry_wait_diagnostic() -> void:
 
 
 func _process(delta: float) -> void:
-	if Engine.is_editor_hint() or not _configuration_requested:
+	if Engine.is_editor_hint():
+		return
+	if not _configuration_requested:
+		_report_test_blocked_once("not configured")
 		return
 	_update_test_marker(delta)
 	if not _configured:
@@ -177,13 +182,17 @@ func _process(delta: float) -> void:
 			_print_bathymetry_wait_diagnostic()
 		_initialization_retry_timer -= maxf(delta, 0.0)
 		if _initialization_retry_timer > 0.0:
+			_report_test_blocked_once("not configured")
 			return
 		_try_begin_initialization()
+		_report_test_blocked_once("not configured")
 		return
 	if _field == null:
+		_report_test_blocked_once("field null")
 		return
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
+		_report_test_blocked_once("no camera")
 		return
 	_set_emitter_from_camera()
 	if _field.ready and _field.has_valid_rids():
@@ -238,8 +247,20 @@ func inject_sediment(world_position: Vector3, radius_m: float, strength: float) 
 
 
 func inject_test_sediment() -> void:
+	print("SEDIMENT inject_test_sediment() RUNTIME editor_hint=%s inside_tree=%s instance_id=%d" % [
+		Engine.is_editor_hint(),
+		is_inside_tree(),
+		get_instance_id(),
+	])
 	_runtime_injection_requested = true
 	_test_injection_wait_reported = false
+	_test_blocked_reported = false
+
+
+func _report_test_blocked_once(reason: String) -> void:
+	if _runtime_injection_requested and not _test_blocked_reported:
+		_test_blocked_reported = true
+		print("SEDIMENT TEST BLOCKED: %s" % reason)
 
 
 func _request_test_injection() -> void:
@@ -390,9 +411,9 @@ func _show_test_marker(world_position: Vector3) -> void:
 	pillar.position.y = 2.5
 	pillar.material_override = material
 	_test_marker.add_child(pillar)
-	_test_marker.global_position = world_position
-	_test_marker.top_level = true
 	add_child(_test_marker)
+	_test_marker.top_level = true
+	_test_marker.global_position = world_position
 	_test_marker_remaining_s = TEST_MARKER_LIFETIME_S
 
 
@@ -437,8 +458,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if Engine.is_editor_hint() or not event is InputEventKey:
 		return
 	var key_event := event as InputEventKey
-	if key_event.pressed and not key_event.echo and key_event.keycode == KEY_F8:
+	if key_event.pressed and not key_event.echo and key_event.ctrl_pressed \
+		and key_event.shift_pressed and key_event.keycode == KEY_J:
+		print("SEDIMENT RUNTIME TRIGGER RECEIVED")
 		inject_test_sediment()
+		get_viewport().set_input_as_handled()
 
 
 func get_debug_state() -> Dictionary:

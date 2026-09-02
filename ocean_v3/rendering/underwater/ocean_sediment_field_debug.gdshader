@@ -27,9 +27,9 @@ void fragment() {
 	if (debug_mode == 1) {
 		ALBEDO = vec3(clamp(uv, vec2(0.0), vec2(1.0)), inside);
 		ALPHA = 0.96;
-		return;
+	} else {
+		float concentration = inside * clamp(texture(sediment_field_texture, clamp(uv, vec2(0.0), vec2(1.0))).r, 0.0, 1.0);
+		ALBEDO = field_heat(concentration);
+		ALPHA = 0.96;
 	}
-	float concentration = inside * clamp(texture(sediment_field_texture, clamp(uv, vec2(0.0), vec2(1.0))).r, 0.0, 1.0);
-	ALBEDO = field_heat(concentration);
-	ALPHA = 0.96;
 }

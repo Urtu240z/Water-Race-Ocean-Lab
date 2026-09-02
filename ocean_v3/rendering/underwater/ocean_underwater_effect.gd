@@ -41,6 +41,7 @@ var _sunrays_wave_freeze := false
 var _sunrays_wave_intensity_strength := 0.35
 var _sunrays_wave_width_strength := 0.10
 var _sunrays_wave_depth_fade_m := 15.0
+var _sunrays_phase_debug_constant := false
 var _sunrays_time := 0.0
 var _sunrays_tap_count := 4
 var _dispatch_count := 0
@@ -61,7 +62,8 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		sunrays_animation_speed: float, sunrays_wave_modulation_enabled: bool,
 		sunrays_wave_animation_speed: float, sunrays_wave_freeze: bool,
 		sunrays_wave_intensity_strength: float, sunrays_wave_width_strength: float,
-		sunrays_wave_depth_fade_m: float, sunrays_time: float, sunrays_tap_count: int = 4) -> void:
+		sunrays_wave_depth_fade_m: float, sunrays_phase_debug_constant: bool,
+		sunrays_time: float, sunrays_tap_count: int = 4) -> void:
 	_mutex.lock()
 	_enabled = is_enabled
 	_sea_level = sea_level
@@ -91,6 +93,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_wave_intensity_strength = clampf(sunrays_wave_intensity_strength, 0.0, 0.45)
 	_sunrays_wave_width_strength = clampf(sunrays_wave_width_strength, 0.0, 0.20)
 	_sunrays_wave_depth_fade_m = clampf(sunrays_wave_depth_fade_m, 1.0, 50.0)
+	_sunrays_phase_debug_constant = sunrays_phase_debug_constant
 	_sunrays_time = sunrays_time
 	_sunrays_tap_count = 1 if sunrays_tap_count <= 1 else 4
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
@@ -169,6 +172,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_wave_intensity_strength := _sunrays_wave_intensity_strength
 	var sunrays_wave_width_strength := _sunrays_wave_width_strength
 	var sunrays_wave_depth_fade_m := _sunrays_wave_depth_fade_m
+	var sunrays_phase_debug_constant := _sunrays_phase_debug_constant
 	var sunrays_time := _sunrays_time
 	var sunrays_tap_count := _sunrays_tap_count
 	_mutex.unlock()
@@ -206,7 +210,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
 	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
 	params.append(sunrays_wave_animation_speed); params.append(0.0 if sunrays_wave_freeze else sunrays_time)
-	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(sunrays_wave_width_strength); params.append(0.0)
+	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(sunrays_wave_width_strength); params.append(1.0 if sunrays_phase_debug_constant else 0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
 	color_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE

@@ -30,7 +30,12 @@ bool finite_vec3(vec3 value) {
 }
 
 bool reconstruct_world(vec2 uv, float raw_depth, out vec3 world_position) {
-	vec4 world = params.inverse_view_projection * vec4(uv * 2.0 - 1.0, raw_depth, 1.0);
+	// imageStore/texelFetch addresses rows from the render target, while the
+	// camera projection receives NDC Y with the opposite orientation. Without
+	// this conversion the compositor samples a vertically mirrored world point:
+	// light-space bands then mirror the real DirectionalLight guide on screen.
+	vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+	vec4 world = params.inverse_view_projection * vec4(ndc, raw_depth, 1.0);
 	if (abs(world.w) <= EPSILON) return false;
 	world_position = world.xyz / world.w;
 	return finite_vec3(world_position);
@@ -76,6 +81,9 @@ float water_path_for_scene(vec3 scene_world, bool scene_valid, vec2 uv) {
 }
 
 float sunrays_phase_response(vec3 view_dir_world, vec3 sun_direction_world) {
+	// Temporary A/B diagnostic. This leaves geometry, slabs and all production
+	// behavior untouched unless explicitly enabled from OceanV3.
+	if (params.sunrays_extra.w > 0.5) return 1.0;
 	// HG keeps the directional lobe cheap while the extra gate makes the back
 	// side effectively dark enough for underwater gameplay.
 	float cos_theta = clamp(dot(view_dir_world, -sun_direction_world), -1.0, 1.0);
@@ -145,7 +153,7 @@ float sunrays_beam_field(vec3 sample_world, vec3 toward_sun, float width_factor,
 	if (!sunrays_beam_coord(sample_world, toward_sun, beam_coord)) return 0.0;
 	float scale = max(params.sunrays_pattern.x, 0.01);
 	// Meter-space ridges: broad 8.7 m shafts, medium 2.9 m shafts, and a
-	// restrained 1.8 m secondary line.  The only warp varies slowly across V.
+	// restrained 1.8 m secondary line. The only warp varies slowly across V.
 	float broad_phase = beam_coord.x * (0.72 * scale)
 		+ sin(beam_coord.y * 0.13) * 0.24;
 	float medium_phase = beam_coord.x * (2.17 * scale)
@@ -361,10 +369,14 @@ void main() {
 				wave_modulation_debug = 1.0 + (wave_modulation_debug - 1.0) / integrated_length_m;
 				direction_alignment_debug = -1.0 + (direction_alignment_debug + 1.0) / integrated_length_m;
 			}
-			float build_up = 1.0 - exp(-max(params.sunrays.w, 0.0) * sunray_segment_m * (exaggerated ? 0.50 : 0.25));
-			float density_path = max(params.sunrays.w, 0.0) * sunray_segment_m;
+			// Do not create a second brightness ramp along the camera ray. That
+			// screen-space build-up made the apparent shaft follow view_ray_world
+			// instead of its physical surface-entry -> light_into_water path. The
+			// only longitudinal profile is the per-slice Beer-Lambert transport
+			// from light_entry to sample_point above.
+			float density_path = max(params.sunrays.w, 0.0) * integrated_length_m;
 			float integration_normalizer = 1.0 / max(1.0, density_path);
-			depth_response = clamp(build_up, 0.0, 1.0);
+			depth_response = integrated_length_m > EPSILON ? 1.0 : 0.0;
 			float final_gain = max(params.sun.w, 0.0) * params.state.x
 				* max(params.sunrays.y, 0.0) * phase_response * depth_response * integration_normalizer;
 			if (exaggerated) final_gain *= 4.0;

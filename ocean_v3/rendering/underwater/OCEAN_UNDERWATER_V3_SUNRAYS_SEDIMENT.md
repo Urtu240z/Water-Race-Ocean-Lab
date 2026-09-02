@@ -65,6 +65,37 @@ invariant (green is +1), while `SUNRAYS_LIGHT_TRAVEL_VECTOR` encodes the
 physical into-water vector. The light transform itself is never modified by
 these diagnostics.
 
+## Sunrays V3.4 — independent world-space direction proof
+
+`underwater_sunrays_direction_proof_enabled` creates ordinary scene geometry
+outside the compositor: a yellow origin at the sea surface near the active
+camera, a 30 m green cylinder along `-DirectionalLight3D.basis.z`, and a red
+cylinder along `+DirectionalLight3D.basis.z`. These are sampled directly from
+the live light transform and deliberately do not read `light_entry`, slabs,
+beam coordinates, or shader parameters. The one-shot runtime log prints all
+three vectors whenever the light direction changes.
+
+`underwater_sunrays_phase_debug_constant` is an explicit A/B diagnostic. When
+enabled it forces the sunray phase response to one, leaving geometry, slab
+selection, attenuation, and all normal settings unchanged; its default is off.
+The beam field is axial: its U/V coordinate is transverse to
+`light_into_water`, so `B(P + light_into_water*d)` equals
+`B(P - light_into_water*d)` and cannot itself encode photon travel direction.
+
+The final integration intentionally has no camera-ray depth build-up. Its
+former `1 - exp(-density * sunray_segment_m)` gain followed `view_ray_world`
+and could make an axial beam read as travelling opposite to the independent
+green reference. Directional appearance is now governed only by each slice's
+Beer-Lambert transport from `light_entry` into the water along
+`light_into_water`.
+
+The independent guide also exposed the compositor's actual orientation fault:
+the render-target V coordinate was passed to the camera inverse projection as
+if it were NDC Y. `reconstruct_world()` now converts it with `1 - 2*uv.y`.
+This restores the same vertical convention as the live scene geometry before
+any light-space field, slab, entry, or attenuation calculation is performed.
+
+
 ## Sediment V2 test path
 
 Sediment source remains a continuous, delta-time-scaled rate. Queued test
