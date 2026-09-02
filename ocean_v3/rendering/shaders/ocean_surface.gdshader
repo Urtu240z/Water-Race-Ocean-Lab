@@ -324,7 +324,8 @@ uniform float reflection_environment_specular_boost : hint_range(0.5, 2.0, 0.01)
 // 13 NEAR_SSR_ACTIVE, 14 NEAR_SSR_HIT, 15 NEAR_SSR_CONFIDENCE,
 // 16 NEAR_SSR_COLOR, 17 NEAR_SSR_DEPTH_CONFIDENCE,
 // 18 NEAR_SSR_DEVIATION_CONFIDENCE, 19 NEAR_SSR_BASE_CONFIDENCE,
-// 20 NEAR_SSR_STEP_USAGE, 21 SSPR_FACET_CONFIDENCE.
+// 20 NEAR_SSR_STEP_USAGE, 21 SSPR_FACET_CONFIDENCE,
+// 22 REFLECTION_RADIANCE_CONFIDENCE.
 uniform int reflection_debug_mode = 0;
 
 // Persistent high-resolution FFT whitecaps. The RG16F fields are updated from
@@ -2894,6 +2895,8 @@ void fragment() {
 		color = vec3(near_ssr_step_usage);
 	} else if (reflection_debug_mode == 21) {
 		color = vec3(sspr_facet_confidence);
+	} else if (reflection_debug_mode == 22) {
+		color = vec3(reflection_radiance_confidence);
 	}
 
 	bool unlit = sea_state_zone_debug || foam_debug_mode > 0 || (reflection_debug_mode > 0 && reflection_debug_mode != 2) || debug_mode >= 2 || lod_debug_index >= 0.0 || periodicity_debug || coastal_debug_field > 0 || breaking_debug_mode > 0 || reflection_and_mono_state.z > 0.5 || coastal_delta_heatmap || ocean_crest_sharpen_debug || sediment_debug_mode > 0 || (underwater_camera_active && ((underwater_debug_mode >= 5 && underwater_debug_mode <= 7) || (underwater_debug_mode >= 11 && underwater_debug_mode <= 12)));
@@ -3713,10 +3716,13 @@ void fragment() {
 					0.0,
 					1.0
 				);
+				float tir_screen_space_weight = tir_strength
+					* underwater_tir_visual_weight
+					* reflection_radiance_confidence;
 				optical_scene = mix(
 					optical_scene,
 					reflection_radiance,
-					tir_strength * underwater_tir_visual_weight
+					tir_screen_space_weight
 				);
 			}
 
