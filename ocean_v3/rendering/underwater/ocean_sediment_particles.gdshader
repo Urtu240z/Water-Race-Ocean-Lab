@@ -3,12 +3,16 @@ shader_type spatial;
 render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
 
 uniform sampler2D sediment_field_texture : repeat_disable, filter_linear;
+uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
 uniform vec2 sediment_field_origin_xz = vec2(0.0);
 uniform vec2 sediment_field_extent_m = vec2(1.0);
 uniform vec4 particle_color : source_color = vec4(0.32, 0.27, 0.16, 0.06);
 uniform float strength = 1.0;
 uniform float alpha_multiplier = 1.0;
 uniform float size_multiplier = 1.0;
+uniform float geometry_edge_softness_m = 0.20;
+uniform float distance_fade_start_m = 36.0;
+uniform float distance_fade_end_m = 72.0;
 uniform float field_threshold = 0.10;
 uniform float field_contrast = 0.75;
 uniform bool wisps = false;
@@ -18,6 +22,8 @@ uniform int debug_mode = 0;
 
 varying float particle_distance_m;
 varying float particle_field_density;
+varying float particle_lifecycle_fade;
+varying float particle_view_depth;
 
 float sample_density(vec3 world_position) {
 	vec2 uv = (world_position.xz - sediment_field_origin_xz) / max(sediment_field_extent_m, vec2(0.001));
@@ -37,6 +43,8 @@ void vertex() {
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(billboard_world, 1.0);
 	particle_distance_m = distance(CAMERA_POSITION_WORLD, particle_center_world);
 	particle_field_density = sample_density(particle_center_world);
+	particle_lifecycle_fade = clamp(length(MODEL_MATRIX[2].xyz), 0.0, 1.0);
+	particle_view_depth = max(-(VIEW_MATRIX * vec4(billboard_world, 1.0)).z, 0.0);
 }
 
 void fragment() {
@@ -68,8 +76,31 @@ void fragment() {
 	} else {
 		float density = smoothstep(field_threshold, 1.0, particle_field_density);
 		density = pow(max(density, 0.0), max(field_contrast, 0.1));
-		float distance_fade = 1.0 - smoothstep(28.0, 42.0, particle_distance_m);
-		float alpha_final = soft_shape * density * distance_fade * particle_color.a * strength * max(alpha_multiplier, 0.0);
+		float distance_fade = 1.0 - smoothstep(
+			distance_fade_start_m,
+			max(distance_fade_end_m, distance_fade_start_m + 0.001),
+			particle_distance_m);
+		float geometry_fade = 1.0;
+		if (geometry_edge_softness_m > 0.001) {
+			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
+			bool scene_depth_valid = scene_raw_depth > 0.000001
+				&& scene_raw_depth <= 1.000001
+				&& !isnan(scene_raw_depth) && !isinf(scene_raw_depth);
+			if (scene_depth_valid) {
+				vec4 scene_view_position = INV_PROJECTION_MATRIX * vec4(
+					SCREEN_UV * 2.0 - 1.0,
+					scene_raw_depth,
+					1.0);
+				float scene_view_depth = max(-scene_view_position.z / max(scene_view_position.w, 0.000001), 0.0);
+				float depth_gap = scene_view_depth - particle_view_depth;
+				geometry_fade = smoothstep(
+					-geometry_edge_softness_m,
+					geometry_edge_softness_m,
+					depth_gap);
+			}
+		}
+		float alpha_final = soft_shape * density * distance_fade * geometry_fade
+			* particle_lifecycle_fade * particle_color.a * strength * max(alpha_multiplier, 0.0);
 		if (debug_mode == 3) {
 			// Component views are white with their real value as opacity. This keeps
 			// zero-valued candidates transparent instead of drawing black quads.

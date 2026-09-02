@@ -55,7 +55,13 @@ enum DebugMode {
 @export_range(0.0, 8.0, 0.05) var sediment_alpha_multiplier := 3.0
 # RGB is used for the particle tint; alpha is controlled by the multiplier above.
 @export var sediment_particle_color := Color(0.52, 0.38, 0.20, 1.0)
-@export_range(0.25, 4.0, 0.05) var sediment_particle_size_multiplier := 1.5
+@export_range(0.25, 8.0, 0.05) var sediment_particle_size_multiplier := 1.5
+@export_range(64, 10000, 64) var sediment_particle_count := 680
+@export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_in_seconds := 1.0
+@export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_out_seconds := 1.5
+@export_range(0.0, 2.0, 0.01, "suffix: m") var sediment_geometry_edge_softness_m := 0.20
+@export_range(0.0, 200.0, 1.0, "suffix: m") var sediment_distance_fade_start_m := 36.0
+@export_range(1.0, 240.0, 1.0, "suffix: m") var sediment_distance_fade_end_m := 72.0
 @export_group("Sediment Debug")
 @export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV", "SEDIMENT ALPHA DENSITY", "SEDIMENT ALPHA SOFT SHAPE", "SEDIMENT ALPHA DISTANCE", "SEDIMENT ALPHA FINAL", "SEDIMENT PRODUCTION EXAGGERATED") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
@@ -622,8 +628,7 @@ func _ensure_particles() -> void:
 			return
 	_cloud_particles = _create_particle_layer("SedimentClouds")
 	_wisp_particles = _create_particle_layer("SedimentWisps")
-	_cloud_particles.amount = 520
-	_wisp_particles.amount = 160
+	_apply_particle_counts()
 	_cloud_particles.draw_pass_1 = _create_quad()
 	_wisp_particles.draw_pass_1 = _create_quad()
 	add_child(_cloud_particles)
@@ -724,6 +729,9 @@ func _create_process_material(layer_seed: float, height_min: float, height_max: 
 	material.set_shader_parameter(&"wave_k_rad_m", 0.22)
 	material.set_shader_parameter(&"wave_omega_rad_s", 0.72)
 	material.set_shader_parameter(&"vertical_wander_m", 0.08 if layer_seed < 10.0 else 0.14)
+	material.set_shader_parameter(&"particle_lifetime_seconds", 26.0)
+	material.set_shader_parameter(&"fade_in_seconds", sediment_fade_in_seconds)
+	material.set_shader_parameter(&"fade_out_seconds", sediment_fade_out_seconds)
 	return material
 
 
@@ -759,6 +767,11 @@ func _update_particles() -> void:
 		material.set_shader_parameter(&"current_speed_mps", sediment_current_speed)
 		material.set_shader_parameter(&"orbital_strength_mps", sediment_orbital_strength)
 		material.set_shader_parameter(&"spawn_radius_m", sediment_render_distance_m)
+		material.set_shader_parameter(&"particle_lifetime_seconds", 26.0)
+		material.set_shader_parameter(&"fade_in_seconds", sediment_fade_in_seconds)
+		material.set_shader_parameter(&"fade_out_seconds", sediment_fade_out_seconds)
+	if _cloud_particles != null or _wisp_particles != null:
+		_apply_particle_counts()
 	if _cloud_material != null:
 		_cloud_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
 		_cloud_material.set_shader_parameter(&"sediment_field_origin_xz", _field_origin())
@@ -766,6 +779,9 @@ func _update_particles() -> void:
 		_cloud_material.set_shader_parameter(&"particle_color", _production_particle_color(false))
 		_cloud_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
 		_cloud_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
+		_cloud_material.set_shader_parameter(&"geometry_edge_softness_m", sediment_geometry_edge_softness_m)
+		_cloud_material.set_shader_parameter(&"distance_fade_start_m", sediment_distance_fade_start_m)
+		_cloud_material.set_shader_parameter(&"distance_fade_end_m", maxf(sediment_distance_fade_end_m, sediment_distance_fade_start_m + 0.01))
 		_cloud_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
 	if _wisp_material != null:
 		_wisp_material.set_shader_parameter(&"sediment_field_texture", _field_texture)
@@ -774,6 +790,9 @@ func _update_particles() -> void:
 		_wisp_material.set_shader_parameter(&"particle_color", _production_particle_color(true))
 		_wisp_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
 		_wisp_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
+		_wisp_material.set_shader_parameter(&"geometry_edge_softness_m", sediment_geometry_edge_softness_m)
+		_wisp_material.set_shader_parameter(&"distance_fade_start_m", sediment_distance_fade_start_m)
+		_wisp_material.set_shader_parameter(&"distance_fade_end_m", maxf(sediment_distance_fade_end_m, sediment_distance_fade_start_m + 0.01))
 		_wisp_material.set_shader_parameter(&"debug_mode", _particle_shader_debug_mode())
 	if _cloud_particles != null:
 		_cloud_particles.visibility_aabb = _particle_visibility_aabb()
@@ -785,6 +804,16 @@ func _update_particles() -> void:
 func _production_particle_color(is_wisps: bool) -> Color:
 	var base_alpha := 0.08 if is_wisps else 0.16
 	return Color(sediment_particle_color.r, sediment_particle_color.g, sediment_particle_color.b, base_alpha)
+
+
+func _apply_particle_counts() -> void:
+	var total := maxi(sediment_particle_count, 2)
+	var cloud_amount := clampi(roundi(float(total) * 0.765), 1, total - 1)
+	var wisp_amount := total - cloud_amount
+	if _cloud_particles != null and _cloud_particles.amount != cloud_amount:
+		_cloud_particles.amount = cloud_amount
+	if _wisp_particles != null and _wisp_particles.amount != wisp_amount:
+		_wisp_particles.amount = wisp_amount
 
 
 func _apply_particle_visibility() -> void:
@@ -859,8 +888,10 @@ func _print_production_alpha_diagnostic() -> void:
 	var wisp_threshold: float = float(_wisp_material.get_shader_parameter(&"field_threshold"))
 	var cloud_contrast: float = float(_cloud_material.get_shader_parameter(&"field_contrast"))
 	var wisp_contrast: float = float(_wisp_material.get_shader_parameter(&"field_contrast"))
-	print("SEDIMENT PRODUCTION ALPHA color=%s alpha_multiplier=%.3f size_multiplier=%.3f cloud_color_a=%.3f cloud_strength=%.3f cloud_threshold=%.3f cloud_contrast=%.3f wisp_color_a=%.3f wisp_strength=%.3f wisp_threshold=%.3f wisp_contrast=%.3f" % [
+	print("SEDIMENT PRODUCTION ALPHA color=%s alpha_multiplier=%.3f size_multiplier=%.3f particles=%d fade_in_s=%.2f fade_out_s=%.2f edge_softness_m=%.2f distance_fade_m=[%.1f,%.1f] cloud_color_a=%.3f cloud_strength=%.3f cloud_threshold=%.3f cloud_contrast=%.3f wisp_color_a=%.3f wisp_strength=%.3f wisp_threshold=%.3f wisp_contrast=%.3f" % [
 		sediment_particle_color, sediment_alpha_multiplier, sediment_particle_size_multiplier,
+		sediment_particle_count, sediment_fade_in_seconds, sediment_fade_out_seconds,
+		sediment_geometry_edge_softness_m, sediment_distance_fade_start_m, sediment_distance_fade_end_m,
 		cloud_color.a, cloud_strength, cloud_threshold, cloud_contrast,
 		wisp_color.a, wisp_strength, wisp_threshold, wisp_contrast,
 	])
@@ -907,7 +938,8 @@ func _particle_visibility_aabb() -> AABB:
 	# process/material issue. Production retains the measured camera-local bounds.
 	if _is_particle_debug_mode():
 		return AABB(Vector3(-1000.0, -1000.0, -1000.0), Vector3(2000.0, 2000.0, 2000.0))
-	return AABB(Vector3(-42.0, -42.0, -42.0), Vector3(84.0, 84.0, 84.0))
+	var extent := maxf(84.0, sediment_render_distance_m * 2.0 + sediment_particle_size_multiplier * 4.0)
+	return AABB(Vector3.ONE * (-0.5 * extent), Vector3.ONE * extent)
 
 
 func _update_field_debug_visual() -> void:

@@ -17,6 +17,9 @@ uniform float orbital_strength_mps = 0.08;
 uniform float wave_k_rad_m = 0.20;
 uniform float wave_omega_rad_s = 0.70;
 uniform float vertical_wander_m = 0.08;
+uniform float particle_lifetime_seconds = 26.0;
+uniform float fade_in_seconds = 1.0;
+uniform float fade_out_seconds = 1.5;
 
 float hash_value(float value) {
 	return fract(sin(value * 127.1 + layer_seed * 311.7) * 43758.5453123);
@@ -66,6 +69,20 @@ void start() {
 }
 
 void process() {
+	float lifetime = max(particle_lifetime_seconds, 0.001);
+	float particle_age_seconds = max(TIME - CUSTOM.w, 0.0);
+	float fade_in_duration = min(max(fade_in_seconds, 0.0), lifetime);
+	float fade_out_duration = min(max(fade_out_seconds, 0.0), lifetime);
+	float fade_in = fade_in_duration > 0.001
+		? smoothstep(0.0, fade_in_duration, particle_age_seconds)
+		: 1.0;
+	float fade_out_start = lifetime - fade_out_duration;
+	float fade_out = fade_out_duration > 0.001
+		? 1.0 - smoothstep(fade_out_start, lifetime, particle_age_seconds)
+		: 1.0;
+	// Z scale is unused by the manual billboard, so it safely carries the
+	// lifecycle envelope to the spatial render shader.
+	TRANSFORM[2][2] = fade_in * fade_out;
 	if (!RESTART) {
 		float phase = TIME * wave_omega_rad_s + float(INDEX) * 0.37;
 		vec3 orbital = vec3(

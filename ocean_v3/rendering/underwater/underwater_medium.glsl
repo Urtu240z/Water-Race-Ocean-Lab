@@ -201,28 +201,14 @@ bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_s
 	return interval_end_m - interval_begin_m > EPSILON;
 }
 
-bool transverse_lattice_plane_t(vec3 camera_world, vec3 view_ray_world, float segment_m,
+bool transverse_lattice_plane_t(vec3 camera_world, vec3 view_ray_world,
 		vec3 axis, float spacing_m, int lattice_id, out float t_m) {
 	t_m = 0.0;
 	float denominator = dot(view_ray_world, axis);
 	if (abs(denominator) <= EPSILON) return false;
 	float plane = float(lattice_id) * spacing_m;
 	t_m = (plane - dot(camera_world, axis)) / denominator;
-	return t_m >= 0.0 && t_m <= segment_m && !isnan(t_m) && !isinf(t_m);
-}
-
-float transverse_lattice_weight(vec3 camera_world, vec3 view_ray_world, float segment_m,
-		vec3 axis, float spacing_m, int lattice_id) {
-	float previous_t; float next_t;
-	bool previous_valid = transverse_lattice_plane_t(camera_world, view_ray_world, segment_m,
-		axis, spacing_m, lattice_id - 1, previous_t);
-	bool next_valid = transverse_lattice_plane_t(camera_world, view_ray_world, segment_m,
-		axis, spacing_m, lattice_id + 1, next_t);
-	if (!previous_valid) previous_t = 0.0;
-	if (!next_valid) next_t = segment_m;
-	float half_voronoi = 0.5 * abs(next_t - previous_t);
-	return clamp(half_voronoi, SUNRAY_TRANSVERSE_LATTICE_SPACING_M * 0.02,
-		max(segment_m, SUNRAY_TRANSVERSE_LATTICE_SPACING_M * 0.02));
+	return !isnan(t_m) && !isinf(t_m);
 }
 
 bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
@@ -310,9 +296,11 @@ void main() {
 	vec2 beam_coord_debug = vec2(0.0);
 	float world_slice_id_debug = 0.0;
 	float lattice_id_debug = 0.0;
+	float sample_set_id_debug = 0.0;
 	float transverse_axis_u_debug = 0.0;
 	float transverse_axis_v_debug = 0.0;
 	vec3 transverse_sample_point_debug = vec3(0.0);
+	vec4 sample_weights_debug = vec4(0.0);
 	float wave_focus_debug = 0.5;
 	float wave_width_debug = 1.0;
 	float wave_modulation_debug = 1.0;
@@ -324,9 +312,12 @@ void main() {
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 38;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 41;
 	bool exaggerated = debug_mode == 22;
-	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18 || debug_mode >= 23 || exaggerated;
+	// A/B modes 37/38 and the continuity diagnostics must not alter pattern
+	// tuning; legacy modes 24-36 retain their historical forced-pattern view.
+	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18
+		|| (debug_mode >= 23 && debug_mode <= 36) || exaggerated;
 	int tap_count = int(params.sunrays_extra.y + 0.5);
 	// Only the benchmark may select the legacy midpoint. Production is always
 	// four fixed taps; unknown values fail closed to the production path.
@@ -394,37 +385,50 @@ void main() {
 						float dominance = du / max(du + dv, EPSILON);
 						float u_blend = smoothstep(0.38, 0.62, dominance);
 						bool transition = dominance > 0.38 && dominance < 0.62;
-						int u_budget = transition ? 2 : (u_blend > 0.5 ? 4 : 0);
-						int v_budget = transition ? 2 : (u_blend > 0.5 ? 0 : 4);
-						float u_mix = transition ? (1.0 - u_blend) : (u_budget > 0 ? 1.0 : 0.0);
-						float v_mix = transition ? u_blend : (v_budget > 0 ? 1.0 : 0.0);
+						// U receives the blend as dominance rises; V receives the
+						// complement. The previous implementation inverted these.
+						float u_mix = u_blend;
+						float v_mix = 1.0 - u_blend;
+						int u_budget = transition ? 2 : (u_mix >= 0.5 ? 4 : 0);
+						int v_budget = transition ? 2 : (v_mix > 0.5 ? 4 : 0);
 						transverse_axis_u_debug = u_mix;
 						transverse_axis_v_debug = v_mix;
+						vec3 reference_world_point = params.camera.xyz + view_ray_world * (0.5 * sunray_segment_m);
 						for (int axis_pass = 0; axis_pass < 2; axis_pass++) {
 							vec3 axis = axis_pass == 0 ? u : v;
 							float axis_mix = axis_pass == 0 ? u_mix : v_mix;
 							int budget = axis_pass == 0 ? u_budget : v_budget;
 							if (budget <= 0 || axis_mix <= EPSILON) continue;
-							float coord_a = dot(params.camera.xyz, axis);
-							float coord_b = dot(params.camera.xyz + view_ray_world * sunray_segment_m, axis);
-							int first_id = int(ceil(min(coord_a, coord_b) / SUNRAY_TRANSVERSE_LATTICE_SPACING_M - 0.000001));
-							int last_id = int(floor(max(coord_a, coord_b) / SUNRAY_TRANSVERSE_LATTICE_SPACING_M + 0.000001));
-							int available = max(last_id - first_id + 1, 0);
-							if (available <= 0) continue;
-							int start_id = first_id;
-							if (budget < available) start_id = int(floor(0.5 * float(first_id + last_id)))
-								- int(floor(0.5 * float(budget - 1)));
+							float denominator = dot(view_ray_world, axis);
+							float abs_denominator = abs(denominator);
+							if (abs_denominator <= EPSILON) continue;
+							// Four consecutive IDs are anchored to a continuous world
+							// coordinate. Cubic weights smoothly hand off k..k+2 to
+							// k+1..k+3 when frac crosses an integer boundary.
+							float lattice_coord = dot(reference_world_point, axis) / SUNRAY_TRANSVERSE_LATTICE_SPACING_M;
+							int base_id = int(floor(lattice_coord));
+							float lattice_frac = fract(lattice_coord);
+							sample_set_id_debug += float(base_id) * axis_mix;
 							for (int axis_offset = 0; axis_offset < 4; axis_offset++) {
 								if (axis_offset >= budget || sample_count >= 4) break;
-								int lattice_id = start_id + axis_offset;
-								if (lattice_id > last_id) break;
+								float lattice_weight = budget == 4
+									? (axis_offset == 0 ? pow(1.0 - lattice_frac, 3.0) / 6.0
+									: axis_offset == 1 ? (3.0 * pow(lattice_frac, 3.0) - 6.0 * lattice_frac * lattice_frac + 4.0) / 6.0
+									: axis_offset == 2 ? (-3.0 * pow(lattice_frac, 3.0) + 3.0 * lattice_frac * lattice_frac + 3.0 * lattice_frac + 1.0) / 6.0
+									: pow(lattice_frac, 3.0) / 6.0)
+									: (axis_offset == 0 ? 1.0 - lattice_frac : lattice_frac);
+								int lattice_id = budget == 4 ? base_id - 1 + axis_offset : base_id + axis_offset;
 								float lattice_t;
-								if (!transverse_lattice_plane_t(params.camera.xyz, view_ray_world, sunray_segment_m,
+								if (!transverse_lattice_plane_t(params.camera.xyz, view_ray_world,
 										axis, SUNRAY_TRANSVERSE_LATTICE_SPACING_M, lattice_id, lattice_t)) continue;
-								float lattice_weight = transverse_lattice_weight(params.camera.xyz, view_ray_world,
-									sunray_segment_m, axis, SUNRAY_TRANSVERSE_LATTICE_SPACING_M, lattice_id) * axis_mix;
-								sample_t[sample_count] = lattice_t;
-								sample_weight[sample_count] = lattice_weight;
+								float edge_width_m = min(sunray_segment_m,
+									SUNRAY_TRANSVERSE_LATTICE_SPACING_M / max(abs_denominator, 0.05));
+								float edge_weight = smoothstep(0.0, max(edge_width_m, EPSILON), lattice_t)
+									* smoothstep(0.0, max(edge_width_m, EPSILON), sunray_segment_m - lattice_t);
+								float weighted_slot = max(lattice_weight, 0.0) * axis_mix * edge_weight;
+								sample_t[sample_count] = clamp(lattice_t, 0.0, sunray_segment_m);
+								sample_weight[sample_count] = weighted_slot * sunray_segment_m;
+								sample_weights_debug[sample_count] = weighted_slot;
 								sample_axis[sample_count] = axis_pass;
 								sample_lattice_id[sample_count] = lattice_id;
 								sample_count += 1;
@@ -481,6 +485,7 @@ void main() {
 				beam_coord_debug /= integrated_length_m;
 				world_slice_id_debug /= integrated_length_m;
 				lattice_id_debug /= integrated_length_m;
+				sample_set_id_debug /= max(transverse_axis_u_debug + transverse_axis_v_debug, EPSILON);
 				transverse_sample_point_debug /= integrated_length_m;
 				wave_focus_debug = 0.5 + (wave_focus_debug - 0.5) / integrated_length_m;
 				wave_width_debug = 1.0 + (wave_width_debug - 1.0) / integrated_length_m;
@@ -606,6 +611,17 @@ void main() {
 		color.rgb = sunray_contribution;
 	} else if (debug_mode == 38) {
 		color.rgb = sunray_contribution;
+	} else if (debug_mode == 39) {
+		// The continuous world reference selects this base ID; neighbouring IDs
+		// are handed off by weights rather than replacing the sample set abruptly.
+		color.rgb = valid_tap_count > 0
+			? vec3(fract(sample_set_id_debug * 0.1618034), float(valid_tap_count) / 4.0, 1.0)
+			: vec3(0.0);
+	} else if (debug_mode == 40) {
+		color.rgb = sample_weights_debug.rgb;
+		color.a = sample_weights_debug.a;
+	} else if (debug_mode == 41) {
+		color.rgb = vec3(float(valid_tap_count) / 4.0);
 	} else if (water_path_m > EPSILON) {
 		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);

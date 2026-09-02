@@ -123,6 +123,18 @@ longitudinal slabs remain available only through
 production A/B mode. New diagnostics expose axis choice, lattice identity,
 blend, and world-anchored sample points.
 
+## Sunrays V3.7A — continuous transverse sample sets
+
+The transverse selector no longer derives a subset from segment `first/last`
+IDs. It anchors four consecutive IDs to a continuous world coordinate at the
+segment reference point (`base_id = floor(coord / 3.2 m)`) and uses cubic
+B-spline weights that sum to one as the fractional coordinate crosses lattice
+boundaries. Samples outside the finite segment are retained as slots and enter
+or leave through smooth endpoint gates; their intersections are clamped only
+for the harmless zero-weight evaluation. U/V dominance is now correctly
+mapped (`u_mix = u_blend`, `v_mix = 1-u_blend`). Modes 39–41 expose sample-set
+ID, four continuous weights (RGB plus alpha), and effective sample count.
+
 
 ## Sediment V2 test path
 
