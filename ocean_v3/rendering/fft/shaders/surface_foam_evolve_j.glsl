@@ -1,15 +1,15 @@
 #[compute]
 #version 450
 
-// Surface Foam only consumes the spectral Jacobian.  Keep just the three
-// complex derivatives in two payloads; height and horizontal displacement are
-// intentionally not materialised here.
+// Surface Foam only consumes the spectral Jacobian. The two diagonal
+// derivatives are Hermitian spectra, so F + iG is a valid single complex
+// transform whose spatial real/imaginary components reconstruct F/G exactly.
+// Height and horizontal displacement are intentionally not materialised here.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba32f, set = 0, binding = 0) uniform restrict readonly image2D h0_texture;
-layout(rgba32f, set = 0, binding = 1) uniform restrict writeonly image2D payload_a;
-layout(rgba32f, set = 0, binding = 2) uniform restrict writeonly image2D payload_b;
+layout(rgba32f, set = 0, binding = 1) uniform restrict writeonly image2D packed_payload;
 
-layout(set = 0, binding = 3, std140) uniform Params { vec4 values; } params; // time, gravity, depth, source domain
+layout(set = 0, binding = 2, std140) uniform Params { vec4 values; } params; // time, gravity, depth, source domain
 
 vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
 
@@ -34,6 +34,8 @@ void main() {
 		dhz_dz = -height * k.x * unit_k.x;
 		dhz_dx = -height * k.y * unit_k.x;
 	}
-	imageStore(payload_a, coord, vec4(dhx_dx, dhz_dz));
-	imageStore(payload_b, coord, vec4(dhz_dx, 0.0, 0.0));
+	// F + iG: (F.r - G.i, F.i + G.r). After IFFT, xy is
+	// (spatial dhx_dx, spatial dhz_dz); zw carries dhz_dx unchanged.
+	vec2 packed_diagonals = vec2(dhx_dx.x - dhz_dz.y, dhx_dx.y + dhz_dz.x);
+	imageStore(packed_payload, coord, vec4(packed_diagonals, dhz_dx));
 }

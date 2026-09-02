@@ -27,7 +27,6 @@ var _rd: RenderingDevice
 var _config: SurfaceFoamReferenceConfig
 var _h0 := RID()
 var _ping_a: Array[RID] = [RID(), RID()]
-var _ping_b: Array[RID] = [RID(), RID()]
 var _jacobian: Array[RID] = [RID(), RID()]
 var _foam: Array[RID] = [RID(), RID()]
 var _topology: Array[RID] = [RID(), RID()]
@@ -105,8 +104,7 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 	_h0 = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".H0", config.resolution, h0_data, true)
 	h0_upload_byte_count = h0_data.size()
 	for index in 2:
-		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".DerivativeA%d" % index, config.resolution)
-		_ping_b[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".DerivativeB%d" % index, config.resolution)
+		_ping_a[index] = _create_texture(RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT, resource_prefix + ".PackedDerivatives%d" % index, config.resolution)
 		_jacobian[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16_SFLOAT, resource_prefix + ".Jacobian%d" % index, config.resolution)
 		_foam[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Field%d" % index, _field_resolution)
 		_topology[index] = _create_texture(RenderingDevice.DATA_FORMAT_R16G16_SFLOAT, resource_prefix + ".Topology%d" % index, _topology_resolution, PackedByteArray(), false, true)
@@ -116,11 +114,11 @@ func initialize(config: SurfaceFoamReferenceConfig, h0_data: PackedByteArray, re
 	_assemble_params_buffer = _rd.uniform_buffer_create(16, _assemble_params_bytes)
 	_evolve_params_buffer = _rd.uniform_buffer_create(16, PackedByteArray())
 	_fft_params_buffer = _rd.uniform_buffer_create(16, PackedByteArray())
-	_evolve_set = _create_image_set(_shaders[PIPELINE_EVOLVE], [_h0, _ping_a[0], _ping_b[0]], _evolve_params_buffer)
-	_fft_sets[0] = _create_image_set(_shaders[PIPELINE_FFT], [_ping_a[0], _ping_b[0], _ping_a[1], _ping_b[1]], _fft_params_buffer)
-	_fft_sets[1] = _create_image_set(_shaders[PIPELINE_FFT], [_ping_a[1], _ping_b[1], _ping_a[0], _ping_b[0]], _fft_params_buffer)
+	_evolve_set = _create_image_set(_shaders[PIPELINE_EVOLVE], [_h0, _ping_a[0]], _evolve_params_buffer)
+	_fft_sets[0] = _create_image_set(_shaders[PIPELINE_FFT], [_ping_a[0], _ping_a[1]], _fft_params_buffer)
+	_fft_sets[1] = _create_image_set(_shaders[PIPELINE_FFT], [_ping_a[1], _ping_a[0]], _fft_params_buffer)
 	for index in 2:
-		_assemble_sets[index] = _create_image_set(_shaders[PIPELINE_ASSEMBLE], [_ping_a[0], _ping_b[0], _jacobian[index]], _assemble_params_buffer)
+		_assemble_sets[index] = _create_image_set(_shaders[PIPELINE_ASSEMBLE], [_ping_a[0], _jacobian[index]], _assemble_params_buffer)
 	for jacobian_index in 2:
 		for foam_index in 2:
 			_foam_sets.append(_create_foam_set(_jacobian[jacobian_index], _foam[foam_index], _foam[1 - foam_index]))
@@ -308,7 +306,7 @@ func free_resources() -> void:
 		return
 	for set_rid in _sets:
 		if set_rid.is_valid(): _rd.free_rid(set_rid)
-	for texture in [_h0, _ping_a[0], _ping_a[1], _ping_b[0], _ping_b[1], _jacobian[0], _jacobian[1], _foam[0], _foam[1], _topology[0], _topology[1]]:
+	for texture in [_h0, _ping_a[0], _ping_a[1], _jacobian[0], _jacobian[1], _foam[0], _foam[1], _topology[0], _topology[1]]:
 		if texture.is_valid(): _rd.free_rid(texture)
 	if _sampler.is_valid(): _rd.free_rid(_sampler)
 	if _topology_params_buffer.is_valid(): _rd.free_rid(_topology_params_buffer)
@@ -321,7 +319,7 @@ func free_resources() -> void:
 	for shader in _shaders:
 		if shader.is_valid(): _rd.free_rid(shader)
 	_sets.clear(); _pipelines.clear(); _shaders.clear(); _topology_sets.clear(); _topology_downsample_sets = [[], []]; _topology_mip_views = [[], []]
-	_h0 = RID(); _ping_a = [RID(), RID()]; _ping_b = [RID(), RID()]; _jacobian = [RID(), RID()]; _foam = [RID(), RID()]; _topology = [RID(), RID()]
+	_h0 = RID(); _ping_a = [RID(), RID()]; _jacobian = [RID(), RID()]; _foam = [RID(), RID()]; _topology = [RID(), RID()]
 	_sampler = RID(); _topology_params_buffer = RID(); _foam_params_buffer = RID(); _assemble_params_buffer = RID(); _evolve_params_buffer = RID(); _fft_params_buffer = RID(); surface_foam_rid = RID(); jacobian_rid = RID(); topology_rid = RID()
 
 
