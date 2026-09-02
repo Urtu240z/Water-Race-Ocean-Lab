@@ -10,7 +10,6 @@ var _rd: RenderingDevice
 var _shader := RID()
 var _pipeline := RID()
 var _depth_sampler := RID()
-var _pattern_sampler := RID()
 var _params_buffer := RID()
 var _pipeline_init_failed := false
 var _mutex := Mutex.new()
@@ -37,7 +36,6 @@ var _sunrays_max_distance := 30.0
 var _sunrays_pattern_scale := 1.0
 var _sunrays_pattern_contrast := 1.4
 var _sunrays_animation_speed := 0.12
-var _sunrays_pattern_texture: Texture2D
 var _sunrays_wave_modulation_enabled := true
 var _sunrays_wave_animation_speed := 1.50
 var _sunrays_wave_freeze := false
@@ -63,7 +61,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		sun_energy: float, sunrays_enabled: bool, sunrays_strength: float,
 		sunrays_anisotropy: float, sunrays_density: float, sunrays_max_distance: float,
 		sunrays_pattern_scale: float, sunrays_pattern_contrast: float,
-		sunrays_animation_speed: float, sunrays_pattern_texture: Texture2D, sunrays_wave_modulation_enabled: bool,
+		sunrays_animation_speed: float, sunrays_wave_modulation_enabled: bool,
 		sunrays_wave_animation_speed: float, sunrays_wave_freeze: bool,
 		sunrays_wave_intensity_strength: float, sunrays_wave_width_strength: float,
 		sunrays_wave_depth_fade_m: float, sunrays_phase_debug_constant: bool,
@@ -91,7 +89,6 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_pattern_scale = clampf(sunrays_pattern_scale, 0.05, 10.0)
 	_sunrays_pattern_contrast = clampf(sunrays_pattern_contrast, 0.0, 4.0)
 	_sunrays_animation_speed = clampf(sunrays_animation_speed, 0.0, 2.0)
-	_sunrays_pattern_texture = sunrays_pattern_texture
 	_sunrays_wave_modulation_enabled = sunrays_wave_modulation_enabled
 	_sunrays_wave_animation_speed = clampf(sunrays_wave_animation_speed, 0.0, 10.0)
 	_sunrays_wave_freeze = sunrays_wave_freeze
@@ -128,14 +125,12 @@ func free_resources() -> void:
 	_shader = RID()
 	if _depth_sampler.is_valid(): _rd.free_rid(_depth_sampler)
 	_depth_sampler = RID()
-	if _pattern_sampler.is_valid(): _rd.free_rid(_pattern_sampler)
-	_pattern_sampler = RID()
 	if _params_buffer.is_valid(): _rd.free_rid(_params_buffer)
 	_params_buffer = RID()
 
 func _ensure_pipeline() -> bool:
 	if _pipeline_init_failed: return false
-	if _pipeline.is_valid() and _depth_sampler.is_valid() and _pattern_sampler.is_valid() and _params_buffer.is_valid(): return true
+	if _pipeline.is_valid() and _depth_sampler.is_valid() and _params_buffer.is_valid(): return true
 	var shader_file := load(SHADER_PATH) as RDShaderFile
 	if shader_file == null: return false
 	var spirv: RDShaderSPIRV = shader_file.get_spirv()
@@ -155,14 +150,8 @@ func _ensure_pipeline() -> bool:
 	depth_sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	depth_sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
 	_depth_sampler = _rd.sampler_create(depth_sampler_state)
-	var pattern_sampler_state := RDSamplerState.new()
-	pattern_sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	pattern_sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
-	pattern_sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
-	pattern_sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_REPEAT
-	_pattern_sampler = _rd.sampler_create(pattern_sampler_state)
 	_params_buffer = _rd.uniform_buffer_create(PARAMS_BYTES)
-	return _shader.is_valid() and _pipeline.is_valid() and _depth_sampler.is_valid() and _pattern_sampler.is_valid() \
+	return _shader.is_valid() and _pipeline.is_valid() and _depth_sampler.is_valid() \
 			and _params_buffer.is_valid()
 
 func _render_callback(callback_type: int, render_data: RenderData) -> void:
@@ -190,8 +179,10 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_max_distance := _sunrays_max_distance
 	var sunrays_pattern_scale := _sunrays_pattern_scale
 	var sunrays_pattern_contrast := _sunrays_pattern_contrast
-	var sunrays_pattern_texture := _sunrays_pattern_texture
-	var sunrays_animation_speed := _sunrays_animation_speed
+	var sunrays_wave_modulation_enabled := _sunrays_wave_modulation_enabled
+	var sunrays_wave_animation_speed := _sunrays_wave_animation_speed
+	var sunrays_wave_freeze := _sunrays_wave_freeze
+	var sunrays_wave_intensity_strength := _sunrays_wave_intensity_strength
 	var sunrays_wave_width_strength := _sunrays_wave_width_strength
 	var sunrays_wave_depth_fade_m := _sunrays_wave_depth_fade_m
 	var sunrays_phase_debug_constant := _sunrays_phase_debug_constant
@@ -205,7 +196,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	# A pipeline can only be bound with all of its backing RIDs alive. Keep this
 	# explicit guard next to the render callback so a teardown/rebuild race cannot
 	# reach uniform creation or dispatch with a stale shader resource.
-	if not _shader.is_valid() or not _pipeline.is_valid() or not _depth_sampler.is_valid() or not _pattern_sampler.is_valid() \
+	if not _shader.is_valid() or not _pipeline.is_valid() or not _depth_sampler.is_valid() \
 			or not _params_buffer.is_valid(): return
 	var buffers := render_data.get_render_scene_buffers() as RenderSceneBuffersRD
 	var scene_data := render_data.get_render_scene_data()
@@ -215,12 +206,6 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var color_image := buffers.get_color_layer(0)
 	var depth_texture := buffers.get_depth_layer(0)
 	if not color_image.is_valid() or not depth_texture.is_valid(): return
-	var pattern_rd_rid := RID()
-	if sunrays_pattern_texture != null and sunrays_pattern_texture.get_rid().is_valid():
-		var candidate_rd_rid := RenderingServer.texture_get_rd_texture(sunrays_pattern_texture.get_rid(), true)
-		if candidate_rd_rid.is_valid(): pattern_rd_rid = candidate_rd_rid
-	var pattern_available := pattern_rd_rid.is_valid()
-	var bound_pattern_texture_rid := pattern_rd_rid if pattern_available else depth_texture
 	var projection: Projection = scene_data.get_view_projection(0)
 	var camera_transform: Transform3D = scene_data.get_cam_transform()
 	var inverse_view_projection := (projection * Projection(camera_transform.affine_inverse())).inverse()
@@ -232,15 +217,13 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
 	params.append(scattering_color.r); params.append(scattering_color.g); params.append(scattering_color.b); params.append(scattering_density)
 	params.append(camera_factor); params.append(float(debug_mode)); params.append(1.0 if is_enabled else 0.0)
-	# state.w is true only when the Texture2D converted to a valid RenderingDevice RID.
-	# The fallback binding keeps the descriptor valid but never enables pattern sampling.
-	params.append(1.0 if pattern_available else 0.0)
+	params.append(1.0 if sunrays_wave_modulation_enabled else 0.0)
 	params.append(light_into_water.x); params.append(light_into_water.y); params.append(light_into_water.z); params.append(sun_energy)
-	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(0.0)
+	params.append(sun_color.r); params.append(sun_color.g); params.append(sun_color.b); params.append(sunrays_wave_intensity_strength)
 	params.append(1.0 if sunrays_enabled and sunrays_strength > 0.0 else 0.0)
 	params.append(sunrays_strength); params.append(sunrays_anisotropy); params.append(sunrays_density)
 	params.append(sunrays_pattern_scale); params.append(sunrays_pattern_contrast)
-	params.append(sunrays_animation_speed); params.append(sunrays_time)
+	params.append(sunrays_wave_animation_speed); params.append(0.0 if sunrays_wave_freeze else sunrays_time)
 	params.append(sunrays_max_distance); params.append(float(sunrays_tap_count)); params.append(sunrays_wave_width_strength); params.append(1.0 if sunrays_phase_debug_constant else 0.0)
 	_rd.buffer_update(_params_buffer, 0, PARAMS_BYTES, params.to_byte_array())
 	var color_uniform := RDUniform.new()
@@ -252,16 +235,11 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	depth_uniform.binding = 1
 	depth_uniform.add_id(_depth_sampler)
 	depth_uniform.add_id(depth_texture)
-	var pattern_uniform := RDUniform.new()
-	pattern_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	pattern_uniform.binding = 2
-	pattern_uniform.add_id(_pattern_sampler)
-	pattern_uniform.add_id(bound_pattern_texture_rid)
 	var params_uniform := RDUniform.new()
 	params_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-	params_uniform.binding = 3
+	params_uniform.binding = 2
 	params_uniform.add_id(_params_buffer)
-	var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, [color_uniform, depth_uniform, pattern_uniform, params_uniform])
+	var uniform_set := UniformSetCacheRD.get_cache(_shader, 0, [color_uniform, depth_uniform, params_uniform])
 	if not uniform_set.is_valid(): return
 	var list := _rd.compute_list_begin()
 	_rd.compute_list_bind_compute_pipeline(list, _pipeline)
