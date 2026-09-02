@@ -1,6 +1,8 @@
 shader_type spatial;
 
-render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+// Depth testing is disabled so fragments behind the seabed reach the shader;
+// geometry_edge_softness_m then fades them against the sampled scene depth.
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, depth_test_disabled, shadows_disabled;
 
 uniform sampler2D sediment_field_texture : repeat_disable, filter_linear;
 uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
@@ -10,9 +12,16 @@ uniform vec4 particle_color : source_color = vec4(0.32, 0.27, 0.16, 0.06);
 uniform float strength = 1.0;
 uniform float alpha_multiplier = 1.0;
 uniform float size_multiplier = 1.0;
-uniform float geometry_edge_softness_m = 0.20;
+uniform float geometry_edge_softness_m = 1.0;
 uniform float distance_fade_start_m = 36.0;
 uniform float distance_fade_end_m = 72.0;
+uniform float sea_level_y = 0.0;
+uniform vec3 camera_world_position = vec3(0.0);
+uniform vec3 optical_absorption_coeff_rgb = vec3(0.35, 0.14, 0.10);
+uniform float optical_absorption_scale = 1.0;
+uniform float optical_max_distance_m = 120.0;
+uniform float optical_compensation_max = 4.0;
+uniform bool optical_compensation_enabled = true;
 uniform float field_threshold = 0.10;
 uniform float field_contrast = 0.75;
 uniform bool wisps = false;
@@ -24,6 +33,7 @@ varying float particle_distance_m;
 varying float particle_field_density;
 varying float particle_lifecycle_fade;
 varying float particle_view_depth;
+varying vec3 particle_world_position;
 
 float sample_density(vec3 world_position) {
 	vec2 uv = (world_position.xz - sediment_field_origin_xz) / max(sediment_field_extent_m, vec2(0.001));
@@ -41,10 +51,21 @@ void vertex() {
 		+ camera_right * VERTEX.x * particle_width
 		+ camera_up * VERTEX.y * particle_height;
 	POSITION = PROJECTION_MATRIX * VIEW_MATRIX * vec4(billboard_world, 1.0);
-	particle_distance_m = distance(CAMERA_POSITION_WORLD, particle_center_world);
+	particle_distance_m = distance(camera_world_position, particle_center_world);
 	particle_field_density = sample_density(particle_center_world);
 	particle_lifecycle_fade = clamp(length(MODEL_MATRIX[2].xyz), 0.0, 1.0);
 	particle_view_depth = max(-(VIEW_MATRIX * vec4(billboard_world, 1.0)).z, 0.0);
+	particle_world_position = particle_center_world;
+}
+
+float optical_water_path(vec3 world_position) {
+	vec3 segment = world_position - camera_world_position;
+	float segment_length = length(segment);
+	if (segment_length <= 0.00001 || isnan(segment_length) || isinf(segment_length)) return 0.0;
+	if (world_position.y < sea_level_y) return segment_length;
+	if (abs(segment.y) <= 0.00001) return 0.0;
+	float surface_fraction = (sea_level_y - camera_world_position.y) / segment.y;
+	return clamp(surface_fraction, 0.0, 1.0) * segment_length;
 }
 
 void fragment() {
@@ -81,17 +102,48 @@ void fragment() {
 			max(distance_fade_end_m, distance_fade_start_m + 0.001),
 			particle_distance_m);
 		float geometry_fade = 1.0;
+		float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
+		bool scene_depth_valid = scene_raw_depth > 0.000001
+			&& scene_raw_depth <= 1.000001
+			&& !isnan(scene_raw_depth) && !isinf(scene_raw_depth);
+		float optical_max_distance = max(optical_max_distance_m, 0.001);
+		vec3 optical_absorption = max(optical_absorption_coeff_rgb, vec3(0.0))
+			* max(optical_absorption_scale, 0.0);
+		float particle_water_path = min(optical_water_path(particle_world_position), optical_max_distance);
+		vec3 particle_transmittance = exp(-optical_absorption * particle_water_path);
+		float background_water_path = optical_max_distance;
+		if (scene_depth_valid) {
+			vec4 scene_view_position = INV_PROJECTION_MATRIX * vec4(
+				SCREEN_UV * 2.0 - 1.0,
+				scene_raw_depth,
+				1.0);
+			if (abs(scene_view_position.w) > 0.000001) {
+				vec3 scene_world_position = (INV_VIEW_MATRIX * (scene_view_position / scene_view_position.w)).xyz;
+				float scene_distance = distance(camera_world_position, scene_world_position);
+				if (!isnan(scene_distance) && !isinf(scene_distance)) {
+					background_water_path = min(optical_water_path(scene_world_position), optical_max_distance);
+				}
+			}
+		}
+		vec3 background_transmittance = exp(-optical_absorption * background_water_path);
+		vec3 compensation = vec3(1.0);
+		bool compensation_active = optical_compensation_enabled;
+		if (debug_mode == 12) compensation_active = false;
+		if (debug_mode == 13) compensation_active = true;
+		if (compensation_active) {
+			// POST_TRANSPARENT multiplies the already-composited pixel by
+			// T_background. Pre-multiplying only the particle color by
+			// T_particle/T_background leaves its final contribution at T_particle.
+			compensation = particle_transmittance / max(background_transmittance, vec3(0.02));
+			compensation = clamp(compensation, vec3(0.0), vec3(max(optical_compensation_max, 1.0)));
+		}
 		if (geometry_edge_softness_m > 0.001) {
-			float scene_raw_depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
-			bool scene_depth_valid = scene_raw_depth > 0.000001
-				&& scene_raw_depth <= 1.000001
-				&& !isnan(scene_raw_depth) && !isinf(scene_raw_depth);
 			if (scene_depth_valid) {
-				vec4 scene_view_position = INV_PROJECTION_MATRIX * vec4(
+				vec4 edge_scene_view_position = INV_PROJECTION_MATRIX * vec4(
 					SCREEN_UV * 2.0 - 1.0,
 					scene_raw_depth,
 					1.0);
-				float scene_view_depth = max(-scene_view_position.z / max(scene_view_position.w, 0.000001), 0.0);
+				float scene_view_depth = max(-edge_scene_view_position.z / max(edge_scene_view_position.w, 0.000001), 0.0);
 				float depth_gap = scene_view_depth - particle_view_depth;
 				geometry_fade = smoothstep(
 					-geometry_edge_softness_m,
@@ -101,7 +153,31 @@ void fragment() {
 		}
 		float alpha_final = soft_shape * density * distance_fade * geometry_fade
 			* particle_lifecycle_fade * particle_color.a * strength * max(alpha_multiplier, 0.0);
-		if (debug_mode == 3) {
+		if (debug_mode == 14) {
+			ALBEDO = vec3(clamp(background_water_path / optical_max_distance, 0.0, 1.0));
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 15) {
+			ALBEDO = vec3(clamp(particle_water_path / optical_max_distance, 0.0, 1.0));
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 16) {
+			float depth_delta_normalized = clamp((background_water_path - particle_water_path) / optical_max_distance, -1.0, 1.0);
+			ALBEDO = depth_delta_normalized >= 0.0
+				? vec3(0.0, depth_delta_normalized, 0.0)
+				: vec3(-depth_delta_normalized, 0.0, 0.0);
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 8) {
+			ALBEDO = particle_transmittance;
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 9) {
+			ALBEDO = background_transmittance;
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 10) {
+			ALBEDO = compensation / max(optical_compensation_max, 1.0);
+			ALPHA = clamp(soft_shape * 0.92, 0.0, 1.0);
+		} else if (debug_mode == 11) {
+			ALBEDO = vec3(1.0);
+			ALPHA = clamp(alpha_final, 0.0, 1.0);
+		} else if (debug_mode == 3) {
 			// Component views are white with their real value as opacity. This keeps
 			// zero-valued candidates transparent instead of drawing black quads.
 			ALBEDO = vec3(1.0);
@@ -118,7 +194,7 @@ void fragment() {
 			ALPHA = clamp(alpha_final, 0.0, 1.0);
 		} else {
 			float visual_alpha = alpha_final * (debug_mode == 7 ? 5.0 : 1.0);
-			ALBEDO = particle_color.rgb;
+			ALBEDO = clamp(particle_color.rgb * compensation, vec3(0.0), vec3(4.0));
 			ALPHA = clamp(visual_alpha, 0.0, 0.35);
 		}
 	}

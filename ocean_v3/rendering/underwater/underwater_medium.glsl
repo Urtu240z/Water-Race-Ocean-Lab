@@ -7,7 +7,7 @@ layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D scene_depth;
 layout(set = 0, binding = 2, std140) uniform Params {
 	mat4 inverse_view_projection;
-	vec4 viewport; // xy viewport size, z wave depth fade, w unused
+	vec4 viewport; // xy viewport size, z wave depth fade, w segment mode (0 depth, 1 analytic)
 	vec4 camera; // xyz, binary underwater state
 	vec4 medium; // sea level, transition width, max distance, absorption scale
 	vec4 absorption; // rgb, scattering strength
@@ -259,6 +259,7 @@ void main() {
 	ivec2 size = ivec2(params.viewport.xy);
 	if (pixel.x >= size.x || pixel.y >= size.y || params.state.z < 0.5) return;
 	int debug_mode = int(params.state.y + 0.5);
+	bool transmittance_bypass = debug_mode == 45;
 	vec4 color = imageLoad(color_image, pixel);
 	// CAMERA_STATE is deliberately useful while the camera is above water. It
 	// does not touch depth or reconstruct any path, so it remains a cheap
@@ -290,8 +291,15 @@ void main() {
 	bool scene_valid = raw_depth > EPSILON && raw_depth <= 1.000001 && reconstruct_world(uv, raw_depth, scene_world);
 	float water_path_m = clamp(water_path_for_scene(scene_world, scene_valid, uv), 0.0, params.medium.z);
 	if (isnan(water_path_m) || isinf(water_path_m)) water_path_m = 0.0;
+	float scene_depth_path_m = water_path_m;
 	float phase_response = 0.0;
 	float depth_response = 0.0;
+	float sunray_segment_source_debug = 0.0; // 1=analytic surface, 2=scene depth, 3=max distance
+	// Keep the segment-length diagnostic values in main() scope. The actual
+	// integration variables live inside the per-pixel sunrays branch, while
+	// debug mode 46 is composed after that branch has closed.
+	float sunray_segment_debug_m = 0.0;
+	float sunray_max_distance_debug_m = max(params.sunrays_extra.x, EPSILON);
 	float pattern_debug = 0.0;
 	vec2 beam_coord_debug = vec2(0.0);
 	float world_slice_id_debug = 0.0;
@@ -312,9 +320,9 @@ void main() {
 	vec3 shaft_integral = vec3(0.0);
 	int valid_tap_count = 0;
 	vec3 sunray_contribution = vec3(0.0);
-	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 41;
+	bool sunrays_debug = debug_mode >= 13 && debug_mode <= 46;
 	bool exaggerated = debug_mode == 22;
-	// A/B modes 37/38 and the continuity diagnostics must not alter pattern
+	// A/B modes 37/38/43/44 and the continuity diagnostics must not alter pattern
 	// tuning; legacy modes 24-36 retain their historical forced-pattern view.
 	bool force_pattern_debug = debug_mode == 14 || debug_mode == 18
 		|| (debug_mode >= 23 && debug_mode <= 36) || exaggerated;
@@ -325,7 +333,13 @@ void main() {
 	if (params.sunrays.x > 0.5 || sunrays_debug) {
 		vec3 sample_world = scene_world;
 		if (!scene_valid) reconstruct_world(uv, 0.0, sample_world);
-		vec3 view_ray_world = sample_world - params.camera.xyz;
+		// Derive the camera ray from the projection itself, not from the depth
+		// written by the OceanClipmap. A surface vertex/triangle can move or fall
+		// below sea_level, but it must never rotate the optical ray used to decide
+		// whether this pixel is looking at the analytic surface plane.
+		vec3 ray_reference_world = vec3(0.0);
+		bool ray_reference_valid = reconstruct_world(uv, 0.0, ray_reference_world);
+		vec3 view_ray_world = (ray_reference_valid ? ray_reference_world : sample_world) - params.camera.xyz;
 		float view_ray_length = length(view_ray_world);
 		bool view_valid = finite_vec3(sample_world) && view_ray_length > EPSILON
 			&& !isnan(view_ray_length) && !isinf(view_ray_length);
@@ -343,7 +357,45 @@ void main() {
 			? sunrays_phase_response(view_to_camera_dir, light_into_water)
 			: 0.0;
 		float max_sunray_distance = max(params.sunrays_extra.x, EPSILON) * (exaggerated ? 1.35 : 1.0);
-		float sunray_segment_m = min(water_path_m, max_sunray_distance);
+		sunray_max_distance_debug_m = max_sunray_distance;
+		bool analytic_surface_hit = false;
+		float analytic_surface_distance_m = distance_to_plane(params.camera.xyz, view_ray_world,
+			params.medium.x, analytic_surface_hit);
+		// distance_to_plane already rejects intersections behind the camera, so
+		// the hit itself is the authoritative upward-ray test. Do not add a
+		// second sign test: backend projection conventions can invert that scalar
+		// while the plane intersection remains valid.
+		bool ray_toward_surface = analytic_surface_hit;
+		// Once the plane is in front of the camera, use it as a hard authority;
+		// blending the clipmap depth back in near the horizon recreates the same
+		// tile-shaped rectangle we are removing. The plane intersection itself is
+		// continuous in screen space, so no extra edge softness is needed here.
+		float analytic_surface_blend = ray_toward_surface ? 1.0 : 0.0;
+		// A submerged camera looking upward must not inherit the OceanClipmap
+		// surface depth when a wave vertex happens to lie below sea_level. That
+		// depth is topological (tile/ring shaped), not the optical water path.
+		// Use the same analytic flat-plane distance for the medium path as for
+		// sunray integration; downward rays retain scene depth for seabed/rocks.
+		int segment_mode = int(params.viewport.w + 0.5);
+		bool force_depth_segment = segment_mode == 0 || debug_mode == 43;
+		bool force_analytic_segment = segment_mode == 1 || debug_mode == 44;
+		if (!force_depth_segment && analytic_surface_blend > EPSILON) {
+			float analytic_path_m = clamp(analytic_surface_distance_m, 0.0, params.medium.z);
+			water_path_m = mix(scene_depth_path_m, analytic_path_m, analytic_surface_blend);
+		}
+		float segment_base_m = force_depth_segment ? scene_depth_path_m : water_path_m;
+		if (force_analytic_segment && analytic_surface_hit) {
+			segment_base_m = analytic_surface_distance_m;
+			sunray_segment_source_debug = 1.0;
+		} else if (!force_depth_segment && analytic_surface_blend > EPSILON) {
+			segment_base_m = mix(scene_depth_path_m, analytic_surface_distance_m, analytic_surface_blend);
+			sunray_segment_source_debug = analytic_surface_blend >= 0.5 ? 1.0 : 2.0;
+		} else if (segment_base_m > EPSILON) {
+			sunray_segment_source_debug = 2.0;
+		}
+		if (max_sunray_distance <= segment_base_m + EPSILON) sunray_segment_source_debug = 3.0;
+		float sunray_segment_m = min(segment_base_m, max_sunray_distance);
+		sunray_segment_debug_m = sunray_segment_m;
 		if (sunray_segment_m > EPSILON) {
 			float integrated_length_m = 0.0;
 			if (light_direction_valid) {
@@ -622,8 +674,28 @@ void main() {
 		color.a = sample_weights_debug.a;
 	} else if (debug_mode == 41) {
 		color.rgb = vec3(float(valid_tap_count) / 4.0);
+	} else if (debug_mode == 42) {
+		// Green=analytic sea plane, red=scene depth, blue=max distance.
+		color.rgb = sunray_segment_source_debug == 1.0 ? vec3(0.0, 1.0, 0.0)
+			: sunray_segment_source_debug == 2.0 ? vec3(1.0, 0.0, 0.0)
+			: sunray_segment_source_debug == 3.0 ? vec3(0.0, 0.0, 1.0)
+			: vec3(0.0);
+	} else if (debug_mode == 43) {
+		// A/B: retain the previous scene-depth-driven segment.
+		color.rgb = sunray_contribution;
+	} else if (debug_mode == 44) {
+		// A/B: analytic sea-plane segment for upward-facing rays.
+		color.rgb = sunray_contribution;
+	} else if (debug_mode == 46) {
+		// Continuous segment length, normalized to the configured maximum.
+		color.rgb = vec3(clamp(sunray_segment_debug_m / max(sunray_max_distance_debug_m, EPSILON), 0.0, 1.0));
 	} else if (water_path_m > EPSILON) {
-		vec3 transmittance = exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
+		// A/B diagnostic 45 bypasses only background transmittance. Scattering and
+		// sunrays remain active so the test isolates the POST_TRANSPARENT depth
+		// dependency without changing the rest of the medium.
+		vec3 transmittance = transmittance_bypass
+			? vec3(1.0)
+			: exp(-max(params.absorption.rgb, vec3(0.0)) * max(params.medium.w, 0.0) * water_path_m);
 		float scattering_response = 1.0 - exp(-max(params.scattering.w, 0.0) * water_path_m);
 		// Existing isotropic medium scattering stays intact; sunrays are an
 		// additional directional term and never replace this result.

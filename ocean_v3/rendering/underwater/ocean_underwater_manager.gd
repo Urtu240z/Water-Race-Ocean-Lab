@@ -38,7 +38,7 @@ func _push_settings() -> void:
 	# CompositorEffect gate so ordinary AIR frames never enter the resolver or
 	# allocate/dispatch a compute list. CAMERA_STATE is the one intentional AIR
 	# diagnostic exception.
-	_effect.enabled = enabled and (camera_underwater or debug_mode == 4)
+	_effect.enabled = enabled and (camera_underwater or debug_mode == 4 or debug_mode == 45)
 	var absorption: Vector3 = _settings.get("absorption", Vector3(0.35, 0.14, 0.10))
 	var scattering_color: Color = _settings.get("scattering_color", Color(0.02, 0.32, 0.42, 1.0))
 	var light_into_water: Vector3 = _settings.get("light_into_water", Vector3(0.0, -1.0, 0.0))
@@ -62,7 +62,8 @@ func _push_settings() -> void:
 		float(_settings.get("sunrays_wave_width_strength", 0.10)),
 		float(_settings.get("sunrays_wave_depth_fade_m", 15.0)),
 		bool(_settings.get("sunrays_phase_debug_constant", false)),
-		float(_settings.get("sunrays_time", 0.0)), int(_settings.get("sunrays_tap_count", 4)))
+		float(_settings.get("sunrays_time", 0.0)), int(_settings.get("sunrays_tap_count", 4)),
+		int(_settings.get("sunrays_segment_mode", 1)))
 
 func _initialize() -> void:
 	if _attached or Engine.is_editor_hint() or not is_inside_tree(): return

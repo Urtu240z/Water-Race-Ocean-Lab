@@ -135,6 +135,36 @@ for the harmless zero-weight evaluation. U/V dominance is now correctly
 mapped (`u_mix = u_blend`, `v_mix = 1-u_blend`). Modes 39–41 expose sample-set
 ID, four continuous weights (RGB plus alpha), and effective sample count.
 
+## Sunrays V3.7B — analytic surface segment
+
+Sunray integration no longer inherits the OceanClipmap surface depth for rays
+that point upward from an underwater camera. Those pixels use the analytic
+intersection with the flat `sea_level` plane, capped by the configured maximum
+distance. Rays pointing downward continue to use scene depth so seabed and
+geometry still clip the volume. The same analytic path is applied to the
+upward medium path, preventing the clipmap's below-sea-level wave vertices
+from reintroducing a rectangular transmittance region before sunray limiting.
+The camera ray used for this classification comes from the inverse projection
+at the pixel, never from the clipmap's depth point, so a surface triangle cannot
+rotate or facet the analytic test.
+Mode 42 reports the selected source (green
+analytic plane, red scene depth, blue max distance); modes 43 and 44 provide
+explicit depth-driven and analytic A/B paths.
+
+## Sunrays V3.8 — explicit segment authority
+
+`underwater_sunrays_segment_mode` is now the production switch: `0` keeps the
+old depth-driven path for A/B comparison, while `1` (default) uses the analytic
+flat sea-plane intersection for the upper bound and scene depth only for rays
+that continue into lower geometry. The selected mode is carried in the
+underwater UBO, so the OceanClipmap depth cannot silently become the sunray
+ceiling. Debug modes 42–44 remain available for source visualization and
+explicit overrides.
+
+`SUNRAYS_SEGMENT_LENGTH` (mode 46) exposes the selected segment length
+normalized by the configured maximum, making any remaining spatial step or
+patch directly inspectable without changing the beam field.
+
 
 ## Sediment V2 test path
 
@@ -149,3 +179,20 @@ GPU readback and shows a temporary orange world-space marker for six seconds.
 This separates target/field injection diagnosis from the particle cloud and
 wisp render paths while preserving the persistent GPU simulation and its
 world-space field.
+
+## Sediment V2.1 — POST_TRANSPARENT optical compensation
+
+The underwater medium runs after transparent particles and multiplies the
+resolved pixel by the transmittance of the scene depth behind them. The
+sediment shader therefore computes `T_particle = exp(-absorption_rgb *
+absorption_scale * camera_to_particle_water_path)` and `T_background` from the
+same screen depth used by the medium. It writes
+`particle_color * clamp(T_particle / max(T_background, 0.02), 0,
+compensation_max)`. The compositor then applies `T_background`, leaving the
+particle contribution approximately at `T_particle` instead of
+`T_particle * T_background`. Alpha, background color and scattering are not
+compensated. `SEDIMENT OPTICAL COMPENSATION OFF/ON` provide the A/B; the
+`SEDIMENT OPTICS ...` and depth modes expose the intermediate values. Medium
+debug mode `UNDERWATER MEDIUM TRANSMITTANCE BYPASS` disables only the
+compositor's background transmittance for the root-cause test; scattering and
+sunrays remain active.

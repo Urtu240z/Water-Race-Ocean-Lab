@@ -147,14 +147,13 @@ trough_tint = Color(0.005060052, 0.04589343, 0.02705579, 1)
 crest_tint = Color(0.022200117, 0.15144762, 0.1125462, 1)
 underwater_absorption_scale = 0.43
 underwater_scattering_color = Color(0.0024315654, 0.09275196, 0.13127226, 1)
-underwater_sunrays_strength = 0.72
-underwater_sunrays_anisotropy = 0.69
 underwater_sunrays_max_distance_m = 33.0
-underwater_sunrays_pattern_scale = 0.9
-underwater_sunrays_pattern_contrast = 4.0
-underwater_sunrays_animation_speed = 0.0
+underwater_sunrays_pattern_scale = 0.3
+underwater_sunrays_pattern_contrast = 2.5
 underwater_sunrays_wave_animation_speed = 5.0
-underwater_sunrays_wave_intensity_strength = 0.45
+underwater_sunrays_wave_intensity_strength = 0.2
+underwater_sunrays_wave_width_strength = 0.2
+underwater_sunrays_wave_depth_fade_m = 50.0
 underwater_snell_wave_distortion = 1.5
 underwater_snell_detail_strength = 2.0
 underwater_snell_detail_world_scale = 4.0
@@ -250,6 +249,23 @@ underwater_particles_fine_color = Color(4.770132, 1.866834, 0, 1)
 underwater_particles_near_color = Color(4.5819564, 3.6724234, 0.69980174, 1)
 underwater_particles_fine_size_scale = 2.15
 underwater_particles_near_size_scale = 1.35
+
+[node name="OceanSedimentSystem" parent="OceanV3Mount/OceanV3" index="3"]
+sediment_strength = 4.0
+sediment_shallow_start_m = 0.0
+sediment_shallow_end_m = 12.9
+sediment_wave_resuspension_strength = 0.37
+sediment_wisp_strength = 0.0
+sediment_particle_color = Color(0.6534273, 0.84365046, 0.8427941, 1)
+sediment_particle_size_multiplier = 8.0
+sediment_particle_count = 1024
+sediment_fade_in_seconds = 2.0
+sediment_fade_out_seconds = 5.0
+sediment_geometry_edge_softness_m = 4.0
+sediment_distance_fade_start_m = 200.0
+sediment_distance_fade_end_m = 240.0
+sediment_optical_compensation_enabled = true
+sediment_optical_compensation_max = 4.0
 
 [node name="BenchmarkHUD" type="CanvasLayer" parent="." unique_id=708415641]
 unique_name_in_owner = true

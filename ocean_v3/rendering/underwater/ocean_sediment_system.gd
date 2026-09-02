@@ -31,6 +31,15 @@ enum DebugMode {
 	ALPHA_DISTANCE,
 	ALPHA_FINAL,
 	PRODUCTION_EXAGGERATED,
+	OPTICS_PARTICLE_T,
+	OPTICS_BACKGROUND_T,
+	OPTICS_COMPENSATION,
+	OPTICS_FINAL_ALPHA,
+	OPTICAL_COMPENSATION_OFF,
+	OPTICAL_COMPENSATION_ON,
+	BACKGROUND_DEPTH,
+	PARTICLE_DEPTH,
+	DEPTH_DELTA,
 }
 
 @export_group("Underwater / Sediment")
@@ -59,11 +68,14 @@ enum DebugMode {
 @export_range(64, 10000, 64) var sediment_particle_count := 680
 @export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_in_seconds := 1.0
 @export_range(0.0, 10.0, 0.05, "suffix: s") var sediment_fade_out_seconds := 1.5
-@export_range(0.0, 2.0, 0.01, "suffix: m") var sediment_geometry_edge_softness_m := 0.20
+@export_range(0.0, 4.0, 0.01, "suffix: m") var sediment_geometry_edge_softness_m := 1.0
 @export_range(0.0, 200.0, 1.0, "suffix: m") var sediment_distance_fade_start_m := 36.0
 @export_range(1.0, 240.0, 1.0, "suffix: m") var sediment_distance_fade_end_m := 72.0
+@export_group("Sediment Optical Compensation")
+@export var sediment_optical_compensation_enabled := true
+@export_range(1.0, 8.0, 0.1, "suffix: x") var sediment_optical_compensation_max := 4.0
 @export_group("Sediment Debug")
-@export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV", "SEDIMENT ALPHA DENSITY", "SEDIMENT ALPHA SOFT SHAPE", "SEDIMENT ALPHA DISTANCE", "SEDIMENT ALPHA FINAL", "SEDIMENT PRODUCTION EXAGGERATED") var sediment_debug_mode: int = DebugMode.OFF
+@export_enum("OFF", "FIELD SURFACE", "SOURCE SURFACE", "CLOUDS", "WISPS", "SEDIMENT FIELD UNDERWATER", "SEDIMENT CANDIDATES", "SEDIMENT FIELD PARTICLE MATCH", "SEDIMENT FIELD UV", "SEDIMENT ALPHA DENSITY", "SEDIMENT ALPHA SOFT SHAPE", "SEDIMENT ALPHA DISTANCE", "SEDIMENT ALPHA FINAL", "SEDIMENT PRODUCTION EXAGGERATED", "SEDIMENT OPTICS PARTICLE_T", "SEDIMENT OPTICS BACKGROUND_T", "SEDIMENT OPTICS COMPENSATION", "SEDIMENT OPTICS FINAL_ALPHA", "SEDIMENT OPTICAL COMPENSATION OFF", "SEDIMENT OPTICAL COMPENSATION ON", "SEDIMENT BACKGROUND DEPTH", "SEDIMENT PARTICLE DEPTH", "SEDIMENT DEPTH DELTA") var sediment_debug_mode: int = DebugMode.OFF
 @export var sediment_test_marker_enabled := true
 # Editor tooling only. Runtime validation must use Ctrl+Shift+J, never this button.
 @export_tool_button("Inject Test Sediment (Editor Tool)", "Burst") var inject_test_sediment_button = inject_test_sediment
@@ -322,6 +334,7 @@ func _request_test_injection() -> void:
 	print("FIELD DEBUG PROXY: expected_center_after_dispatch=%.3f (GPU impulse, no readback); marker_lifetime_s=%.1f" % [TEST_INJECTION_STRENGTH * exp(-sediment_settling_rate / maxf(sediment_update_hz, 1.0)), TEST_MARKER_LIFETIME_S])
 	_print_particle_height_diagnostic(sample_position, validation)
 	_print_production_alpha_diagnostic()
+	_print_optical_compensation_diagnostic(camera, sample_position)
 
 
 func _find_test_position(camera: Camera3D) -> Dictionary:
@@ -474,6 +487,12 @@ func _apply_runtime_debug_mode() -> void:
 			"SEDIMENT_ALPHA_DISTANCE": sediment_debug_mode = DebugMode.ALPHA_DISTANCE
 			"SEDIMENT_ALPHA_FINAL": sediment_debug_mode = DebugMode.ALPHA_FINAL
 			"SEDIMENT_PRODUCTION_EXAGGERATED": sediment_debug_mode = DebugMode.PRODUCTION_EXAGGERATED
+			"SEDIMENT_OPTICS_PARTICLE_T": sediment_debug_mode = DebugMode.OPTICS_PARTICLE_T
+			"SEDIMENT_OPTICS_BACKGROUND_T": sediment_debug_mode = DebugMode.OPTICS_BACKGROUND_T
+			"SEDIMENT_OPTICS_COMPENSATION": sediment_debug_mode = DebugMode.OPTICS_COMPENSATION
+			"SEDIMENT_OPTICS_FINAL_ALPHA": sediment_debug_mode = DebugMode.OPTICS_FINAL_ALPHA
+			"SEDIMENT_OPTICAL_COMPENSATION_OFF": sediment_debug_mode = DebugMode.OPTICAL_COMPENSATION_OFF
+			"SEDIMENT_OPTICAL_COMPENSATION_ON": sediment_debug_mode = DebugMode.OPTICAL_COMPENSATION_ON
 			"SEDIMENT_DEBUG_OFF": sediment_debug_mode = DebugMode.OFF
 
 
@@ -746,6 +765,7 @@ func _create_render_material(is_wisps: bool) -> ShaderMaterial:
 	material.set_shader_parameter(&"particle_color", _production_particle_color(is_wisps))
 	material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
 	material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
+	_set_optical_material_parameters(material)
 	material.set_shader_parameter(&"strength", sediment_wisp_strength if is_wisps else sediment_cloud_strength)
 	material.set_shader_parameter(&"field_threshold", 0.10 if is_wisps else 0.15)
 	material.set_shader_parameter(&"field_contrast", 0.80 if is_wisps else 0.68)
@@ -779,6 +799,7 @@ func _update_particles() -> void:
 		_cloud_material.set_shader_parameter(&"particle_color", _production_particle_color(false))
 		_cloud_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
 		_cloud_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
+		_set_optical_material_parameters(_cloud_material)
 		_cloud_material.set_shader_parameter(&"geometry_edge_softness_m", sediment_geometry_edge_softness_m)
 		_cloud_material.set_shader_parameter(&"distance_fade_start_m", sediment_distance_fade_start_m)
 		_cloud_material.set_shader_parameter(&"distance_fade_end_m", maxf(sediment_distance_fade_end_m, sediment_distance_fade_start_m + 0.01))
@@ -790,6 +811,7 @@ func _update_particles() -> void:
 		_wisp_material.set_shader_parameter(&"particle_color", _production_particle_color(true))
 		_wisp_material.set_shader_parameter(&"alpha_multiplier", sediment_alpha_multiplier)
 		_wisp_material.set_shader_parameter(&"size_multiplier", sediment_particle_size_multiplier)
+		_set_optical_material_parameters(_wisp_material)
 		_wisp_material.set_shader_parameter(&"geometry_edge_softness_m", sediment_geometry_edge_softness_m)
 		_wisp_material.set_shader_parameter(&"distance_fade_start_m", sediment_distance_fade_start_m)
 		_wisp_material.set_shader_parameter(&"distance_fade_end_m", maxf(sediment_distance_fade_end_m, sediment_distance_fade_start_m + 0.01))
@@ -804,6 +826,50 @@ func _update_particles() -> void:
 func _production_particle_color(is_wisps: bool) -> Color:
 	var base_alpha := 0.08 if is_wisps else 0.16
 	return Color(sediment_particle_color.r, sediment_particle_color.g, sediment_particle_color.b, base_alpha)
+
+
+func _effective_optical_compensation_enabled() -> bool:
+	var value: Variant = sediment_optical_compensation_enabled
+	return value if value is bool else true
+
+
+func _effective_optical_compensation_max() -> float:
+	var value: Variant = sediment_optical_compensation_max
+	return maxf(float(value), 1.0) if value is float or value is int else 4.0
+
+
+func _set_optical_material_parameters(material: ShaderMaterial) -> void:
+	if material == null:
+		return
+	# Older scenes may have serialized these newly-added exports as null. Keep
+	# the production defaults instead of forwarding a null shader uniform.
+	var compensation_enabled := _effective_optical_compensation_enabled()
+	var compensation_max := _effective_optical_compensation_max()
+	var sea_level := _bathymetry.sea_level_y if _bathymetry != null else 0.0
+	var absorption := Vector3(0.35, 0.14, 0.10)
+	var absorption_scale := 1.0
+	var max_distance := 120.0
+	var camera_world_position := Vector3.ZERO
+	var camera := get_viewport().get_camera_3d()
+	if camera != null:
+		camera_world_position = camera.global_position
+	if _ocean != null and is_instance_valid(_ocean):
+		var absorption_value: Variant = _ocean.get(&"absorption_coeff_rgb")
+		if absorption_value is Vector3:
+			absorption = absorption_value
+		var scale_value: Variant = _ocean.get(&"underwater_absorption_scale")
+		if scale_value is float or scale_value is int:
+			absorption_scale = float(scale_value)
+		var distance_value: Variant = _ocean.get(&"underwater_max_optical_distance_m")
+		if distance_value is float or distance_value is int:
+			max_distance = float(distance_value)
+	material.set_shader_parameter(&"sea_level_y", sea_level)
+	material.set_shader_parameter(&"camera_world_position", camera_world_position)
+	material.set_shader_parameter(&"optical_absorption_coeff_rgb", absorption)
+	material.set_shader_parameter(&"optical_absorption_scale", absorption_scale)
+	material.set_shader_parameter(&"optical_max_distance_m", max_distance)
+	material.set_shader_parameter(&"optical_compensation_max", compensation_max)
+	material.set_shader_parameter(&"optical_compensation_enabled", compensation_enabled)
 
 
 func _apply_particle_counts() -> void:
@@ -855,7 +921,16 @@ func _is_particle_debug_mode() -> bool:
 		or sediment_debug_mode == DebugMode.ALPHA_SOFT_SHAPE \
 		or sediment_debug_mode == DebugMode.ALPHA_DISTANCE \
 		or sediment_debug_mode == DebugMode.ALPHA_FINAL \
-		or sediment_debug_mode == DebugMode.PRODUCTION_EXAGGERATED
+		or sediment_debug_mode == DebugMode.PRODUCTION_EXAGGERATED \
+		or sediment_debug_mode == DebugMode.OPTICS_PARTICLE_T \
+		or sediment_debug_mode == DebugMode.OPTICS_BACKGROUND_T \
+		or sediment_debug_mode == DebugMode.OPTICS_COMPENSATION \
+		or sediment_debug_mode == DebugMode.OPTICS_FINAL_ALPHA \
+		or sediment_debug_mode == DebugMode.OPTICAL_COMPENSATION_OFF \
+		or sediment_debug_mode == DebugMode.OPTICAL_COMPENSATION_ON \
+		or sediment_debug_mode == DebugMode.BACKGROUND_DEPTH \
+		or sediment_debug_mode == DebugMode.PARTICLE_DEPTH \
+		or sediment_debug_mode == DebugMode.DEPTH_DELTA
 
 
 func _particle_shader_debug_mode() -> int:
@@ -873,6 +948,24 @@ func _particle_shader_debug_mode() -> int:
 		return 6
 	if sediment_debug_mode == DebugMode.PRODUCTION_EXAGGERATED:
 		return 7
+	if sediment_debug_mode == DebugMode.OPTICS_PARTICLE_T:
+		return 8
+	if sediment_debug_mode == DebugMode.OPTICS_BACKGROUND_T:
+		return 9
+	if sediment_debug_mode == DebugMode.OPTICS_COMPENSATION:
+		return 10
+	if sediment_debug_mode == DebugMode.OPTICS_FINAL_ALPHA:
+		return 11
+	if sediment_debug_mode == DebugMode.OPTICAL_COMPENSATION_OFF:
+		return 12
+	if sediment_debug_mode == DebugMode.OPTICAL_COMPENSATION_ON:
+		return 13
+	if sediment_debug_mode == DebugMode.BACKGROUND_DEPTH:
+		return 14
+	if sediment_debug_mode == DebugMode.PARTICLE_DEPTH:
+		return 15
+	if sediment_debug_mode == DebugMode.DEPTH_DELTA:
+		return 16
 	return 0
 
 
@@ -903,6 +996,37 @@ func _print_production_alpha_diagnostic() -> void:
 		wisp_max.append(_production_alpha_upper_bound(field_value, wisp_threshold, wisp_contrast, wisp_color.a, wisp_strength, sediment_alpha_multiplier))
 	print("SEDIMENT PRODUCTION ALPHA UPPER_BOUND soft_shape=1 distance_fade=1 field=[0.15,0.25,0.50,0.90] cloud=%s wisp=%s" % [cloud_max, wisp_max])
 	_print_particle_render_binding_diagnostic()
+
+
+func _print_optical_compensation_diagnostic(camera: Camera3D, particle_world_position: Vector3) -> void:
+	var absorption := Vector3(0.35, 0.14, 0.10)
+	var absorption_scale := 1.0
+	var max_distance := 120.0
+	if _ocean != null and is_instance_valid(_ocean):
+		var absorption_value: Variant = _ocean.get(&"absorption_coeff_rgb")
+		if absorption_value is Vector3:
+			absorption = absorption_value
+		var scale_value: Variant = _ocean.get(&"underwater_absorption_scale")
+		if scale_value is float or scale_value is int:
+			absorption_scale = float(scale_value)
+		var distance_value: Variant = _ocean.get(&"underwater_max_optical_distance_m")
+		if distance_value is float or distance_value is int:
+			max_distance = float(distance_value)
+	var particle_segment := particle_world_position - camera.global_position
+	var particle_path := camera.global_position.distance_to(particle_world_position)
+	var sea_level := _bathymetry.sea_level_y if _bathymetry != null else 0.0
+	if particle_world_position.y >= sea_level and absf(particle_segment.y) > 0.00001:
+		var surface_fraction := clampf((sea_level - camera.global_position.y) / particle_segment.y, 0.0, 1.0)
+		particle_path *= surface_fraction
+	particle_path = minf(particle_path, max_distance)
+	var particle_t := Vector3(
+		exp(-absorption.x * absorption_scale * particle_path),
+		exp(-absorption.y * absorption_scale * particle_path),
+		exp(-absorption.z * absorption_scale * particle_path))
+	print("SEDIMENT OPTICS PARTICLE_T path_m=%.3f T=%s (background depth is GPU visual diagnostic)" % [particle_path, particle_t])
+	print("SEDIMENT OPTICS BACKGROUND_T visual mode=SEDIMENT OPTICS BACKGROUND_T (GPU depth-driven)")
+	print("SEDIMENT OPTICS COMPENSATION max=%.2fx enabled=%s formula=T_particle/max(T_background,0.02), clamped=[0,%.2f]" % [_effective_optical_compensation_max(), _effective_optical_compensation_enabled(), _effective_optical_compensation_max()])
+	print("SEDIMENT OPTICS FINAL_ALPHA visual mode=SEDIMENT OPTICS FINAL_ALPHA")
 
 
 func _print_particle_render_binding_diagnostic() -> void:

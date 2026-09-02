@@ -454,6 +454,10 @@ var _performance_overlay_label: Label
 	set(value):
 		underwater_sunrays_phase_debug_constant = value
 		_request_visual_sync()
+@export_enum("CURRENT_DEPTH_DRIVEN", "ANALYTIC_SEA_PLANE") var underwater_sunrays_segment_mode := 1:
+	set(value):
+		underwater_sunrays_segment_mode = clampi(value, 0, 1)
+		_request_visual_sync()
 
 @export_group("Underwater / Sun Rays Direction Proof")
 ## Independent world-space aid: green is physical photon travel (-light.basis.z),
@@ -469,9 +473,9 @@ var _performance_overlay_label: Label
 		underwater_sunrays_direction_proof_camera_offset_m = clampf(value, 1.0, 20.0)
 
 @export_group("Underwater / Debug")
-@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR", "SUNRAYS_RECONSTRUCTED_WORLD", "SUNRAYS_VIEW_RAY", "SUNRAYS_TRANSVERSE_AXIS", "SUNRAYS_LATTICE_ID", "SUNRAYS_LATTICE_BLEND", "SUNRAYS_TRANSVERSE_SAMPLE_POINT", "SUNRAYS_LEGACY_LONGITUDINAL_SLABS", "SUNRAYS_TRANSVERSE_LATTICE", "SUNRAYS_SAMPLE_SET_ID", "SUNRAYS_SAMPLE_WEIGHTS", "SUNRAYS_SAMPLE_COUNT") var underwater_debug_mode := 0:
+@export_enum("OFF", "WATER_PATH", "TRANSMITTANCE", "SCATTERING", "CAMERA_STATE", "SNELL_COS_I", "SNELL_K", "SNELL_TIR", "SNELL_MICRO_SOURCE", "SNELL_MICRO_OFFSET", "SNELL_MICRO_SAMPLE_DELTA", "SNELL_RELEASE", "SNELL_EFFECTIVE_TIR", "SUNRAYS_PHASE", "SUNRAYS_BEAM_COORD", "SUNRAYS_DEPTH", "SUNRAYS_FINAL", "SUNRAYS_SAMPLE_POINT", "SUNRAYS_LIGHT_ENTRY", "SUNRAYS_SUN_VECTOR", "SUNRAYS_TAP_VALIDITY", "SUNRAYS_INTEGRAL", "SUNRAYS_EXAGGERATED", "SUNRAYS_BEAM_FIELD", "SUNRAYS_WORLD_SLICE_ID", "SUNRAYS_WAVE_FOCUS", "SUNRAYS_WAVE_WIDTH", "SUNRAYS_WAVE_MODULATION", "SUNRAYS_WAVE_EXAGGERATED", "SUNRAYS_DIRECTION_ALIGNMENT", "SUNRAYS_LIGHT_TRAVEL_VECTOR", "SUNRAYS_RECONSTRUCTED_WORLD", "SUNRAYS_VIEW_RAY", "SUNRAYS_TRANSVERSE_AXIS", "SUNRAYS_LATTICE_ID", "SUNRAYS_LATTICE_BLEND", "SUNRAYS_TRANSVERSE_SAMPLE_POINT", "SUNRAYS_LEGACY_LONGITUDINAL_SLABS", "SUNRAYS_TRANSVERSE_LATTICE", "SUNRAYS_SAMPLE_SET_ID", "SUNRAYS_SAMPLE_WEIGHTS", "SUNRAYS_SAMPLE_COUNT", "SUNRAYS_SEGMENT_SOURCE", "SUNRAYS_SEGMENT_DEPTH_DRIVEN", "SUNRAYS_SEGMENT_ANALYTIC_SURFACE", "UNDERWATER MEDIUM TRANSMITTANCE BYPASS", "SUNRAYS_SEGMENT_LENGTH") var underwater_debug_mode := 0:
 	set(value):
-		underwater_debug_mode = clampi(value, 0, 41)
+		underwater_debug_mode = clampi(value, 0, 46)
 		if underwater_debug_mode != 19:
 			_sun_vector_diagnostic_printed = false
 		_request_visual_sync()
@@ -1629,6 +1633,7 @@ func _sync_underwater_manager() -> void:
 			"sunrays_wave_width_strength": underwater_sunrays_wave_width_strength,
 			"sunrays_wave_depth_fade_m": underwater_sunrays_wave_depth_fade_m,
 			"sunrays_phase_debug_constant": underwater_sunrays_phase_debug_constant,
+			"sunrays_segment_mode": underwater_sunrays_segment_mode,
 			"sunrays_time": SimulationClock.get_render_time(),
 			"sunrays_tap_count": _underwater_sunrays_benchmark_tap_count,
 			"snell_enabled": underwater_snell_enabled,

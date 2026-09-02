@@ -44,6 +44,7 @@ var _sunrays_wave_depth_fade_m := 15.0
 var _sunrays_phase_debug_constant := false
 var _sunrays_time := 0.0
 var _sunrays_tap_count := 4
+var _sunrays_segment_mode := 1
 var _dispatch_count := 0
 
 func _init() -> void:
@@ -63,7 +64,7 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 		sunrays_wave_animation_speed: float, sunrays_wave_freeze: bool,
 		sunrays_wave_intensity_strength: float, sunrays_wave_width_strength: float,
 		sunrays_wave_depth_fade_m: float, sunrays_phase_debug_constant: bool,
-		sunrays_time: float, sunrays_tap_count: int = 4) -> void:
+		sunrays_time: float, sunrays_tap_count: int = 4, sunrays_segment_mode: int = 1) -> void:
 	_mutex.lock()
 	_enabled = is_enabled
 	_sea_level = sea_level
@@ -96,10 +97,11 @@ func set_settings(is_enabled: bool, sea_level: float, camera_underwater: bool, c
 	_sunrays_phase_debug_constant = sunrays_phase_debug_constant
 	_sunrays_time = sunrays_time
 	_sunrays_tap_count = 1 if sunrays_tap_count <= 1 else 4
+	_sunrays_segment_mode = clampi(sunrays_segment_mode, 0, 1)
 	# Medium and sunray diagnostics belong to this compositor. Snell diagnostics
 	# are rendered by the surface material and must not turn this pass into a
 	# conflicting compositor visualization.
-	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 41) else 0
+	_debug_mode = debug_mode if debug_mode <= 4 or (debug_mode >= 13 and debug_mode <= 46) else 0
 	_mutex.unlock()
 
 func reset_dispatch_count() -> void:
@@ -175,6 +177,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_phase_debug_constant := _sunrays_phase_debug_constant
 	var sunrays_time := _sunrays_time
 	var sunrays_tap_count := _sunrays_tap_count
+	var sunrays_segment_mode := _sunrays_segment_mode
 	_mutex.unlock()
 	# In normal AIR mode this compositor remains attached but does no GPU work;
 	# debug modes intentionally keep the pass alive so CAMERA_STATE can be seen.
@@ -197,7 +200,7 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var inverse_view_projection := (projection * Projection(camera_transform.affine_inverse())).inverse()
 	var params := PackedFloat32Array()
 	_append_projection(params, inverse_view_projection)
-	params.append(float(size.x)); params.append(float(size.y)); params.append(sunrays_wave_depth_fade_m); params.append(0.0)
+	params.append(float(size.x)); params.append(float(size.y)); params.append(sunrays_wave_depth_fade_m); params.append(float(sunrays_segment_mode))
 	params.append(camera_transform.origin.x); params.append(camera_transform.origin.y); params.append(camera_transform.origin.z); params.append(1.0 if camera_underwater else 0.0)
 	params.append(sea_level); params.append(transition_width); params.append(max_distance); params.append(absorption_scale)
 	params.append(absorption.x); params.append(absorption.y); params.append(absorption.z); params.append(scattering_strength)
