@@ -23,7 +23,9 @@ layout(set = 0, binding = 2, std140) uniform Params {
 
 const float EPSILON = 0.00001;
 const float SUNRAY_WORLD_SLICE_SPACING_M = 14.0;
-const float SUNRAY_BROAD_RIBBON_WIDTH_M = 16.0;
+const float SUNRAY_RIBBON_PERIOD_M = 48.0;
+const float SUNRAY_RIBBON_CORE_HALF_WIDTH_M = 12.0;
+const float SUNRAY_RIBBON_FADE_HALF_WIDTH_M = 19.0;
 
 bool finite_vec3(vec3 value) {
 	return !any(isnan(value)) && !any(isinf(value));
@@ -152,11 +154,13 @@ float sunrays_beam_field(vec2 stable_light_coord, float width_factor, bool exagg
 	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0 / safe_width);
 	float slow_intensity = 0.84 + 0.16 * (0.5 + 0.5 * sin(stable_light_coord.y * 0.09));
 	float ridges = clamp((broad * 0.82 + medium * 0.30 + narrow * 0.12) * slow_intensity, 0.0, 1.0);
-	float center_warp = sin(stable_light_coord.x * 0.05 + 1.7) * 3.0
-		+ sin(stable_light_coord.x * 0.021 - 0.8) * 5.0;
-	float in_plane_local = stable_light_coord.y - center_warp;
-	broad_ribbon_envelope = 1.0 - smoothstep(SUNRAY_BROAD_RIBBON_WIDTH_M * 0.65,
-		SUNRAY_BROAD_RIBBON_WIDTH_M, abs(in_plane_local));
+	float center_warp = sin(stable_light_coord.x * 0.05 + 1.7) * 1.5
+		+ sin(stable_light_coord.x * 0.021 - 0.8) * 2.5;
+	float ribbon_y = stable_light_coord.y - center_warp;
+	float periodic_y = mod(ribbon_y + SUNRAY_RIBBON_PERIOD_M * 0.5, SUNRAY_RIBBON_PERIOD_M)
+		- SUNRAY_RIBBON_PERIOD_M * 0.5;
+	broad_ribbon_envelope = 1.0 - smoothstep(SUNRAY_RIBBON_CORE_HALF_WIDTH_M,
+		SUNRAY_RIBBON_FADE_HALF_WIDTH_M, abs(periodic_y));
 	float contrast = exaggerated ? 1.0 : clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
 	float low_value = exaggerated ? 0.10 : 0.30;
 	return mix(0.5, low_value + (1.0 - low_value) * ridges, contrast) * broad_ribbon_envelope;
