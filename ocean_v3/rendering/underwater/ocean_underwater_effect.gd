@@ -183,10 +183,6 @@ func _render_callback(callback_type: int, render_data: RenderData) -> void:
 	var sunrays_pattern_contrast := _sunrays_pattern_contrast
 	var sunrays_pattern_texture := _sunrays_pattern_texture
 	var sunrays_animation_speed := _sunrays_animation_speed
-	var sunrays_wave_modulation_enabled := _sunrays_wave_modulation_enabled
-	var sunrays_wave_animation_speed := _sunrays_wave_animation_speed
-	var sunrays_wave_freeze := _sunrays_wave_freeze
-	var sunrays_wave_intensity_strength := _sunrays_wave_intensity_strength
 	var sunrays_wave_width_strength := _sunrays_wave_width_strength
 	var sunrays_wave_depth_fade_m := _sunrays_wave_depth_fade_m
 	var sunrays_phase_debug_constant := _sunrays_phase_debug_constant
