@@ -262,7 +262,7 @@ func _find_test_position(camera: Camera3D) -> Dictionary:
 		if _bathymetry.land_water_mask[index] == 0 or _bathymetry.depth_m[index] <= 0.001:
 			continue
 		var x := index % _bathymetry.width
-		var z := int(index / _bathymetry.width)
+		var z := floori(float(index) / float(_bathymetry.width))
 		var world_xz := _bathymetry.world_origin_xz + Vector2(float(x), float(z)) * _bathymetry.cell_size_m
 		var distance_sq := world_xz.distance_squared_to(camera_xz)
 		if distance_sq > TEST_SEARCH_RADIUS_M * TEST_SEARCH_RADIUS_M:
@@ -274,7 +274,7 @@ func _find_test_position(camera: Camera3D) -> Dictionary:
 			best_index = index
 	if best_index >= 0:
 		var best_x := best_index % _bathymetry.width
-		var best_z := int(best_index / _bathymetry.width)
+		var best_z := floori(float(best_index) / float(_bathymetry.width))
 		var world_xz := _bathymetry.world_origin_xz + Vector2(float(best_x), float(best_z)) * _bathymetry.cell_size_m
 		return {"world_position": Vector3(world_xz.x, _bathymetry.sea_level_y - _bathymetry.depth_m[best_index] + 0.45, world_xz.y)}
 	return {}
@@ -537,7 +537,7 @@ func _find_shallow_probe() -> Dictionary:
 		if _bathymetry.land_water_mask[index] == 0 or depth_m < sediment_shallow_start_m or depth_m >= sediment_shallow_end_m:
 			continue
 		var x := index % _bathymetry.width
-		var z := int(index / _bathymetry.width)
+		var z := floori(float(index) / float(_bathymetry.width))
 		var world_xz := _bathymetry.world_origin_xz + Vector2(float(x), float(z)) * _bathymetry.cell_size_m
 		return {
 			"world_position": Vector3(world_xz.x, _bathymetry.sea_level_y - depth_m, world_xz.y),
