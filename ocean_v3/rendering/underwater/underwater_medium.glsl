@@ -98,7 +98,9 @@ bool sunrays_beam_coord(vec3 world_position, vec3 light_into_water, out vec2 bea
 	vec3 v = cross(l, u);
 	if (!finite_vec3(v) || length(v) <= EPSILON) return false;
 	v = normalize(v);
-	beam_coord = vec2(dot(world_position, u), dot(world_position, v));
+	// Mirror U only: the sun direction remains SOL -> AGUA, while the visible
+	// shaft inclination changes to the requested screen-side parity.
+	beam_coord = vec2(-dot(world_position, u), dot(world_position, v));
 	return !any(isnan(beam_coord)) && !any(isinf(beam_coord));
 }
 
@@ -144,23 +146,15 @@ float sunrays_beam_field(vec3 sample_world, vec3 light_into_water, float width_f
 	float narrow = pow(max(0.0, 0.5 + 0.5 * cos(narrow_phase)), 8.0 / safe_width);
 	float slow_intensity = 0.84 + 0.16 * (0.5 + 0.5 * sin(beam_coord.y * 0.09));
 	float ridges = clamp((broad * 0.82 + medium * 0.30 + narrow * 0.12) * slow_intensity, 0.0, 1.0);
-	// Oblique low-frequency waves localize the longitudinal ridges into continuous shafts.
-	float gate_a = sin(dot(beam_coord, vec2(0.43, 0.71)) * 1.10 + 0.37);
-	float gate_b = cos(dot(beam_coord, vec2(-0.82, 0.29)) * 0.73 - 1.19);
-	float gate_c = sin(dot(beam_coord, vec2(0.18, -0.97)) * 1.57 + 2.11);
-	float gate_signal = clamp(0.5 + 0.5 * (gate_a * 0.48 + gate_b * 0.32 + gate_c * 0.20), 0.0, 1.0);
-	float transverse_gate = smoothstep(0.52, 0.78, gate_signal);
-	float shafts = ridges * transverse_gate;
 	float contrast = exaggerated ? 1.0 : clamp(params.sunrays_pattern.y / 1.4, 0.0, 1.0);
 	float low_value = exaggerated ? 0.10 : 0.30;
-	return mix(0.5, low_value + (1.0 - low_value) * shafts, contrast);
+	return mix(0.5, low_value + (1.0 - low_value) * ridges, contrast);
 }
 
 float sunrays_reach_factor(vec2 beam_coord) {
-	float reach_a = sin(dot(beam_coord, vec2(0.41, 0.83)) * 0.23 + 0.73);
-	float reach_b = cos(dot(beam_coord, vec2(-0.91, 0.37)) * 0.17 - 1.21);
-	float reach_c = sin(dot(beam_coord, vec2(0.29, -0.96)) * 0.11 + 2.03);
-	return clamp(0.5 + 0.5 * (reach_a * 0.46 + reach_b * 0.33 + reach_c * 0.21), 0.0, 1.0);
+	float longitudinal_wave = sin(beam_coord.x * 0.23 + sin(beam_coord.y * 0.09) * 0.35);
+	float diagonal_wave = sin(beam_coord.x * 0.11 + beam_coord.y * 0.05 + 1.21);
+	return clamp(0.5 + 0.5 * (longitudinal_wave * 0.60 + diagonal_wave * 0.40), 0.0, 1.0);
 }
 
 bool world_slice_interval(vec3 camera_world, vec3 view_ray_world, float sunray_segment_m,
@@ -215,10 +209,10 @@ bool evaluate_sunray_world_slice(vec3 camera_world, vec3 view_ray_world,
 	sunrays_wave_modulation(light_entry, sample_point, wave_focus, wave_width, wave_intensity);
 	shaft_field = sunrays_beam_field(sample_point, light_into_water, wave_width, exaggerated, beam_coord);
 	reach_factor = sunrays_reach_factor(beam_coord);
-	float variable_ratio = mix(0.30, 1.0, reach_factor);
+	float variable_ratio = mix(0.35, 1.0, reach_factor);
 	float length_variation = clamp(params.sunrays_extra.y, 0.0, 1.0);
 	float shaft_max_reach = max(params.sunrays_extra.x, EPSILON) * mix(1.0, variable_ratio, length_variation);
-	float fade_start_ratio = 0.72;
+	float fade_start_ratio = 0.75;
 	reach_envelope = 1.0 - smoothstep(shaft_max_reach * fade_start_ratio, shaft_max_reach, sun_water_path);
 	shaft_with_reach = shaft_field * reach_envelope;
 	pattern = shaft_with_reach * wave_intensity;
